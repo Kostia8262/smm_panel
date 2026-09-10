@@ -1,0 +1,20 @@
+{
+  "name": "smm-autopost",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Планировщик и автопостинг в Telegram, Threads, Instagram, Facebook, TikTok",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "worker": "node src/queue/worker.js",
+    "dev": "node --watch src/server.js",
+    "check": "node --check src/server.js && node src/platforms/specs.js --selftest"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^2.3.0"
+  }
+}

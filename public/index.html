@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Планировщик постов</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__title">
+      <strong>Планировщик</strong>
+      <span class="muted" id="week-label"></span>
+    </div>
+    <div class="topbar__status" id="connections"></div>
+    <div class="topbar__actions">
+      <button class="btn btn--ghost" id="prev-week" aria-label="Предыдущая неделя">←</button>
+      <button class="btn btn--ghost" id="today">Сегодня</button>
+      <button class="btn btn--ghost" id="next-week" aria-label="Следующая неделя">→</button>
+      <button class="btn btn--primary" id="new-post">Новый пост</button>
+    </div>
+  </header>
+
+  <main class="calendar" id="calendar" aria-label="Календарь публикаций"></main>
+
+  <!-- Композер -->
+  <div class="composer" id="composer" hidden>
+    <div class="composer__backdrop" data-close></div>
+    <section class="composer__panel" role="dialog" aria-label="Редактор поста">
+      <header class="composer__head">
+        <input class="composer__title" id="post-title" placeholder="Название поста (только для нас)" />
+        <button class="btn btn--ghost" data-close aria-label="Закрыть">✕</button>
+      </header>
+
+      <div class="composer__body">
+        <div class="composer__form">
+          <label class="field">
+            <span class="field__label">Текст поста</span>
+            <textarea id="post-body" rows="7" placeholder="Общий текст. Где не влезает — переопределим для площадки."></textarea>
+          </label>
+          <div class="counters" id="counters"></div>
+
+          <div class="field">
+            <span class="field__label">Площадки и раскладки</span>
+            <div class="targets" id="targets"></div>
+          </div>
+
+          <div class="field">
+            <span class="field__label">Медиа</span>
+            <div class="dropzone" id="dropzone">
+              <input type="file" id="file-input" multiple accept="image/*,video/*" hidden />
+              <p>Перетащи сюда мастер-файлы или <button class="linklike" id="pick-files">выбери</button></p>
+              <p class="muted small">Один мастер в максимальном качестве — нарезки под площадки система сделает сама</p>
+            </div>
+            <div class="media-list" id="media-list"></div>
+          </div>
+
+          <label class="field">
+            <span class="field__label">Время публикации</span>
+            <input type="datetime-local" id="post-time" />
+          </label>
+
+          <div class="issues" id="issues"></div>
+        </div>
+
+        <aside class="composer__preview">
+          <div class="preview__tabs" id="preview-tabs"></div>
+          <div class="preview__stage" id="preview-stage"></div>
+          <div class="preview__limits" id="preview-limits"></div>
+        </aside>
+      </div>
+
+      <footer class="composer__foot">
+        <button class="btn btn--danger-ghost" id="delete-post">Удалить</button>
+        <span class="spacer"></span>
+        <span class="muted small" id="save-state"></span>
+        <button class="btn btn--ghost" id="save-draft">Сохранить черновик</button>
+        <button class="btn btn--primary" id="schedule">В очередь</button>
+      </footer>
+    </section>
+  </div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
