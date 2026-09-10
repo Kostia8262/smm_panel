@@ -127,10 +127,22 @@ function renderCalendar() {
   }
 }
 
+const POST_STATUS = {
+  draft: 'черновик',
+  scheduled: '',            // штатное состояние молчит
+  publishing: 'уходит…',
+  published: 'опубликован',
+  partial: 'ушёл не везде',
+  failed: 'не ушёл',
+};
+
 function postCard(post) {
   const card = el('button', `card card--${post.status}`);
-  const time = post.scheduled_at ? post.scheduled_at.slice(11, 16) : '—';
-  card.append(el('div', 'card__time', time));
+  const head = el('div', 'card__head');
+  head.append(el('div', 'card__time', post.scheduled_at ? post.scheduled_at.slice(11, 16) : '—'));
+  const label = POST_STATUS[post.status];
+  if (label) head.append(el('span', `card__status card__status--${post.status}`, label));
+  card.append(head);
   card.append(el('div', 'card__text', post.title || firstLine(post.body) || 'Без названия'));
 
   const icons = el('div', 'card__icons');
