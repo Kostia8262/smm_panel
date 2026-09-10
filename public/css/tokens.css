@@ -1,0 +1,139 @@
+/* Токены визуального мира. Цветов и размеров за пределами этого файла нет —
+   см. DESIGN.md. Мир тёмный намеренно: панель весь день показывает чужие
+   кадры, и светлый интерфейс с ними спорит за внимание. */
+
+:root {
+  color-scheme: dark;
+
+  /* Поверхности: тёплый почти-чёрный, не синий и не нейтральный */
+  --bg: #0b0908;
+  --bg-rail: #0e0b0a;
+  --surface: #141110;
+  --surface-2: #1b1613;
+  --surface-3: #221c18;
+  --line: #2c2420;
+  --line-soft: #221c19;
+
+  /* Текст: тёплый белый вместо чистого, серые подмешаны к основе */
+  --ink: #efe8de;
+  --ink-2: #a79b8c;
+  --ink-3: #8b7f6f; /* 4.9:1 на панели: микро-подписи несут смысл, им нужен AA */
+
+  /* Акцент. Тратится только на главное действие, текущий выбор и состояние */
+  --gold: #e0a94b;
+  --gold-bright: #f2c377;
+  --gold-ink: #241a0c;
+  --gold-dim: rgba(224, 169, 75, 0.14);
+  --gold-line: rgba(224, 169, 75, 0.34);
+
+  /* Состояния */
+  --ok: #56be80;
+  --warn: #e0a63c;
+  --danger: #e2604f;
+  --info: #6ba5e7;
+  --ok-dim: rgba(86, 190, 128, 0.13);
+  --warn-dim: rgba(224, 166, 60, 0.13);
+  --danger-dim: rgba(226, 96, 79, 0.13);
+
+  /* Типографика: одно семейство, фиксированная шкала с шагом ~1.2 */
+  --font: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --fs-micro: 11px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 15px;
+  --fs-lg: 18px;
+  --fs-xl: 22px;
+  --fs-2xl: 30px;
+
+  /* Шаг сетки 4px */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  --r-sm: 8px;
+  --r: 12px;
+  --r-lg: 16px;
+  --r-pill: 999px;
+
+  /* Тени со смещением и мягким размытием. Цветного свечения без смещения нет */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.45), 0 14px 34px rgba(0, 0, 0, 0.4);
+
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--gold-line);
+  --ease: cubic-bezier(0.2, 0.8, 0.3, 1);
+  --dur: 170ms;
+
+  --rail: 240px;
+  --rail-narrow: 64px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur: 1ms; }
+}
+
+* { box-sizing: border-box; }
+
+/* Компоненты задают display, и без этого `hidden` перестаёт прятать:
+   скрытая ошибка формы висела на странице входа с самого начала. */
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Цифры данных табличные: иначе колонки времени и счётчиков пляшут */
+.num, time, .tnum { font-variant-numeric: tabular-nums; }
+
+h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+h1 { font-size: var(--fs-xl); }
+h2 { font-size: var(--fs-lg); }
+h3 { font-size: var(--fs-base); }
+p { margin: 0; }
+
+/* Подпись раздела: единственное место с верхним регистром и разрядкой */
+.eyebrow {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+.muted { color: var(--ink-2); }
+.dim { color: var(--ink-3); }
+.small { font-size: var(--fs-xs); }
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--r-sm);
+}
+
+::selection { background: var(--gold-dim); color: var(--ink); }
+
+/* Полосы прокрутки под тёмный мир — иначе светлый жёлоб режет глаз */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: var(--r-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: #2f2823; background-clip: content-box; }

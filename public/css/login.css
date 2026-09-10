@@ -1,0 +1,103 @@
+/* Страница входа. Тот же мир, но одна задача в кадре — поэтому пусто вокруг
+   и единственное тёплое пятно за карточкой. */
+
+.login {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Свечение — со смещением вверх, а не ровный ореол под карточкой */
+.login::before {
+  content: "";
+  position: absolute;
+  top: -280px;
+  left: 50%;
+  width: 760px;
+  height: 620px;
+  transform: translateX(-50%);
+  background: radial-gradient(closest-side, rgba(224, 169, 75, 0.16), transparent 72%);
+  pointer-events: none;
+}
+
+.login__card {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--sp-8);
+  box-shadow: var(--shadow-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.login__brand { display: flex; align-items: center; gap: var(--sp-3); }
+
+.login__mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(150deg, #3a280f, #191310);
+  border: 1px solid var(--gold-line);
+  color: var(--gold);
+  flex: none;
+}
+
+.login__title { font-size: var(--fs-lg); font-weight: 650; }
+.login__sub { font-size: var(--fs-xs); color: var(--ink-3); }
+
+.login__form { display: flex; flex-direction: column; gap: var(--sp-4); }
+.login__form .input { height: 40px; }
+
+.login__error {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--danger-dim);
+  border: 1px solid rgba(226, 96, 79, 0.32);
+  color: var(--danger);
+  font-size: var(--fs-xs);
+  animation: shake 260ms var(--ease);
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login__error { animation: none; }
+}
+
+.login__submit { height: 40px; width: 100%; }
+
+.login__foot {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  text-align: center;
+  border-top: 1px solid var(--line-soft);
+  padding-top: var(--sp-4);
+}
+
+.login__foot code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--gold);
+  background: var(--gold-dim);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+@media (max-width: 480px) {
+  .login__card { padding: var(--sp-6); }
+}

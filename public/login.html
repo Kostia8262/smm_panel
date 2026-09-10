@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Вход — Планировщик</title>
+  <link rel="stylesheet" href="/css/tokens.css" />
+  <!-- app.css несёт атомы: поле, кнопку, подпись. Вход пользуется тем же
+       набором, что и панель, иначе форма входа живёт своей жизнью. -->
+  <link rel="stylesheet" href="/css/app.css" />
+  <link rel="stylesheet" href="/css/login.css" />
+</head>
+<body>
+  <main class="login">
+    <div class="login__card">
+      <div class="login__brand">
+        <span class="login__mark" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4.5" width="18" height="16" rx="2.5" />
+            <path d="M3 9.5h18M8 2.5v4M16 2.5v4" />
+            <path d="m9.5 14.5 1.8 1.8 3.4-3.6" />
+          </svg>
+        </span>
+        <div>
+          <div class="login__title">Планировщик</div>
+          <div class="login__sub">My Computer Academy · автопостинг</div>
+        </div>
+      </div>
+
+      <form class="login__form" id="form" novalidate>
+        <div class="field">
+          <label class="field__label" for="login">Логин</label>
+          <input class="input" id="login" name="login" autocomplete="username" required autofocus />
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="password">Пароль</label>
+          <input class="input" id="password" name="password" type="password" autocomplete="current-password" required />
+        </div>
+
+        <div class="login__error" id="error" hidden>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" /><path d="M12 7.5v5M12 16h.01" />
+          </svg>
+          <span id="error-text"></span>
+        </div>
+
+        <button class="btn btn--primary login__submit" id="submit" type="submit">Войти</button>
+      </form>
+
+      <p class="login__foot">
+        Пока идёт сборка вход временный: <code>admin</code> / <code>admin</code>.<br />
+        Смените пароль в разделе «Настройки», когда панель отдадут в работу.
+      </p>
+    </div>
+  </main>
+
+  <script type="module">
+    const form = document.getElementById('form');
+    const submit = document.getElementById('submit');
+    const errorBox = document.getElementById('error');
+    const errorText = document.getElementById('error-text');
+
+    const nextUrl = new URLSearchParams(location.search).get('next') || '/';
+
+    function showError(message) {
+      errorText.textContent = message;
+      errorBox.hidden = false;
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      errorBox.hidden = true;
+
+      const login = form.login.value.trim();
+      const password = form.password.value;
+      if (!login || !password) {
+        showError('Заполните оба поля');
+        return;
+      }
+
+      submit.disabled = true;
+      submit.textContent = 'Проверяю…';
+
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ login, password }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showError(data.error || 'Не удалось войти');
+          form.password.value = '';
+          form.password.focus();
+          return;
+        }
+        // Открытый редирект недопустим: возвращаемся только внутрь панели.
+        location.href = nextUrl.startsWith('/') && !nextUrl.startsWith('//') ? nextUrl : '/';
+      } catch {
+        showError('Сервер не отвечает. Проверьте связь и повторите');
+      } finally {
+        submit.disabled = false;
+        submit.textContent = 'Войти';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -21,10 +21,13 @@ const { connectionStatus, getAdapter } = await import('./platforms/index.js');
 const { validatePost } = await import('./validate.js');
 const { UPLOAD_DIR, storedName, kindOf, imageSize, cropFor } = await import('./media.js');
 const { publishPost } = await import('./queue/publish.js');
+const { installAuth } = await import('./auth.js');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3210);
+const PUBLIC_DIR = resolve(here, '../public');
 
+app.set('trust proxy', 1); // за OpenLiteSpeed: иначе в журнале входов адрес прокси
 app.use(express.json({ limit: '1mb' }));
 
 // Медиа отдаём без пароля: площадки забирают файлы сами, по публичной ссылке.
@@ -32,23 +35,19 @@ app.use(express.json({ limit: '1mb' }));
 app.use('/media', express.static(UPLOAD_DIR, { maxAge: '7d' }));
 app.get('/healthz', (_req, res) => res.json({ ok: true, at: new Date().toISOString() }));
 
-// Общий пароль на команду. Без HTTPS его ставить бессмысленно, поэтому
-// сервис живёт на поддомене с сертификатом, а не на голом порту.
-app.use((req, res, next) => {
-  const expected = process.env.AUTH_PASSWORD;
-  if (!expected) return next(); // локальная разработка
-  const header = req.headers.authorization || '';
-  const [scheme, encoded] = header.split(' ');
-  if (scheme === 'Basic' && encoded) {
-    const [user, pass] = Buffer.from(encoded, 'base64').toString('utf8').split(':');
-    if (user === (process.env.AUTH_USER || 'smm') && pass === expected) return next();
-  }
-  // realm только латиницей: кириллица в заголовке роняет ответ (ERR_INVALID_CHAR)
-  res.set('WWW-Authenticate', 'Basic realm="SMM planner"');
-  res.status(401).send('Нужен вход');
+app.get('/login', (req, res) => {
+  if (req.user) return res.redirect('/');
+  res.sendFile(join(PUBLIC_DIR, 'login.html'));
 });
 
-app.use(express.static(resolve(here, '../public')));
+// Вход, сессии и защита всего остального. Стили и скрипты открыты — без них
+// не нарисовать саму страницу входа.
+installAuth(app, {
+  publicPaths: ['/login', '/css/', '/js/', '/media/', '/healthz', '/favicon.ico'],
+  secureCookies: String(process.env.PUBLIC_BASE_URL || '').startsWith('https://'),
+});
+
+app.use(express.static(PUBLIC_DIR));
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -184,6 +183,12 @@ app.post('/api/posts/:id/publish-now', async (req, res) => {
   if (!check.ok) return res.status(422).json({ error: 'Пост не проходит проверку', ...check });
   const result = await publishPost(id);
   res.json({ post: decorate(getPost(id)), result });
+});
+
+app.get('/api/log', (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 200, 500);
+  const rows = db.prepare('SELECT * FROM publish_log ORDER BY id DESC LIMIT ?').all(limit);
+  res.json({ log: rows });
 });
 
 app.get('/api/posts/:id/log', (req, res) => {
