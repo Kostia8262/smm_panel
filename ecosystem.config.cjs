@@ -23,9 +23,10 @@ module.exports = {
       env: { NODE_ENV: 'production' },
       max_memory_restart: '300M',
       autorestart: true,
-      // Воркер и веб пишут в одну базу SQLite: включён WAL, но второй
-      // экземпляр воркера всё равно не нужен — обработает один и тот же пост.
-      instances: 1,
+      // Строго fork и один экземпляр: воркер и веб пишут в одну базу SQLite.
+      // От `instances` PM2 переводит процесс в cluster mode, а второй воркер
+      // возьмётся за тот же пост и опубликует его дважды.
+      exec_mode: 'fork',
     },
   ],
 };

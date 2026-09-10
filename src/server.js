@@ -43,7 +43,8 @@ app.use((req, res, next) => {
     const [user, pass] = Buffer.from(encoded, 'base64').toString('utf8').split(':');
     if (user === (process.env.AUTH_USER || 'smm') && pass === expected) return next();
   }
-  res.set('WWW-Authenticate', 'Basic realm="Планировщик"');
+  // realm только латиницей: кириллица в заголовке роняет ответ (ERR_INVALID_CHAR)
+  res.set('WWW-Authenticate', 'Basic realm="SMM planner"');
   res.status(401).send('Нужен вход');
 });
 
