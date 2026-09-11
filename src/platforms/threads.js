@@ -41,6 +41,57 @@ export async function check(creds) {
   return { ok: true, account: data.username };
 }
 
+/**
+ * Поиск по публичным постам Threads.
+ *
+ * Единственный законный способ увидеть, о чём сейчас пишут: у Threads нет
+ * ни ленты трендов, ни хэштег-статистики. Важное ограничение — поиск НЕ
+ * отдаёт цифры вовлечённости: ни лайков, ни ответов. Только текст, автор,
+ * ссылка и время.
+ *
+ * Косвенный признак «зашло» всё же есть: `search_type=TOP` — это то, что
+ * Meta сама сочла лучшим по запросу. Сравнение TOP и RECENT показывает,
+ * какие посты площадка подняла, а какие просто свежие.
+ *
+ * Без разрешения `threads_keyword_search`, прошедшего App Review, поиск
+ * видит только собственные посты аккаунта — то есть для трендов бесполезен.
+ */
+export async function keywordSearch(creds, { q, type = 'TOP', limit = 50, since = null } = {}) {
+  if (!creds?.accessToken) throw new Error('Нет токена Threads');
+  const params = new URLSearchParams({
+    q,
+    search_type: type,
+    limit: String(Math.min(100, limit)),
+    fields: 'id,text,username,permalink,timestamp,media_type,is_reply,is_quote_post,has_replies',
+    access_token: creds.accessToken,
+  });
+  if (since) params.set('since', String(Math.floor(new Date(since).getTime() / 1000)));
+
+  const res = await fetch(`${API}/keyword_search?${params}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    throw new Error(`Threads поиск: ${data.error?.message || res.status}`);
+  }
+  // Ответы и цитаты — шум: нас интересует, что люди публикуют сами.
+  return (data.data || []).filter((p) => !p.is_reply);
+}
+
+/** Показатели нашего поста: из них и считается, что у нас заходит. */
+export async function insights(creds, mediaId) {
+  const metrics = 'views,likes,replies,reposts,quotes';
+  const res = await fetch(
+    `${API}/${mediaId}/insights?metric=${metrics}&access_token=${creds.accessToken}`
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) throw new Error(`Threads insights: ${data.error?.message || res.status}`);
+
+  const out = {};
+  for (const row of data.data || []) {
+    out[row.name] = row.values?.[0]?.value ?? row.total_value?.value ?? 0;
+  }
+  return out;
+}
+
 export async function publish({ text, media = [], publicUrl, creds }) {
   const user = creds.userId;
   let containerId;

@@ -27,6 +27,7 @@ const planDb = await import('./plan.js');
 const projectsDb = await import('./projects.js');
 const scheduleDb = await import('./schedule.js');
 const linksDb = await import('./links.js');
+const collector = await import('./trends/collector.js');
 const { signatureFor, withSignature } = await import('./signature.js');
 const { writeFileSync } = await import('node:fs');
 const { encrypt: encryptSecret, decrypt: decryptSecret } = await import('./secrets.js');
@@ -501,6 +502,43 @@ app.post('/api/trends', (req, res) => {
       planDb.addTrend({ projectId, ...t }, req.user?.name || 'импорт')
     );
     res.status(201).json({ trends: added });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+/* ------------------------- наблюдение за темами ------------------------- */
+
+app.get('/api/trends/keywords', (req, res) => {
+  const projectId = currentProjectId(req);
+  const keywords = collector.listKeywords(projectId).map((k) => ({
+    ...k,
+    history: collector.historyFor(k.id, 30),
+    growth: collector.growthFor(k.id),
+  }));
+  res.json({ keywords });
+});
+
+app.post('/api/trends/keywords', requireAccess('platforms'), (req, res) => {
+  try {
+    res.status(201).json({ keywords: collector.addKeyword(currentProjectId(req), req.body?.phrase) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.delete('/api/trends/keywords/:id', requireAccess('platforms'), (req, res) => {
+  collector.removeKeyword(Number(req.params.id));
+  res.json({ keywords: collector.listKeywords(currentProjectId(req)) });
+});
+
+/**
+ * Ручной сбор. Идёт в ответе запроса намеренно: замеров единицы, каждый —
+ * два запроса к Threads, и человек нажал кнопку именно чтобы увидеть итог.
+ */
+app.post('/api/trends/collect', requireAccess('platforms'), async (req, res) => {
+  try {
+    res.json(await collector.collectForProject(currentProjectId(req)));
   } catch (err) {
     res.status(422).json({ error: err.message });
   }

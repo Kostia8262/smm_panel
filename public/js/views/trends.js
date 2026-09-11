@@ -25,7 +25,10 @@ export function trendsView(ctx) {
     title: 'Тренды',
     subtitle: 'Сигналы, из которых делаем план',
     actions: isOwner
-      ? [button('Добавить тренд', { variant: 'primary', iconName: 'plus', onClick: () => openForm() })]
+      ? [
+          button('Собрать сейчас', { iconName: 'refresh', onClick: collectNow }),
+          button('Добавить тренд', { variant: 'primary', iconName: 'plus', onClick: () => openForm() }),
+        ]
       : [],
   });
 
@@ -82,6 +85,8 @@ export function trendsView(ctx) {
       )
     );
 
+    if (isOwner && scope !== 'all') host.append(watchPanel());
+
     if (!trends.length) {
       // Без второй кнопки: «Добавить тренд» уже стоит в шапке, и две
       // одинаковые кнопки на пустом экране заставляют выбирать на ровном месте.
@@ -104,6 +109,106 @@ export function trendsView(ctx) {
 
     if (live.length) host.append(group('Свежие', live));
     if (stale.length) host.append(group('Протухшие — брать не стоит', stale));
+  }
+
+  /**
+   * Фразы, за которыми следим. Тренд здесь считается из разницы: важно не
+   * «сколько постов сегодня», а во сколько раз больше, чем неделю назад.
+   */
+  function watchPanel() {
+    const p = panel('Наблюдение за темами');
+    const body = el('div', 'stack');
+    p.append(body);
+    body.append(el('span', 'field__hint', 'загружаю…'));
+
+    api
+      .keywords()
+      .then(({ keywords }) => {
+        body.textContent = '';
+        body.append(
+          el(
+            'span',
+            'field__hint',
+            'Раз в сутки панель считает, сколько постов в Threads по каждой фразе. Заметный рост сам становится сигналом выше.'
+          )
+        );
+
+        if (keywords.length) {
+          const list = el('div', 'plat-picker');
+          for (const k of keywords) {
+            const chip = el('span', 'slot');
+            chip.append(el('b', null, k.phrase));
+            const last = k.history[k.history.length - 1];
+            if (last) {
+              chip.append(el('span', 'dim small', `${last.found} постов`));
+            }
+            if (k.growth?.factor && k.growth.factor >= 2) {
+              chip.append(el('span', 'tag tag--gold', `×${k.growth.factor.toFixed(1)}`));
+            }
+            const del = el('button', 'slot__x');
+            del.type = 'button';
+            del.title = 'Перестать следить';
+            del.innerHTML = iconMarkup('x', 11);
+            del.addEventListener('click', async () => {
+              await api.removeKeyword(k.id);
+              load();
+            });
+            chip.append(del);
+            list.append(chip);
+          }
+          body.append(list);
+        } else {
+          body.append(
+            note(
+              'info',
+              'Фразы не заданы',
+              'Добавьте то, что ищут ваши родители: «курси програмування для дітей», «англійська для дитини Дніпро».'
+            )
+          );
+        }
+
+        const form = el('form', 'target__meta');
+        form.style.justifyContent = 'flex-start';
+        const input = el('input', 'input');
+        input.placeholder = 'Фраза для наблюдения';
+        input.style.maxWidth = '320px';
+        const add = button('Следить', { iconName: 'plus' });
+        add.type = 'submit';
+        form.append(input, add);
+        form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            await api.addKeyword(input.value);
+            input.value = '';
+            load();
+          } catch (err) {
+            toast(err.message, 'danger');
+          }
+        });
+        body.append(form);
+      })
+      .catch((err) => {
+        body.textContent = '';
+        body.append(note('danger', 'Фразы не прочитались', err.message));
+      });
+
+    return p;
+  }
+
+  async function collectNow() {
+    toast('Считаю объём по фразам…');
+    try {
+      const r = await api.collectTrends();
+      toast(
+        r.signals
+          ? `Замеров ${r.measured}, новых сигналов ${r.signals}`
+          : `Замеров ${r.measured}, заметного роста нет`,
+        'ok'
+      );
+      load();
+    } catch (err) {
+      toast(err.message, 'danger');
+    }
   }
 
   function group(title, list) {

@@ -505,6 +505,79 @@ const MIGRATIONS = [
              ELSE settings.value || ',fluent-fox.site' END;
     `,
   },
+  {
+    /**
+     * Наблюдения за темами в Threads.
+     *
+     * Поиск Threads не отдаёт цифры вовлечённости — только тексты. Значит
+     * тренд для нас это не «сколько лайков», а **как меняется объём
+     * разговора**: сегодня по запросу двадцать постов, неделю назад было
+     * пять. Поэтому храним замеры по дням, а не разовый снимок: без истории
+     * рост от падения не отличить.
+     *
+     * Сами найденные посты тоже храним — по ним видно, какими словами люди
+     * говорят о нашей теме, и это сырьё для формулировок.
+     */
+    name: '013-trend-watch',
+    sql: `
+      CREATE TABLE trend_keywords (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        phrase     TEXT NOT NULL,
+        active     INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (project_id, phrase)
+      );
+
+      CREATE TABLE trend_observations (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        keyword_id  INTEGER NOT NULL REFERENCES trend_keywords(id) ON DELETE CASCADE,
+        observed_on TEXT NOT NULL,
+        found       INTEGER NOT NULL DEFAULT 0,
+        top_share   REAL,
+        media_mix   TEXT NOT NULL DEFAULT '{}',
+        words       TEXT NOT NULL DEFAULT '[]',
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (keyword_id, observed_on)
+      );
+
+      CREATE TABLE trend_posts (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        keyword_id  INTEGER NOT NULL REFERENCES trend_keywords(id) ON DELETE CASCADE,
+        external_id TEXT NOT NULL,
+        username    TEXT NOT NULL DEFAULT '',
+        text        TEXT NOT NULL DEFAULT '',
+        permalink   TEXT,
+        media_type  TEXT,
+        in_top      INTEGER NOT NULL DEFAULT 0,
+        posted_at   TEXT,
+        seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (keyword_id, external_id)
+      );
+
+      -- Показатели наших вышедших постов: по ним считается, что заходит
+      -- именно нашей аудитории, а не Threads вообще.
+      CREATE TABLE post_stats (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id     INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+        platform    TEXT NOT NULL,
+        views       INTEGER,
+        likes       INTEGER,
+        comments    INTEGER,
+        reposts     INTEGER,
+        quotes      INTEGER,
+        score       REAL,
+        per_hour    REAL,
+        label       TEXT,
+        measured_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (post_id, platform, measured_at)
+      );
+
+      CREATE INDEX idx_obs_keyword ON trend_observations(keyword_id, observed_on);
+      CREATE INDEX idx_trend_posts_keyword ON trend_posts(keyword_id, seen_at);
+      CREATE INDEX idx_post_stats ON post_stats(post_id, platform);
+    `,
+  },
 ];
 
 function migrate() {

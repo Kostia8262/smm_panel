@@ -97,6 +97,10 @@ export const api = {
   trends: (scope) =>
     scope === 'all' ? request('/api/trends?project=all') : request(withProject('/api/trends')),
   addTrend: (body) => request(withProject('/api/trends'), { method: 'POST', body }),
+  keywords: () => request(withProject('/api/trends/keywords')),
+  addKeyword: (phrase) => request(withProject('/api/trends/keywords'), { method: 'POST', body: { phrase } }),
+  removeKeyword: (id) => request(withProject(`/api/trends/keywords/${id}`), { method: 'DELETE' }),
+  collectTrends: () => request(withProject('/api/trends/collect'), { method: 'POST' }),
   archiveTrend: (id, archived) => request(`/api/trends/${id}/archive`, { method: 'POST', body: { archived } }),
   deleteTrend: (id) => request(`/api/trends/${id}`, { method: 'DELETE' }),
 
