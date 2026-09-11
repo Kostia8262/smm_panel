@@ -84,15 +84,19 @@ export const api = {
   settings: () => request('/api/settings'),
   saveSettings: (body) => request('/api/settings', { method: 'PUT', body }),
 
-  plan: (status) => request(withProject(`/api/plan${status ? `?status=${status}` : ''}`)),
+  plan: (status, scope) =>
+    scope === 'all'
+      ? request(`/api/plan?project=all${status ? `&status=${status}` : ''}`)
+      : request(withProject(`/api/plan${status ? `?status=${status}` : ''}`)),
   createPlan: (body) => request(withProject('/api/plan'), { method: 'POST', body }),
   updatePlan: (id, body) => request(`/api/plan/${id}`, { method: 'PUT', body }),
   approvePlan: (id) => request(`/api/plan/${id}/approve`, { method: 'POST' }),
   planToPost: (id) => request(`/api/plan/${id}/to-post`, { method: 'POST' }),
   deletePlan: (id) => request(`/api/plan/${id}`, { method: 'DELETE' }),
 
-  trends: () => request('/api/trends'),
-  addTrend: (body) => request('/api/trends', { method: 'POST', body }),
+  trends: (scope) =>
+    scope === 'all' ? request('/api/trends?project=all') : request(withProject('/api/trends')),
+  addTrend: (body) => request(withProject('/api/trends'), { method: 'POST', body }),
   archiveTrend: (id, archived) => request(`/api/trends/${id}/archive`, { method: 'POST', body: { archived } }),
   deleteTrend: (id) => request(`/api/trends/${id}`, { method: 'DELETE' }),
 

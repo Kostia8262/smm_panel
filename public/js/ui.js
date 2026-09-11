@@ -77,6 +77,39 @@ export function skeleton(height = 60) {
   return s;
 }
 
+/**
+ * Полоса вкладок по проектам.
+ *
+ * Один компонент на план и тренды: две копии разошлись бы в поведении, а
+ * человек ждёт от одинаковых на вид вкладок одинакового отклика.
+ *
+ * Выбор проекта переключает и всю панель: иначе «новая идея» уходила бы
+ * не в ту школу, которую человек только что открыл.
+ *
+ * @param {{projects: Array, current: number|string, onPick: (id: number|'all') => void}} opts
+ */
+export function projectTabs({ projects, current, onPick }) {
+  const row = el('div', 'ptabs');
+
+  const makeTab = (id, title, accent) => {
+    const tab = el('button', 'ptab');
+    tab.type = 'button';
+    tab.setAttribute('aria-pressed', String(current === id));
+    if (accent) {
+      const dot = el('span', 'ptab__dot');
+      dot.style.background = accent;
+      tab.append(dot);
+    }
+    tab.append(el('span', null, title));
+    tab.addEventListener('click', () => onPick(id));
+    return tab;
+  };
+
+  row.append(makeTab('all', 'Все проекты', null));
+  for (const p of projects) row.append(makeTab(p.id, p.title, p.accent));
+  return row;
+}
+
 /* ------------------------------ всплывашки ------------------------------ */
 
 let toastHost = null;

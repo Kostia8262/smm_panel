@@ -13,7 +13,7 @@
 
 import { api } from '../api.js';
 import { icon, iconMarkup } from '../icons.js';
-import { el, button, iconButton, panel, note, empty, toast, skeleton } from '../ui.js';
+import { el, button, iconButton, panel, note, empty, toast, skeleton, projectTabs } from '../ui.js';
 
 export function trendsView(ctx) {
   const root = el('div', 'view');
@@ -29,8 +29,29 @@ export function trendsView(ctx) {
       : [],
   });
 
-  const host = el('div');
+  let scope = ctx.state.projectId;
+  const tabs = el('div');
+  root.append(tabs);
+  renderTabs();
+
+  const host = el('div', 'stack');
   root.append(host);
+
+  function renderTabs() {
+    tabs.textContent = '';
+    tabs.append(
+      projectTabs({
+        projects: ctx.state.projects,
+        current: scope,
+        onPick: (id) => {
+          scope = id;
+          if (id !== 'all') ctx.switchProject(id);
+          renderTabs();
+          load();
+        },
+      })
+    );
+  }
   const loading = el('div', 'issues');
   loading.append(skeleton(70), skeleton(70));
   host.append(loading);
@@ -40,7 +61,7 @@ export function trendsView(ctx) {
 
   async function load() {
     try {
-      const data = await api.trends();
+      const data = await api.trends(scope === 'all' ? 'all' : undefined);
       trends = data.trends;
       sources = data.sources;
     } catch (err) {
@@ -62,13 +83,16 @@ export function trendsView(ctx) {
     );
 
     if (!trends.length) {
+      // Без второй кнопки: «Добавить тренд» уже стоит в шапке, и две
+      // одинаковые кнопки на пустом экране заставляют выбирать на ровном месте.
       const box = el('section', 'panel');
       box.append(
         empty(
-          'layers',
+          'trend',
           'Трендов пока нет',
-          'Занесите сигнал руками или дождитесь автосбора. Из тренда идея плана делается одним нажатием.',
-          isOwner ? button('Добавить тренд', { variant: 'primary', iconName: 'plus', onClick: () => openForm() }) : null
+          isOwner
+            ? 'Занесите сигнал кнопкой в шапке или дождитесь автосбора. Из тренда идея плана делается одним нажатием.'
+            : 'Сигналы заносит владелец. Как появятся — из них можно будет сделать идеи плана.'
         )
       );
       host.append(box);
@@ -107,6 +131,19 @@ export function trendsView(ctx) {
     titles.append(meta);
     head.append(titles);
     box.append(head);
+
+    if (scope === 'all' && trend.projectId) {
+      const project = ctx.state.projects.find((p) => p.id === trend.projectId);
+      if (project) {
+        const badge = el('span', 'idea__project');
+        const dot = el('i');
+        dot.style.background = project.accent;
+        badge.append(dot, el('span', null, project.title));
+        box.append(badge);
+      }
+    } else if (scope === 'all') {
+      box.append(el('span', 'idea__project', 'общий сигнал'));
+    }
 
     if (trend.summary) box.append(el('p', 'idea__text', trend.summary));
 

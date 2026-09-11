@@ -266,6 +266,7 @@ export function composerView(ctx, postId) {
     const blocks = [
       reviewNote(),
       sectionFailures(),
+      sectionProject(),
       sectionText(),
       sectionTargets(),
       sectionMedia(),
@@ -594,6 +595,61 @@ export function composerView(ctx, postId) {
       toast(err.message, 'danger');
       ctx.setSaveState('');
     }
+  }
+
+  /**
+   * В каком проекте живёт пост. Стоит первым и отдельно: от этого зависит,
+   * в чьи аккаунты он уйдёт и какая подпись к нему приклеится. Менять можно,
+   * пока пост никуда не ушёл — потом в сетях осталась бы запись от одной
+   * школы, а в панели числилась бы другая.
+   */
+  function sectionProject() {
+    const project = ctx.state.projects.find((pr) => pr.id === post.project_id);
+    const published = (post.targets || []).some((t) => t.status === 'published');
+
+    const p = panel('Проект');
+    if (published) {
+      const row = el('div', 'target__name');
+      if (project) {
+        const dot = el('span', 'projsw__dot');
+        dot.style.background = project.accent;
+        row.append(dot);
+      }
+      row.append(el('span', null, project ? project.title : 'не указан'));
+      p.append(row);
+      p.append(el('span', 'field__hint', 'Пост уже публиковался — проект менять поздно.'));
+      return p;
+    }
+
+    const select = el('select', 'select');
+    for (const pr of ctx.state.projects) {
+      const opt = new Option(pr.title, String(pr.id));
+      if (pr.id === post.project_id) opt.selected = true;
+      select.append(opt);
+    }
+    select.addEventListener('change', async () => {
+      const next = Number(select.value);
+      if (!confirm('Пост уйдёт в аккаунты другой школы, а рубрика сбросится. Продолжить?')) {
+        select.value = String(post.project_id);
+        return;
+      }
+      try {
+        const data = await api.updatePost(post.id, { project_id: next });
+        post = data.post;
+        schedule = await api.schedule();
+        toast('Пост переведён в другой проект', 'ok');
+        renderTopbar();
+        renderAll();
+      } catch (err) {
+        select.value = String(post.project_id);
+        toast(err.message, 'danger');
+      }
+    });
+    p.append(select);
+    p.append(
+      el('span', 'field__hint', 'Определяет аккаунты, расписание и подпись. Рубрика принадлежит проекту и при переезде сбрасывается.')
+    );
+    return p;
   }
 
   function sectionWhen() {

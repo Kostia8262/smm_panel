@@ -225,6 +225,9 @@ function renderWho() {
 
 const ctx = {
   state,
+  // Экраны с вкладками проектов переключают панель целиком: иначе «новая
+  // идея» ушла бы не в ту школу, которую человек только что открыл.
+  switchProject: (id) => switchProject(id),
   setTopbar({ title, subtitle = '', actions = [], back = null }) {
     dom.title.textContent = title;
     dom.subtitle.textContent = subtitle;

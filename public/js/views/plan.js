@@ -8,7 +8,7 @@
 
 import { api } from '../api.js';
 import { icon, iconMarkup } from '../icons.js';
-import { el, button, iconButton, panel, note, empty, toast, skeleton } from '../ui.js';
+import { el, button, iconButton, panel, note, empty, toast, skeleton, projectTabs } from '../ui.js';
 
 const COLUMNS = ['idea', 'approved', 'in_work', 'done'];
 
@@ -59,8 +59,31 @@ export function planView(ctx) {
 
   setTopbar();
 
+  // Вкладка «все проекты» — общий взгляд при планировании месяца: видно,
+  // где густо, а где неделю пусто.
+  let scope = ctx.state.projectId;
+  const tabs = el('div');
+  root.append(tabs);
+  renderTabs();
+
   const board = el('div', 'board');
   root.append(board);
+
+  function renderTabs() {
+    tabs.textContent = '';
+    tabs.append(
+      projectTabs({
+        projects: ctx.state.projects,
+        current: scope,
+        onPick: (id) => {
+          scope = id;
+          if (id !== 'all') ctx.switchProject(id);
+          renderTabs();
+          load();
+        },
+      })
+    );
+  }
 
   const loading = el('div', 'issues');
   loading.append(skeleton(64), skeleton(64));
@@ -71,7 +94,7 @@ export function planView(ctx) {
 
   async function load() {
     try {
-      const data = await api.plan();
+      const data = await api.plan(null, scope === 'all' ? 'all' : undefined);
       items = data.items;
       statuses = data.statuses;
       rubrics = data.rubrics;
@@ -203,6 +226,16 @@ export function planView(ctx) {
     }
     box.append(top);
 
+    if (scope === 'all') {
+      const project = ctx.state.projects.find((p) => p.id === item.projectId);
+      if (project) {
+        const badge = el('span', 'idea__project');
+        const dot = el('i');
+        dot.style.background = project.accent;
+        badge.append(dot, el('span', null, project.title));
+        top.append(badge);
+      }
+    }
     box.append(el('h3', 'idea__title', item.title));
     if (item.idea) box.append(el('p', 'idea__text', item.idea));
 

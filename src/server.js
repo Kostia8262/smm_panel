@@ -207,7 +207,23 @@ app.put('/api/posts/:id', (req, res) => {
   const id = Number(req.params.id);
   const post = getPost(id);
   if (!post) return res.status(404).json({ error: 'Пост не найден' });
-  const { title, body, scheduled_at, status, targets, category_id, recycle, skip_signature } = req.body || {};
+  const { title, body, scheduled_at, status, targets, category_id, recycle, skip_signature, project_id } =
+    req.body || {};
+
+  // Проект определяет, в чьи аккаунты уйдёт пост. Уже опубликованному его
+  // менять нельзя: в сетях останется запись от одной школы, а в панели
+  // будет числиться другая.
+  if (project_id !== undefined && project_id !== post.project_id) {
+    if (post.targets.some((t) => t.status === 'published')) {
+      return res.status(422).json({ error: 'Пост уже публиковался — проект менять поздно' });
+    }
+    if (!projectsDb.getProject(project_id)) {
+      return res.status(422).json({ error: 'Проект не найден' });
+    }
+    // Рубрика принадлежит проекту: при переезде она теряет смысл.
+    db.prepare('UPDATE posts SET project_id = ?, category_id = NULL WHERE id = ?').run(project_id, id);
+    log('info', `пост #${id} переведён в другой проект`, { postId: id });
+  }
   db.prepare(
     `UPDATE posts SET title = ?, body = ?, scheduled_at = ?, status = ?, category_id = ?,
      recycle = ?, skip_signature = ?, updated_at = datetime('now') WHERE id = ?`
@@ -216,7 +232,11 @@ app.put('/api/posts/:id', (req, res) => {
     body ?? post.body,
     scheduled_at !== undefined ? scheduled_at : post.scheduled_at,
     status ?? post.status,
-    category_id !== undefined ? category_id : post.category_id,
+    project_id !== undefined && project_id !== post.project_id
+      ? null
+      : category_id !== undefined
+      ? category_id
+      : post.category_id,
     recycle === undefined ? post.recycle : recycle ? 1 : 0,
     skip_signature === undefined ? post.skip_signature : skip_signature ? 1 : 0,
     id
@@ -392,9 +412,13 @@ app.get('/api/posts/:id/log', (req, res) => {
 /* ------------------------------ контент-план ------------------------------ */
 
 app.get('/api/plan', (req, res) => {
-  const projectId = currentProjectId(req);
+  // `project=all` — общий взгляд на четыре школы разом: при планировании
+  // месяца важно видеть, где густо, а где неделю пусто.
+  const all = req.query.project === 'all';
+  const projectId = all ? null : currentProjectId(req);
   res.json({
     projectId,
+    scope: all ? 'all' : 'project',
     items: planDb.listPlan({ status: req.query.status || null, projectId }),
     statuses: Object.values(planDb.PLAN_STATUS),
     rubrics: planDb.RUBRICS,
@@ -449,8 +473,14 @@ app.delete('/api/plan/:id', (req, res) => {
 /* --------------------------------- тренды --------------------------------- */
 
 app.get('/api/trends', (req, res) => {
+  const all = req.query.project === 'all';
   res.json({
-    trends: planDb.listTrends({ includeArchived: req.query.all === '1' }),
+    scope: all ? 'all' : 'project',
+    projectId: all ? null : currentProjectId(req),
+    trends: planDb.listTrends({
+      includeArchived: req.query.all === '1',
+      projectId: all ? null : currentProjectId(req),
+    }),
     sources: Object.values(planDb.TREND_SOURCES),
   });
 });
@@ -466,7 +496,10 @@ app.post('/api/trends', (req, res) => {
   if (!allowed) return res.status(403).json({ error: 'Тренды добавляет владелец' });
   try {
     const payload = Array.isArray(req.body?.trends) ? req.body.trends : [req.body];
-    const added = payload.map((t) => planDb.addTrend(t, req.user?.name || 'импорт'));
+    const projectId = req.user ? currentProjectId(req) : null;
+    const added = payload.map((t) =>
+      planDb.addTrend({ projectId, ...t }, req.user?.name || 'импорт')
+    );
     res.status(201).json({ trends: added });
   } catch (err) {
     res.status(422).json({ error: err.message });

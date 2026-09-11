@@ -28,7 +28,7 @@ export function projectsView(ctx) {
 
   const list = el('div', 'projects');
   root.append(list);
-  const card = el('div');
+  const card = el('div', 'stack');
   root.append(card);
 
   const loading = el('div', 'issues');

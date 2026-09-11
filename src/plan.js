@@ -61,6 +61,7 @@ function trendFromRow(row) {
     capturedAt: row.captured_at,
     expiresAt: row.expires_at,
     usedCount: row.used_count,
+    projectId: row.project_id,
     archived: Boolean(row.archived),
     stale: isStale(row),
   };
@@ -78,14 +79,24 @@ function isStale(row) {
   return Date.now() > limit.getTime();
 }
 
-export function listTrends({ includeArchived = false } = {}) {
-  const rows = db
-    .prepare(
-      `SELECT * FROM trends ${includeArchived ? '' : 'WHERE archived = 0'}
-       ORDER BY relevance DESC, captured_at DESC`
-    )
-    .all();
-  return rows.map(trendFromRow);
+/**
+ * Тренды проекта плюс общие.
+ *
+ * Формат, который зашёл в TikTok, полезен всем четырём школам, поэтому
+ * сигнал без проекта показывается в каждой вкладке. Привязанный — только
+ * в своей: «набор в первый класс» дизайн-школе ни к чему.
+ */
+export function listTrends({ includeArchived = false, projectId = null } = {}) {
+  const where = [];
+  const params = [];
+  if (!includeArchived) where.push('archived = 0');
+  if (projectId) {
+    where.push('(project_id = ? OR project_id IS NULL)');
+    params.push(projectId);
+  }
+  const sql = `SELECT * FROM trends ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY relevance DESC, captured_at DESC`;
+  return db.prepare(sql).all(...params).map(trendFromRow);
 }
 
 export function addTrend(data, authorName = 'панель') {
@@ -96,8 +107,8 @@ export function addTrend(data, authorName = 'панель') {
 
   const info = db
     .prepare(
-      `INSERT INTO trends (platform, title, summary, metric, url, source, relevance, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO trends (platform, title, summary, metric, url, source, relevance, expires_at, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       platform,
@@ -107,7 +118,8 @@ export function addTrend(data, authorName = 'панель') {
       data.url ? String(data.url).slice(0, 500) : null,
       TREND_SOURCES[data.source] ? data.source : 'research',
       Math.min(5, Math.max(1, Number(data.relevance) || 3)),
-      data.expiresAt || null
+      data.expiresAt || null,
+      data.projectId || null
     );
   log('info', `добавлен тренд (${platform}): ${title} · ${authorName}`);
   return trendFromRow(db.prepare('SELECT * FROM trends WHERE id = ?').get(info.lastInsertRowid));

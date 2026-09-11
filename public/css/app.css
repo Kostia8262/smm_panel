@@ -195,6 +195,10 @@
 
 .view { padding: var(--sp-6); display: flex; flex-direction: column; gap: var(--sp-6); }
 
+/* Столбик с интервалом. Экраны собирают внутренние контейнеры, и без него
+   блоки внутри слипаются — ритм .view до них не доходит. */
+.stack { display: flex; flex-direction: column; gap: var(--sp-4); }
+
 /* ============================== атомы ============================== */
 
 .btn {
@@ -309,6 +313,9 @@
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .field__label { font-size: var(--fs-xs); font-weight: 600; color: var(--ink-2); }
 .field__hint { font-size: var(--fs-xs); color: var(--ink-3); }
+/* Подсказка принадлежит полю над ней, поэтому общий интервал панели для
+   неё слишком велик. */
+.panel > .field__hint { margin-top: calc(var(--sp-3) * -1 + 4px); }
 
 .input,
 .textarea,
@@ -358,14 +365,20 @@
 
 /* ============================= молекулы ============================= */
 
+/* Панель — колонка с интервалом: иначе поля внутри неё слипаются, и
+   каждому приходится раздавать отступ вручную. Так было с полем названия
+   и текстом поста — они стояли вплотную. */
 .panel {
   background: var(--surface);
   border: 1px solid var(--line-soft);
   border-radius: var(--r);
   padding: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
 }
 
-.panel__head { display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.panel__head { display: flex; align-items: center; gap: var(--sp-3); }
 .panel__head .spacer { flex: 1; }
 
 .note {
@@ -1265,3 +1278,30 @@
 }
 
 .signature__text--off { opacity: 0.4; text-decoration: line-through; }
+
+/* ====================== вкладки проектов ====================== */
+
+.ptabs { display: flex; gap: 4px; flex-wrap: wrap; padding-bottom: var(--sp-1); }
+
+.ptab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  color: var(--ink-2);
+  font: 600 var(--fs-xs) / 1 var(--font);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.ptab:hover { color: var(--ink); border-color: var(--line); }
+.ptab[aria-pressed="true"] { background: var(--surface-3); color: var(--ink); border-color: var(--gold-line); }
+.ptab__dot { width: 8px; height: 8px; border-radius: 3px; flex: none; }
+
+/* Метка проекта на карточке в общем режиме */
+.idea__project { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-micro); color: var(--ink-3); }
+.idea__project i { width: 7px; height: 7px; border-radius: 2px; display: inline-block; }
