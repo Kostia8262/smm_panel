@@ -119,11 +119,67 @@ export function projectsView(ctx) {
         'В базе лежит шифротекст, ключ — отдельным файлом на сервере. В полях виден только хвост: пустое поле означает «не менять».'
       )
     );
+    head.append(signatureEditor(project));
     card.append(head);
 
     const grid = el('div', 'platforms');
     for (const account of data.accounts) grid.append(accountCard(project, account));
     card.append(grid);
+  }
+
+  /**
+   * Подпись проекта. Живёт здесь, а не в общих настройках: у четырёх школ
+   * разные сайты и телефоны, и общая приставка звала бы людей не туда.
+   */
+  function signatureEditor(project) {
+    const box = el('div', 'field');
+    const head = el('div', 'signature__head');
+    head.append(el('span', 'field__label', 'Подпись ко всем постам проекта'));
+
+    const sw = el('label', 'switch');
+    const on = el('input');
+    on.type = 'checkbox';
+    on.checked = project.signatureEnabled;
+    on.setAttribute('aria-label', 'Добавлять подпись');
+    const mark = el('span', 'switch__box');
+    mark.innerHTML = iconMarkup('check', 12);
+    sw.append(on, mark);
+    head.append(el('span', 'spacer'), sw);
+    box.append(head);
+
+    const area = el('textarea', 'textarea');
+    area.rows = 4;
+    area.value = project.signature || '';
+    area.placeholder = 'Название школы, ссылка на сайт, телефон';
+    box.append(area);
+    box.append(
+      el(
+        'span',
+        'field__hint',
+        'Уходит в конце каждого поста и считается в лимитах площадок. Ссылка внутри подписи тоже считает переходы. У отдельного поста подпись можно снять.'
+      )
+    );
+
+    const foot = el('div', 'target__meta');
+    foot.style.justifyContent = 'flex-start';
+    const save = button('Сохранить подпись', {
+      iconName: 'check',
+      onClick: async () => {
+        try {
+          await api.updateProject(project.id, {
+            signature: area.value,
+            signatureEnabled: on.checked,
+          });
+          toast('Подпись сохранена', 'ok');
+          load();
+        } catch (err) {
+          toast(err.message, 'danger');
+        }
+      },
+    });
+    foot.append(save);
+    box.append(foot);
+    return box;
   }
 
   function accountCard(project, account) {

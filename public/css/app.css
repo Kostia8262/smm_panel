@@ -1241,3 +1241,27 @@
 /* Строка добавления слота: поля рядом, а не на всю ширину панели */
 .slotgrid + .target__meta .select,
 .slotgrid + .target__meta .input { max-width: 200px; }
+
+/* ========================== подпись проекта ========================== */
+
+.signature {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.signature__head { display: flex; align-items: center; gap: var(--sp-2); color: var(--ink-2); }
+
+.signature__text {
+  margin: 0;
+  font: 400 var(--fs-xs) / 1.5 var(--font);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+
+.signature__text--off { opacity: 0.4; text-decoration: line-through; }

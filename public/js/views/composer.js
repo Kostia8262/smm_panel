@@ -13,6 +13,7 @@ import { api } from '../api.js';
 import { icon, iconMarkup } from '../icons.js';
 import { el, button, iconButton, note, toast, panel, humanBytes } from '../ui.js';
 import { dateTimeField } from '../datetime.js';
+import { withSignature } from '../signature.js';
 
 /** Как называется состояние поста и каким цветом его показывать. */
 const STATE = {
@@ -86,6 +87,7 @@ export function composerView(ctx, postId) {
         scheduled_at: post.scheduled_at,
         category_id: post.category_id ?? null,
         recycle: post.recycle ? 1 : 0,
+        skip_signature: post.skip_signature ? 1 : 0,
         targets: post.targets,
       });
       post = data.post;
@@ -305,22 +307,32 @@ export function composerView(ctx, postId) {
     const counters = el('div', 'counters');
     counters.id = 'counters';
 
-    p.append(title, body, counters);
+    p.append(title, body, counters, signatureBlock());
     queueMicrotask(renderCounters);
     return p;
+  }
+
+  /**
+   * Итоговый текст — тот же, что уйдёт в сеть. Счётчики, превью и проверка
+   * обязаны смотреть на одно значение, иначе пост пройдёт здесь и отвалится
+   * у площадки.
+   */
+  function finalText(target = null) {
+    const own = target?.text_override ?? root.querySelector('#body')?.value ?? post.body ?? '';
+    return withSignature(own, post.skip_signature ? '' : post.signature);
   }
 
   function renderCounters() {
     const host = root.querySelector('#counters');
     if (!host) return;
     host.textContent = '';
-    const text = root.querySelector('#body')?.value ?? post.body ?? '';
     const hasMedia = (post.media || []).length > 0;
 
     for (const t of post.targets) {
       const spec = specs.find((s) => s.id === t.platform);
       if (!spec) continue;
       const limit = hasMedia ? spec.text.limitWithMedia : spec.text.limit;
+      const text = finalText(t);
       const over = text.length > limit;
       const near = !over && text.length > limit * 0.9;
       const chip = el('span', `counter${over ? ' counter--over' : near ? ' counter--warn' : ''}`);
@@ -329,6 +341,51 @@ export function composerView(ctx, postId) {
       chip.title = `${spec.title}: предел ${limit} символов`;
       host.append(chip);
     }
+  }
+
+  /**
+   * Подпись проекта показывается прямо под текстом, а не прячется в
+   * настройках: человек должен видеть, что именно уйдёт в сеть, до того
+   * как нажмёт «в очередь».
+   */
+  function signatureBlock() {
+    if (!post.signatureEnabled) return el('span');
+    const box = el('div', 'signature');
+
+    const head = el('div', 'signature__head');
+    head.append(icon('drafts', { size: 14 }));
+    head.append(el('span', 'field__label', 'Подпись проекта'));
+
+    const off = el('label', 'switch');
+    const input = el('input');
+    input.type = 'checkbox';
+    input.checked = !post.skip_signature;
+    input.setAttribute('aria-label', 'Добавлять подпись к этому посту');
+    const mark = el('span', 'switch__box');
+    mark.innerHTML = iconMarkup('check', 12);
+    off.append(input, mark);
+    input.addEventListener('change', async () => {
+      post.skip_signature = input.checked ? 0 : 1;
+      await save({ quiet: true });
+      renderAll();
+    });
+    head.append(el('span', 'spacer'));
+    head.append(off);
+    box.append(head);
+
+    const text = el('pre', 'signature__text', post.projectSignature || '');
+    if (post.skip_signature) text.classList.add('signature__text--off');
+    box.append(text);
+    box.append(
+      el(
+        'span',
+        'field__hint',
+        post.skip_signature
+          ? 'У этого поста подписи не будет.'
+          : 'Уйдёт в конце поста. Правится в карточке проекта, ссылка в ней тоже считает переходы.'
+      )
+    );
+    return box;
   }
 
   function sectionTargets() {
@@ -742,7 +799,8 @@ export function composerView(ctx, postId) {
     const spec = specs.find((s) => s.id === platformId);
     const format = spec.formats.find((f) => f.id === formatId);
     const media = (post.media || [])[0];
-    const text = root.querySelector('#body')?.value ?? post.body ?? '';
+    const activeTarget = post.targets.find((t) => keyOf(t) === previewKey);
+    const text = finalText(activeTarget);
 
     const stage = el('div', 'preview__stage');
     const frame = el('div', 'frame');

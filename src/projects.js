@@ -58,6 +58,8 @@ function fromRow(row) {
     accent: row.accent,
     active: Boolean(row.active),
     position: row.position,
+    signature: row.signature || '',
+    signatureEnabled: Boolean(row.signature_enabled),
   };
 }
 
@@ -89,14 +91,19 @@ export function createProject({ slug, title, subtitle = '', accent = '#e0a94b' }
   return getProject(Number(info.lastInsertRowid));
 }
 
-export function updateProject(id, { title, subtitle, accent, active }) {
+export function updateProject(id, { title, subtitle, accent, active, signature, signatureEnabled }) {
   const current = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
   if (!current) throw new Error('Проект не найден');
-  db.prepare('UPDATE projects SET title = ?, subtitle = ?, accent = ?, active = ? WHERE id = ?').run(
+  db.prepare(
+    `UPDATE projects SET title = ?, subtitle = ?, accent = ?, active = ?,
+     signature = ?, signature_enabled = ? WHERE id = ?`
+  ).run(
     title !== undefined ? String(title).trim() : current.title,
     subtitle !== undefined ? String(subtitle).slice(0, 120) : current.subtitle,
     accent || current.accent,
     active === undefined ? current.active : active ? 1 : 0,
+    signature !== undefined ? String(signature).slice(0, 600) : current.signature,
+    signatureEnabled === undefined ? current.signature_enabled : signatureEnabled ? 1 : 0,
     id
   );
   return getProject(id);

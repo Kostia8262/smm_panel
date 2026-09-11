@@ -11,6 +11,7 @@
  */
 
 import { PLATFORMS } from './platforms/specs.js';
+import { withSignature } from './signature.js';
 
 const mimeToType = {
   'image/jpeg': 'jpeg',
@@ -60,7 +61,9 @@ export function validatePost(post) {
       continue;
     }
 
-    const text = (target.text_override ?? post.body ?? '').trim();
+    // Подпись — часть поста, а не довесок при отправке: если её не считать,
+    // пост пройдёт проверку в композере и отвалится у площадки.
+    const text = withSignature(target.text_override ?? post.body ?? '', post.signature).trim();
     const hasMedia = media.length > 0;
     const limit = hasMedia ? spec.text.limitWithMedia : spec.text.limit;
 

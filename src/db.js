@@ -420,6 +420,46 @@ const MIGRATIONS = [
       CREATE INDEX idx_clicks_link ON link_clicks(link_id, at);
     `,
   },
+  {
+    /**
+     * Обязательная подпись к постам.
+     *
+     * Своя у каждого проекта: у четырёх школ разные сайты и разные
+     * аудитории, общая приставка звала бы людей не туда.
+     *
+     * Подпись обязательна, но выключатель у поста есть: мем с подписью в
+     * четыре строки выглядит как реклама, и запрет без исключений кончился
+     * бы тем, что её отключили бы у всего проекта разом.
+     */
+    name: '011-signature',
+    sql: `
+      ALTER TABLE projects ADD COLUMN signature TEXT NOT NULL DEFAULT '';
+      ALTER TABLE projects ADD COLUMN signature_enabled INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE posts ADD COLUMN skip_signature INTEGER NOT NULL DEFAULT 0;
+
+      UPDATE projects SET signature =
+        'Комп''ютерна академія My Computer Academy' || char(10) ||
+        'Записатися на пробне заняття: https://mycomputer.education' || char(10) ||
+        'Телефон і Telegram: +38 (095) 462-46-72'
+      WHERE slug = 'education';
+
+      UPDATE projects SET signature =
+        'Школа дизайну My Computer Academy' || char(10) ||
+        'Курси та запис: https://mycomputer.school' || char(10) ||
+        'Телефон і Telegram: +38 (095) 462-46-72'
+      WHERE slug = 'school';
+
+      UPDATE projects SET signature =
+        'FluentFox — англійська для дітей та підлітків' || char(10) ||
+        'Запис на пробне заняття: +38 (095) 462-46-72'
+      WHERE slug = 'fluentfox';
+
+      UPDATE projects SET signature =
+        'Дошколярик — підготовка до школи' || char(10) ||
+        'Запис і питання: +38 (095) 462-46-72'
+      WHERE slug = 'child';
+    `,
+  },
 ];
 
 function migrate() {

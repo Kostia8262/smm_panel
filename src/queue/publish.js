@@ -12,6 +12,7 @@ import { getAdapter } from '../platforms/index.js';
 import { credentialsFor, getProject } from '../projects.js';
 import { requeueEvergreen } from '../schedule.js';
 import { shortenLinks } from '../links.js';
+import { withSignature, signatureFor } from '../signature.js';
 import { getSetting } from '../staff.js';
 import { UPLOAD_DIR } from '../media.js';
 
@@ -66,7 +67,13 @@ export async function publishPost(postId) {
     }
 
     try {
-      const raw = target.text_override ?? post.body ?? '';
+      // Подпись добавляется ДО подмены ссылок: ссылка на сайт внутри подписи
+      // тоже должна считать переходы, иначе главный призыв поста остаётся
+      // без счётчика.
+      const raw = withSignature(
+        target.text_override ?? post.body ?? '',
+        signatureFor(post, project)
+      );
       // Ссылки на наши сайты подменяются короткими с метками: иначе потом
       // нечем ответить, сколько человек пришло именно с этого поста.
       const ownDomains = String(getSetting('own_domains', 'mycomputer.education,mycomputer.school'))

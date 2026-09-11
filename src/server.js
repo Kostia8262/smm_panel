@@ -27,6 +27,7 @@ const planDb = await import('./plan.js');
 const projectsDb = await import('./projects.js');
 const scheduleDb = await import('./schedule.js');
 const linksDb = await import('./links.js');
+const { signatureFor, withSignature } = await import('./signature.js');
 const { writeFileSync } = await import('node:fs');
 const { encrypt: encryptSecret, decrypt: decryptSecret } = await import('./secrets.js');
 
@@ -206,10 +207,10 @@ app.put('/api/posts/:id', (req, res) => {
   const id = Number(req.params.id);
   const post = getPost(id);
   if (!post) return res.status(404).json({ error: 'Пост не найден' });
-  const { title, body, scheduled_at, status, targets, category_id, recycle } = req.body || {};
+  const { title, body, scheduled_at, status, targets, category_id, recycle, skip_signature } = req.body || {};
   db.prepare(
     `UPDATE posts SET title = ?, body = ?, scheduled_at = ?, status = ?, category_id = ?,
-     recycle = ?, updated_at = datetime('now') WHERE id = ?`
+     recycle = ?, skip_signature = ?, updated_at = datetime('now') WHERE id = ?`
   ).run(
     title ?? post.title,
     body ?? post.body,
@@ -217,6 +218,7 @@ app.put('/api/posts/:id', (req, res) => {
     status ?? post.status,
     category_id !== undefined ? category_id : post.category_id,
     recycle === undefined ? post.recycle : recycle ? 1 : 0,
+    skip_signature === undefined ? post.skip_signature : skip_signature ? 1 : 0,
     id
   );
   if (Array.isArray(targets)) saveTargets(id, targets);
@@ -713,6 +715,12 @@ function publicBase() {
 function decorate(post) {
   if (!post) return post;
   const base = publicBase();
+  // Подпись кладём в сам пост: её считают и проверка, и счётчики в
+  // композере, и превью — все по одному и тому же значению.
+  const project = post.project_id ? projectsDb.getProject(post.project_id) : null;
+  post.signature = signatureFor(post, project);
+  post.projectSignature = project ? project.signature : '';
+  post.signatureEnabled = project ? project.signatureEnabled : false;
   post.media = (post.media || []).map((m) => ({
     ...m,
     url: `${base}/media/${m.stored_name}`,
