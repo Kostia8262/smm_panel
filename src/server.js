@@ -23,6 +23,7 @@ const { UPLOAD_DIR, storedName, kindOf, imageSize, cropFor } = await import('./m
 const { publishPost } = await import('./queue/publish.js');
 const { installAuth, requireAccess } = await import('./auth.js');
 const staffDb = await import('./staff.js');
+const planDb = await import('./plan.js');
 const { writeFileSync } = await import('node:fs');
 
 const app = express();
@@ -262,6 +263,96 @@ app.post('/api/platforms/:id/check', requireAccess('platforms'), async (req, res
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });
   }
+});
+
+/* ------------------------------ контент-план ------------------------------ */
+
+app.get('/api/plan', (req, res) => {
+  res.json({
+    items: planDb.listPlan({ status: req.query.status || null }),
+    statuses: Object.values(planDb.PLAN_STATUS),
+    rubrics: planDb.RUBRICS,
+    summary: planDb.planSummary(),
+  });
+});
+
+app.post('/api/plan', (req, res) => {
+  try {
+    res.status(201).json({ item: planDb.createPlanItem(req.body || {}, req.user.id) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.put('/api/plan/:id', (req, res) => {
+  try {
+    res.json({ item: planDb.updatePlanItem(Number(req.params.id), req.body || {}) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+/** Утверждает идеи владелец — это та же развилка, что и с постами. */
+app.post('/api/plan/:id/approve', requireAccess('platforms'), (req, res) => {
+  res.json({ item: planDb.approvePlanItem(Number(req.params.id), req.user.id) });
+});
+
+/**
+ * Заготовка поста из идеи. Доступно обоим: СММщик берёт утверждённое в работу
+ * сам, иначе владелец становится узким местом на каждом шаге.
+ */
+app.post('/api/plan/:id/to-post', (req, res) => {
+  try {
+    const item = planDb.getPlanItem(Number(req.params.id));
+    if (!item) return res.status(404).json({ error: 'Пункт плана не найден' });
+    if (item.status === 'idea' && staffDb.requireApproval() && req.user.role !== 'owner') {
+      return res.status(403).json({ error: 'Идея ещё не утверждена владельцем' });
+    }
+    res.json(planDb.planToPost(Number(req.params.id), { db, staffId: req.user.id }));
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.delete('/api/plan/:id', (req, res) => {
+  planDb.removePlanItem(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+/* --------------------------------- тренды --------------------------------- */
+
+app.get('/api/trends', (req, res) => {
+  res.json({
+    trends: planDb.listTrends({ includeArchived: req.query.all === '1' }),
+    sources: Object.values(planDb.TREND_SOURCES),
+  });
+});
+
+/**
+ * Приём тренда. Сюда пишет и панель, и разбор со стороны — у Instagram,
+ * Facebook и TikTok публичного API трендов нет, и сигнал попадает в базу
+ * только так. Ключ отдельный, чтобы не гонять сессию в скриптах.
+ */
+app.post('/api/trends', (req, res) => {
+  const key = req.headers['x-ingest-key'];
+  const allowed = req.user?.role === 'owner' || (process.env.TRENDS_INGEST_KEY && key === process.env.TRENDS_INGEST_KEY);
+  if (!allowed) return res.status(403).json({ error: 'Тренды добавляет владелец' });
+  try {
+    const payload = Array.isArray(req.body?.trends) ? req.body.trends : [req.body];
+    const added = payload.map((t) => planDb.addTrend(t, req.user?.name || 'импорт'));
+    res.status(201).json({ trends: added });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.post('/api/trends/:id/archive', requireAccess('platforms'), (req, res) => {
+  res.json({ trend: planDb.archiveTrend(Number(req.params.id), req.body?.archived !== false) });
+});
+
+app.delete('/api/trends/:id', requireAccess('platforms'), (req, res) => {
+  planDb.removeTrend(Number(req.params.id));
+  res.json({ ok: true });
 });
 
 /* -------------------------------- сотрудники -------------------------------- */

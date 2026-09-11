@@ -195,6 +195,59 @@ const MIGRATIONS = [
       ALTER TABLE posts ADD COLUMN review_note TEXT;
     `,
   },
+  {
+    /**
+     * Контент-план и тренды.
+     *
+     * План — это то, что обсуждается и утверждается ДО того, как появился
+     * пост: тема, рубрика, площадки и что нужно снять. Пост из плана рождается
+     * одним нажатием и хранит обратную ссылку, чтобы было видно, какая идея
+     * дошла до публикации, а какая осела.
+     *
+     * Тренды — сырьё для плана. Живут отдельно, потому что протухают: то, что
+     * гремело две недели назад, сегодня уже вредно брать в работу.
+     */
+    name: '006-plan-trends',
+    sql: `
+      CREATE TABLE trends (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        platform    TEXT NOT NULL,
+        title       TEXT NOT NULL,
+        summary     TEXT NOT NULL DEFAULT '',
+        metric      TEXT NOT NULL DEFAULT '',
+        url         TEXT,
+        source      TEXT NOT NULL DEFAULT 'research',
+        relevance   INTEGER NOT NULL DEFAULT 3,
+        captured_at TEXT NOT NULL DEFAULT (datetime('now')),
+        expires_at  TEXT,
+        used_count  INTEGER NOT NULL DEFAULT 0,
+        archived    INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE INDEX idx_trends_live ON trends(archived, platform, captured_at);
+
+      CREATE TABLE plan_items (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        title       TEXT NOT NULL,
+        idea        TEXT NOT NULL DEFAULT '',
+        rubric      TEXT NOT NULL DEFAULT '',
+        platforms   TEXT NOT NULL DEFAULT '[]',
+        planned_for TEXT,
+        status      TEXT NOT NULL DEFAULT 'idea',
+        need_media  TEXT NOT NULL DEFAULT '',
+        note        TEXT NOT NULL DEFAULT '',
+        trend_id    INTEGER REFERENCES trends(id) ON DELETE SET NULL,
+        post_id     INTEGER REFERENCES posts(id) ON DELETE SET NULL,
+        author_id   INTEGER REFERENCES staff(id),
+        approved_by INTEGER REFERENCES staff(id),
+        approved_at TEXT,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX idx_plan_status ON plan_items(status, planned_for);
+    `,
+  },
 ];
 
 function migrate() {

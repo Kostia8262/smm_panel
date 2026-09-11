@@ -894,3 +894,192 @@
   .toasts { left: var(--sp-4); right: var(--sp-4); bottom: var(--sp-4); }
   .toast { max-width: none; }
 }
+
+/* ============================ поле даты ============================ */
+
+.dtf__shell { position: relative; display: flex; }
+.dtf__input { padding-right: 38px; }
+
+.dtf__btn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.dtf__btn:hover { color: var(--gold); background: var(--surface-3); }
+
+/* Календарь в fixed и в body: внутри композера его обрезала бы прокрутка
+   родительской колонки. */
+.dtp {
+  position: fixed;
+  z-index: 70;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-2);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  animation: dtp-in 140ms var(--ease);
+}
+
+@keyframes dtp-in { from { opacity: 0; transform: translateY(-4px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dtp { animation: none; }
+}
+
+.dtp__head { display: flex; align-items: center; gap: var(--sp-2); }
+.dtp__month { flex: 1; text-align: center; font-weight: 650; font-size: var(--fs-sm); }
+
+.dtp__nav {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.dtp__nav:hover { color: var(--gold); border-color: var(--gold-line); }
+
+.dtp__grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+
+.dtp__dow {
+  text-align: center;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  padding-bottom: 4px;
+}
+
+.dtp__day {
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink);
+  font: 500 var(--fs-sm) / 1 var(--font);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.dtp__day:hover { background: var(--surface-2); }
+.dtp__day--out { color: var(--ink-3); opacity: 0.55; }
+.dtp__day--today { border-color: var(--line); color: var(--gold); }
+.dtp__day--picked { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); font-weight: 700; }
+.dtp__day--picked:hover { background: var(--gold-bright); }
+
+.dtp__time { display: flex; align-items: center; gap: var(--sp-3); }
+.dtp__timelabel { font-size: var(--fs-xs); color: var(--ink-2); }
+.dtp__timeinput { flex: 1; height: 32px; padding: 0 var(--sp-3); font-variant-numeric: tabular-nums; }
+
+/* Системный значок часов внутри поля времени — светлый; перекрашиваем,
+   иначе он белым пятном висит на тёмной панели. */
+.dtp__timeinput::-webkit-calendar-picker-indicator {
+  filter: invert(0.75) sepia(0.5) saturate(4) hue-rotate(2deg);
+  cursor: pointer;
+}
+
+.dtp__quick { display: flex; flex-wrap: wrap; gap: 4px; }
+.dtp__foot { display: flex; align-items: center; gap: var(--sp-2); border-top: 1px solid var(--line-soft); padding-top: var(--sp-3); }
+
+/* ========================== контент-план ========================== */
+
+/* Колонки по состоянию: смысл плана в движении идеи слева направо,
+   и список этого движения не показывает. */
+.board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-3);
+  align-items: start;
+}
+
+.board__col {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-height: 180px;
+}
+
+.board__head { display: flex; align-items: baseline; gap: var(--sp-2); }
+.board__title { font-weight: 650; font-size: var(--fs-sm); }
+.board__hint { font-size: var(--fs-micro); color: var(--ink-3); }
+.board__list { display: flex; flex-direction: column; gap: var(--sp-2); }
+.board__empty { color: var(--ink-3); font-size: var(--fs-xs); padding: var(--sp-3) 0; text-align: center; }
+
+.idea {
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  transition: border-color var(--dur) var(--ease);
+}
+
+.idea:hover { border-color: var(--line); }
+.idea__top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.idea__date { font-size: var(--fs-micro); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.idea__title { font-size: var(--fs-sm); font-weight: 650; line-height: 1.35; }
+.idea__text { font-size: var(--fs-xs); color: var(--ink-2); line-height: 1.45; }
+
+/* Что нужно снять — ради этой строки СММщик и открывает план */
+.idea__need {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-size: var(--fs-xs);
+  color: var(--gold-bright);
+  background: var(--gold-dim);
+  border: 1px solid var(--gold-line);
+  border-radius: 7px;
+  padding: 6px 8px;
+}
+
+.idea__foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.idea__foot .btn { height: 28px; padding: 0 10px; font-size: var(--fs-xs); }
+.idea__foot .btn--icon { width: 28px; padding: 0; }
+
+.plan-form__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+.plan-form__grid > .field:nth-child(3),
+.plan-form__grid > .target__meta { grid-column: 1 / -1; }
+.plat-picker { display: flex; flex-wrap: wrap; gap: 5px; }
+
+/* ============================== тренды ============================== */
+
+.trend { display: flex; flex-direction: column; gap: var(--sp-3); }
+.trend--stale { opacity: 0.6; }
+.trend--stale .platform__name { text-decoration: line-through; text-decoration-color: var(--ink-3); }
+
+@media (max-width: 1100px) {
+  .board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 860px) {
+  .board { grid-template-columns: minmax(0, 1fr); }
+  .plan-form__grid { grid-template-columns: minmax(0, 1fr); }
+}

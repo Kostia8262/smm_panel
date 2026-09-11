@@ -14,11 +14,15 @@ import { platformsView } from './views/platforms.js';
 import { journalView } from './views/journal.js';
 import { settingsView } from './views/settings.js';
 import { staffView } from './views/staff.js';
+import { planView } from './views/plan.js';
+import { trendsView } from './views/trends.js';
 
 // Карта прав — зеркало ACCESS из src/staff.js. Держать в согласии: в школьной
 // панели такая же карта разъехалась, когда жила в трёх местах сразу.
 const NAV = [
   { id: 'calendar', hash: '#/', title: 'Календарь', icon: 'calendar', group: 'Работа', area: 'calendar' },
+  { id: 'plan', hash: '#/plan', title: 'Контент-план', icon: 'layers', group: 'Работа', area: 'plan' },
+  { id: 'trends', hash: '#/trends', title: 'Тренды', icon: 'trend', group: 'Работа', area: 'trends' },
   { id: 'platforms', hash: '#/platforms', title: 'Площадки', icon: 'plug', group: 'Работа', area: 'platforms' },
   { id: 'staff', hash: '#/staff', title: 'Сотрудники', icon: 'staff', group: 'Доступ', area: 'staff' },
   { id: 'journal', hash: '#/journal', title: 'Журнал', icon: 'journal', group: 'Служебное', area: 'journal' },
@@ -28,6 +32,8 @@ const NAV = [
 const ACCESS = {
   calendar: ['owner', 'smm'],
   post: ['owner', 'smm'],
+  plan: ['owner', 'smm'],
+  trends: ['owner', 'smm'],
   platforms: ['owner'],
   journal: ['owner', 'smm'],
   staff: ['owner'],
@@ -242,6 +248,8 @@ function route() {
     // человек должен увидеть внятный ответ, а не пустой экран с ошибкой.
     const area = postMatch
       ? 'post'
+      : hash.startsWith('#/plan') ? 'plan'
+      : hash.startsWith('#/trends') ? 'trends'
       : hash.startsWith('#/platforms') ? 'platforms'
       : hash.startsWith('#/staff') ? 'staff'
       : hash.startsWith('#/journal') ? 'journal'
@@ -254,6 +262,8 @@ function route() {
     }
 
     if (postMatch) dom.outlet.append(composerView(ctx, Number(postMatch[1])));
+    else if (hash.startsWith('#/plan')) dom.outlet.append(planView(ctx));
+    else if (hash.startsWith('#/trends')) dom.outlet.append(trendsView(ctx));
     else if (hash.startsWith('#/platforms')) dom.outlet.append(platformsView(ctx));
     else if (hash.startsWith('#/staff')) dom.outlet.append(staffView(ctx));
     else if (hash.startsWith('#/journal')) dom.outlet.append(journalView(ctx));

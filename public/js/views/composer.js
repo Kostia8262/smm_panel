@@ -11,10 +11,8 @@
 
 import { api } from '../api.js';
 import { icon, iconMarkup } from '../icons.js';
-import {
-  el, button, iconButton, note, toast, panel,
-  toLocalInput, fromLocalInput, humanBytes,
-} from '../ui.js';
+import { el, button, iconButton, note, toast, panel, humanBytes } from '../ui.js';
+import { dateTimeField } from '../datetime.js';
 
 /** Как называется состояние поста и каким цветом его показывать. */
 const STATE = {
@@ -83,7 +81,7 @@ export function composerView(ctx, postId) {
       const data = await api.updatePost(post.id, {
         title: root.querySelector('#title')?.value ?? post.title,
         body: root.querySelector('#body')?.value ?? post.body,
-        scheduled_at: fromLocalInput(root.querySelector('#when')?.value || ''),
+        scheduled_at: post.scheduled_at,
         targets: post.targets,
       });
       post = data.post;
@@ -538,15 +536,16 @@ export function composerView(ctx, postId) {
 
   function sectionWhen() {
     const p = panel('Когда');
-    const field = el('div', 'field');
-    const input = el('input', 'input');
-    input.id = 'when';
-    input.type = 'datetime-local';
-    input.value = toLocalInput(post.scheduled_at);
-    input.addEventListener('change', autosave);
-    field.append(input);
-    field.append(el('span', 'field__hint', 'Пусто — пост останется черновиком без даты.'));
-    p.append(field);
+    p.append(
+      dateTimeField({
+        value: post.scheduled_at,
+        label: '',
+        onChange: (dbValue) => {
+          post.scheduled_at = dbValue;
+          save({ quiet: true });
+        },
+      })
+    );
     return p;
   }
 
