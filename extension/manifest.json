@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Сборщик трендов · My Computer Academy",
+  "version": "0.1.0",
+  "description": "Читает ленту Threads, пока вы её листаете, и отправляет реакции постов в планировщик школы.",
+  "minimum_chrome_version": "116",
+
+  "permissions": ["storage", "alarms"],
+
+  "host_permissions": [
+    "https://*.threads.net/*",
+    "https://*.threads.com/*",
+    "https://smm.mycomputer.education/*",
+    "http://localhost/*"
+  ],
+
+  "background": {
+    "service_worker": "src/service-worker.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://*.threads.net/*", "https://*.threads.com/*"],
+      "js": ["src/content.js"],
+      "type": "module",
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "Сборщик трендов"
+  }
+}

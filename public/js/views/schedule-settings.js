@@ -246,3 +246,64 @@ function field(label, value) {
   wrap.append(lab, input);
   return { wrap, input };
 }
+
+/**
+ * Ключ для расширения-сборщика.
+ *
+ * Отдельный от токенов сотрудников: расширение работает в чужой вкладке
+ * рядом с Threads, и давать ему ключ от всей панели нельзя — этот ключ
+ * умеет ровно одно, принимать посты.
+ */
+export function ingestPanel() {
+  const p = panel('Сборщик ленты (расширение)');
+  const body = el('div', 'stack');
+  p.append(body);
+
+  api
+    .ingestKey()
+    .then(({ key }) => render(key))
+    .catch((err) => body.append(note('danger', 'Ключ не прочитался', err.message)));
+
+  return p;
+
+  function render(key) {
+    body.textContent = '';
+    body.append(
+      el(
+        'p',
+        'field__hint',
+        'Расширение читает ленту Threads, пока СММщик её листает, и присылает сюда реакции постов. Само оно ничего не листает и не нажимает — только смотрит на то, мимо чего человек прошёл.'
+      )
+    );
+
+    if (key) {
+      const value = el('div', 'token-value', key);
+      body.append(value);
+    } else {
+      body.append(note('warn', 'Ключ не выпущен', 'Без него панель не примет данные от расширения.'));
+    }
+
+    const row = el('div', 'target__meta');
+    row.style.justifyContent = 'flex-start';
+    row.append(
+      button(key ? 'Перевыпустить ключ' : 'Выпустить ключ', {
+        variant: key ? 'danger' : 'primary',
+        iconName: key ? 'refresh' : 'plus',
+        onClick: async () => {
+          if (key && !confirm('Старый ключ перестанет работать — расширение придётся настроить заново. Продолжить?')) return;
+          try {
+            const res = await api.newIngestKey();
+            render(res.key);
+            toast('Ключ выпущен — впишите его в расширение', 'ok');
+          } catch (err) {
+            toast(err.message, 'danger');
+          }
+        },
+      })
+    );
+    body.append(row);
+    body.append(
+      el('p', 'field__hint', 'В расширении укажите адрес панели, номер проекта и этот ключ.')
+    );
+  }
+}

@@ -86,6 +86,7 @@ export function trendsView(ctx) {
     );
 
     if (isOwner && scope !== 'all') host.append(watchPanel());
+    host.append(digestPanel());
 
     if (!trends.length) {
       // Без второй кнопки: «Добавить тренд» уже стоит в шапке, и две
@@ -193,6 +194,111 @@ export function trendsView(ctx) {
       });
 
     return p;
+  }
+
+  /**
+   * Что заходит у других. Цифры приходят из браузера СММщика — официальный
+   * поиск Threads вовлечённости не отдаёт.
+   */
+  function digestPanel() {
+    const p = panel('Что заходит у других');
+    const body = el('div', 'stack');
+    p.append(body);
+    body.append(el('span', 'field__hint', 'считаю…'));
+
+    api
+      .digest(7)
+      .then((d) => {
+        body.textContent = '';
+        if (!d.total) {
+          body.append(
+            note(
+              'info',
+              'Данных из ленты пока нет',
+              'Поставьте расширение из папки extension и полистайте Threads — панель соберёт реакции постов, мимо которых вы прошли.'
+            )
+          );
+          return;
+        }
+
+        const counters = el('div', 'counters');
+        counters.append(el('span', 'counter', `постов за неделю: ${d.total}`));
+        counters.append(el('span', 'counter', `из них взлетело: ${d.hot}`));
+        body.append(counters);
+
+        if (d.byMedia.length) {
+          const box = el('div', 'limits');
+          for (const g of d.byMedia) {
+            const row = el('div', 'limit');
+            row.append(el('span', 'limit__key', `${mediaTitle(g.key)} · ${g.posts} постов`));
+            row.append(el('span', 'limit__val', `${g.median} баллов в час`));
+            box.append(row);
+          }
+          body.append(el('div', 'eyebrow', 'Какой формат заходит'), box);
+        }
+
+        if (d.byHour.length) {
+          const hours = el('div', 'plat-picker');
+          for (const g of d.byHour) {
+            const chip = el('span', 'slot');
+            chip.append(el('b', null, `${String(g.key).padStart(2, '0')}:00`));
+            chip.append(el('span', 'dim small', `${g.median}`));
+            hours.append(chip);
+          }
+          body.append(el('div', 'eyebrow', 'В какие часы выходят удачные'), hours);
+        }
+
+        if (d.words.length) {
+          const words = el('div', 'plat-picker');
+          for (const w of d.words.slice(0, 10)) {
+            const chip = el('span', 'slot');
+            chip.append(el('b', null, w.word));
+            chip.append(el('span', 'dim small', String(w.posts)));
+            words.append(chip);
+          }
+          body.append(el('div', 'eyebrow', 'Слова у взлетевших постов'), words);
+        }
+
+        if (d.top.length) {
+          body.append(el('div', 'eyebrow', 'Лучшие посты недели'));
+          const list = el('div', 'stack');
+          for (const t of d.top.slice(0, 6)) list.append(observedCard(t));
+          body.append(list);
+        }
+      })
+      .catch((err) => {
+        body.textContent = '';
+        body.append(note('danger', 'Выводы не собрались', err.message));
+      });
+
+    return p;
+  }
+
+  function observedCard(t) {
+    const box = el('article', 'idea');
+    const top = el('div', 'idea__top');
+    top.append(el('span', `tag ${t.label === 'hot' ? 'tag--gold' : ''}`, t.label === 'hot' ? 'зашёл' : 'обычный'));
+    top.append(el('span', 'idea__date', `${t.perHour} б/ч · ${t.ageHours} ч`));
+    if (t.username) top.append(el('span', 'dim small', `@${t.username}`));
+    box.append(top);
+    box.append(el('p', 'idea__text', t.text || '—'));
+
+    const foot = el('div', 'idea__foot');
+    foot.append(el('span', 'dim small', `${t.likes} лайков · ${t.comments} ответов · ${t.reposts} репостов`));
+    if (t.permalink) {
+      const link = el('a', 'btn btn--sm');
+      link.href = t.permalink;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'Открыть';
+      foot.append(el('span', 'spacer'), link);
+    }
+    box.append(foot);
+    return box;
+  }
+
+  function mediaTitle(key) {
+    return { VIDEO: 'Видео', IMAGE: 'Картинка', TEXT: 'Только текст', CAROUSEL: 'Карусель' }[key] || key;
   }
 
   async function collectNow() {

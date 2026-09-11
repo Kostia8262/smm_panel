@@ -101,6 +101,9 @@ export const api = {
   addKeyword: (phrase) => request(withProject('/api/trends/keywords'), { method: 'POST', body: { phrase } }),
   removeKeyword: (id) => request(withProject(`/api/trends/keywords/${id}`), { method: 'DELETE' }),
   collectTrends: () => request(withProject('/api/trends/collect'), { method: 'POST' }),
+  digest: (days) => request(withProject(`/api/observed/digest?days=${days || 7}`)),
+  ingestKey: () => request('/api/ingest/key'),
+  newIngestKey: () => request('/api/ingest/key', { method: 'POST' }),
   archiveTrend: (id, archived) => request(`/api/trends/${id}/archive`, { method: 'POST', body: { archived } }),
   deleteTrend: (id) => request(`/api/trends/${id}`, { method: 'DELETE' }),
 

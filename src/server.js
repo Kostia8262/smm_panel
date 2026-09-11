@@ -28,6 +28,7 @@ const projectsDb = await import('./projects.js');
 const scheduleDb = await import('./schedule.js');
 const linksDb = await import('./links.js');
 const collector = await import('./trends/collector.js');
+const observed = await import('./trends/observed.js');
 const { signatureFor, withSignature } = await import('./signature.js');
 const { writeFileSync } = await import('node:fs');
 const { encrypt: encryptSecret, decrypt: decryptSecret } = await import('./secrets.js');
@@ -67,7 +68,10 @@ app.get('/login', (req, res) => {
 // Вход, сессии и защита всего остального. Стили и скрипты открыты — без них
 // не нарисовать саму страницу входа.
 installAuth(app, {
-  publicPaths: ['/login', '/css/', '/js/', '/media/', '/healthz', '/favicon.ico', '/r/'],
+  publicPaths: [
+    '/login', '/css/', '/js/', '/media/', '/healthz', '/favicon.ico', '/r/',
+    '/api/ingest/observed', // расширение ходит с ключом, а не с сессией
+  ],
   secureCookies: String(process.env.PUBLIC_BASE_URL || '').startsWith('https://'),
 });
 
@@ -506,6 +510,53 @@ app.post('/api/trends', (req, res) => {
     res.status(422).json({ error: err.message });
   }
 });
+
+/* --------------------- приём ленты из расширения --------------------- */
+
+/**
+ * Пачка постов, увиденных в браузере СММщика.
+ *
+ * Ключ, а не сессия: расширение живёт в чужой вкладке, и гонять туда
+ * cookie панели значит отдать ключ от неё странице Threads.
+ */
+app.post('/api/ingest/observed', (req, res) => {
+  const key = req.headers['x-ingest-key'];
+  const expected = staffDb.getSetting('ingest_key', '') || process.env.TRENDS_INGEST_KEY || '';
+  if (!expected || key !== expected) {
+    return res.status(403).json({ error: 'Ключ приёма не подошёл' });
+  }
+  const projectId = Number(req.body?.projectId) || null;
+  const result = observed.ingest(req.body?.posts || [], { projectId });
+  res.json(result);
+});
+
+/** Выводы по чужой ленте: что заходит, в каком формате и в какие часы. */
+app.get('/api/observed/digest', (req, res) => {
+  res.json(
+    observed.digest({
+      days: Math.min(60, Number(req.query.days) || 7),
+      projectId: req.query.project === 'all' ? null : currentProjectId(req),
+    })
+  );
+});
+
+/** Ключ приёма выдаётся владельцем и виден только ему. */
+app.get('/api/ingest/key', requireAccess('platforms'), (_req, res) => {
+  res.json({ key: staffDb.getSetting('ingest_key', '') });
+});
+
+app.post('/api/ingest/key', requireAccess('platforms'), (_req, res) => {
+  const key = randomKey();
+  staffDb.setSetting('ingest_key', key);
+  log('warn', 'перевыпущен ключ приёма ленты');
+  res.json({ key });
+});
+
+function randomKey() {
+  return [...crypto.getRandomValues(new Uint8Array(24))]
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
 
 /* ------------------------- наблюдение за темами ------------------------- */
 

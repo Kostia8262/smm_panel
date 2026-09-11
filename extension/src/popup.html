@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Сборщик трендов</title>
+  <style>
+    /* Тот же мир, что у панели: тёмная тёплая основа и одно золото. */
+    :root {
+      color-scheme: dark;
+      --bg: #0b0908;
+      --surface: #141110;
+      --line: #2c2420;
+      --ink: #efe8de;
+      --ink-2: #a79b8c;
+      --ink-3: #8b7f6f;
+      --gold: #e0a94b;
+      --ok: #56be80;
+      --danger: #e2604f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      width: 320px;
+      padding: 16px;
+      background: var(--bg);
+      color: var(--ink);
+      font: 13px/1.5 "Segoe UI", system-ui, sans-serif;
+    }
+    h1 { margin: 0 0 4px; font-size: 15px; font-weight: 650; }
+    .sub { color: var(--ink-3); font-size: 11px; margin-bottom: 14px; }
+    label { display: block; font-size: 12px; color: var(--ink-2); margin: 10px 0 4px; }
+    input {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--ink);
+      padding: 8px 10px;
+      font: inherit;
+    }
+    input:focus { outline: none; border-color: var(--gold); }
+    button {
+      width: 100%;
+      margin-top: 14px;
+      height: 34px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--gold);
+      color: #241a0c;
+      font: 600 13px/1 inherit;
+      cursor: pointer;
+    }
+    .row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+    .row input[type="checkbox"] { width: auto; }
+    .stat { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
+    .stat b { color: var(--ink); }
+    .err { color: var(--danger); }
+    .ok { color: var(--ok); }
+  </style>
+</head>
+<body>
+  <h1>Сборщик трендов</h1>
+  <div class="sub">Читает ленту, пока вы её листаете. Сам ничего не листает и не нажимает.</div>
+
+  <div class="row">
+    <input type="checkbox" id="enabled" />
+    <label for="enabled" style="margin: 0">Собирать</label>
+  </div>
+
+  <label for="panelUrl">Адрес панели</label>
+  <input id="panelUrl" placeholder="https://smm.mycomputer.education" />
+
+  <label for="projectId">Номер проекта</label>
+  <input id="projectId" placeholder="1" />
+
+  <label for="ingestKey">Ключ приёма</label>
+  <input id="ingestKey" type="password" placeholder="из настроек панели" />
+
+  <button id="save">Сохранить</button>
+
+  <div class="stat" id="stat"></div>
+
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

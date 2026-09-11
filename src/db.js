@@ -578,6 +578,47 @@ const MIGRATIONS = [
       CREATE INDEX idx_post_stats ON post_stats(post_id, platform);
     `,
   },
+  {
+    /**
+     * Чужие посты, увиденные в ленте.
+     *
+     * Официальный поиск Threads вовлечённости не отдаёт, поэтому цифры
+     * приходят из браузера СММщика: расширение читает то, мимо чего человек
+     * пролистал сам.
+     *
+     * Счётчики растут со временем, и один пост попадает сюда много раз.
+     * Храним максимум виденного, а не последний снимок: пролистав ленту
+     * дважды, второй раз можно застать кэш с прежними цифрами.
+     */
+    name: '014-observed-posts',
+    sql: `
+      CREATE TABLE observed_posts (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+        platform    TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        username    TEXT NOT NULL DEFAULT '',
+        text        TEXT NOT NULL DEFAULT '',
+        permalink   TEXT,
+        media_type  TEXT,
+        posted_at   TEXT,
+        age_hours   REAL,
+        likes       INTEGER NOT NULL DEFAULT 0,
+        comments    INTEGER NOT NULL DEFAULT 0,
+        reposts     INTEGER NOT NULL DEFAULT 0,
+        quotes      INTEGER NOT NULL DEFAULT 0,
+        score       REAL NOT NULL DEFAULT 0,
+        per_hour    REAL NOT NULL DEFAULT 0,
+        label       TEXT,
+        first_seen  TEXT NOT NULL DEFAULT (datetime('now')),
+        last_seen   TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (platform, external_id)
+      );
+
+      CREATE INDEX idx_observed_score ON observed_posts(platform, per_hour DESC);
+      CREATE INDEX idx_observed_seen ON observed_posts(last_seen);
+    `,
+  },
 ];
 
 function migrate() {
