@@ -95,7 +95,7 @@ export function platformsView(ctx) {
         }
       },
     });
-    if (!conn.configured) check.title = 'Сначала впишите токены в .env на сервере';
+    if (!conn.configured) check.title = 'Сначала заполните поля доступов выше';
     actions.append(check);
     p.append(actions);
 
