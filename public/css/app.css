@@ -222,7 +222,13 @@
     color var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
 
-.btn:hover { background: var(--surface-3); }
+/* Наведение меняет ПЕРЕМЕННУЮ, а не само свойство. Пока здесь стояло
+   `background: var(--surface-3)`, оно било все модификаторы разом: они задают
+   только `--btn-bg`, а прямое свойство сильнее переменной при равной
+   специфичности. Золотая кнопка под курсором становилась тёмной, сохраняя
+   тёмный текст, — надпись «В очередь» пропадала совсем. Так же молча
+   ломались «тихая» и «опасная». */
+.btn:hover { --btn-bg: var(--surface-3); }
 .btn:active { transform: translateY(1px); }
 
 .btn:disabled,
@@ -1319,3 +1325,7 @@
 
 .steps li::marker { color: var(--gold); font-weight: 700; }
 .steps code { color: var(--gold); }
+
+/* Единственное, что видно без JavaScript. Жило атрибутом style, пока тот не
+   попал под запрет CSP. */
+.noscript-note { padding: 24px; color: var(--ink-2); }

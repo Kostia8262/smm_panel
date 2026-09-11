@@ -9,10 +9,24 @@
  * Отличие от школьной панели: токен не ходит в каждом запросе заголовком, а
  * обменивается на сессию в httpOnly-cookie. Токен всплывает ровно один раз —
  * при входе, и не лежит в localStorage, откуда его забирает любой XSS.
+ *
+ * В базе открытого токена нет (миграция 015): по sha256 его ищет вход, а
+ * шифротекст нужен ровно для одного — показать человеку его собственный ключ.
+ * Дамп базы без файла `data/secret.key` внутрь не пускает.
  */
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { db, log } from './db.js';
+import { encrypt, decrypt } from './secrets.js';
+
+function tokenHash(token) {
+  return createHash('sha256').update(String(token)).digest('hex');
+}
+
+/** Три поля, которыми токен ложится в базу. Собираются только здесь. */
+function tokenColumns(token) {
+  return { hash: tokenHash(token), enc: encrypt(token), tail: String(token).slice(-6) };
+}
 
 /** Владелец видит и может всё. СММщик ведёт посты и не трогает доступы. */
 export const ROLES = {
@@ -61,11 +75,24 @@ function fromRow(row, { withToken = false } = {}) {
     lastSeenAt: row.last_seen_at,
     createdAt: row.created_at,
     // Хвост токена — чтобы отличить одного сотрудника от другого в списке,
-    // не показывая ключ целиком.
-    tokenTail: row.token ? row.token.slice(-6) : null,
+    // не показывая ключ целиком. Лежит отдельным полем: иначе ради подписи
+    // в списке пришлось бы расшифровывать ключ каждого сотрудника.
+    tokenTail: row.token_tail || null,
   };
-  if (withToken) out.token = row.token;
+  if (withToken) out.token = tokenFrom(row);
   return out;
+}
+
+/** Расшифровка своего ключа. Испорченный шифротекст не роняет карточку. */
+function tokenFrom(row) {
+  if (!row?.token_enc) return null;
+  try {
+    return decrypt(row.token_enc);
+  } catch {
+    // Ключ шифрования сменили или потеряли — токен уже не показать, но
+    // вход по нему работает: там сверяется хеш, а он не зависит от ключа.
+    return null;
+  }
 }
 
 export function list() {
@@ -80,7 +107,9 @@ export function getById(id) {
 
 export function findByToken(token) {
   if (!token) return null;
-  return db.prepare('SELECT * FROM staff WHERE token = ? AND active = 1').get(String(token).trim());
+  return db
+    .prepare('SELECT * FROM staff WHERE token_hash = ? AND active = 1')
+    .get(tokenHash(String(token).trim()));
 }
 
 export function create({ name, role = 'smm', note = '' }) {
@@ -88,9 +117,13 @@ export function create({ name, role = 'smm', note = '' }) {
   if (!clean) throw new Error('Не указано имя сотрудника');
   if (!ROLES[role]) throw new Error(`Неизвестная роль «${role}»`);
   const token = genToken();
+  const cols = tokenColumns(token);
   const info = db
-    .prepare('INSERT INTO staff (name, role, token, note) VALUES (?, ?, ?, ?)')
-    .run(clean, role, token, String(note).slice(0, 300));
+    .prepare(
+      `INSERT INTO staff (name, role, token_hash, token_enc, token_tail, note)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(clean, role, cols.hash, cols.enc, cols.tail, String(note).slice(0, 300));
   log('info', `заведён сотрудник ${clean} (${ROLES[role].title})`);
   // Токен отдаём целиком ровно здесь: второй раз его показать будет негде,
   // в базе он лежит, но интерфейс покажет только хвост.
@@ -130,7 +163,13 @@ export function reissueToken(id) {
   const staff = db.prepare('SELECT * FROM staff WHERE id = ?').get(id);
   if (!staff) throw new Error('Сотрудник не найден');
   const token = genToken();
-  db.prepare('UPDATE staff SET token = ? WHERE id = ?').run(token, id);
+  const cols = tokenColumns(token);
+  db.prepare('UPDATE staff SET token_hash = ?, token_enc = ?, token_tail = ? WHERE id = ?').run(
+    cols.hash,
+    cols.enc,
+    cols.tail,
+    id
+  );
   db.prepare('DELETE FROM sessions WHERE staff_id = ?').run(id);
   log('warn', `перевыпущен токен: ${staff.name}`);
   return fromRow(db.prepare('SELECT * FROM staff WHERE id = ?').get(id), { withToken: true });
@@ -151,8 +190,7 @@ export function remove(id) {
 
 /** Свой токен человеку показать можно: он уже вошёл, и это его же ключ. */
 export function tokenOf(id) {
-  const row = db.prepare('SELECT token FROM staff WHERE id = ?').get(id);
-  return row ? row.token : null;
+  return tokenFrom(db.prepare('SELECT token_enc FROM staff WHERE id = ?').get(id));
 }
 
 export function touchSeen(id) {
@@ -185,7 +223,10 @@ export function ensureOwner(tokenFilePath, writeFile) {
   const count = db.prepare('SELECT COUNT(*) n FROM staff').get().n;
   if (count > 0) return null;
   const token = genToken();
-  db.prepare("INSERT INTO staff (name, role, token) VALUES (?, 'owner', ?)").run('Владелец', token);
+  const cols = tokenColumns(token);
+  db.prepare(
+    "INSERT INTO staff (name, role, token_hash, token_enc, token_tail) VALUES (?, 'owner', ?, ?, ?)"
+  ).run('Владелец', cols.hash, cols.enc, cols.tail);
   log('warn', 'заведён владелец — токен входа записан в data/owner-token.txt');
   try {
     writeFile(tokenFilePath, `${token}\n`, { mode: 0o600 });

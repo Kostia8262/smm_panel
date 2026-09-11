@@ -8,6 +8,7 @@
 import express from 'express';
 import multer from 'multer';
 import { existsSync } from 'node:fs';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,9 +20,11 @@ const { db, getPost, listPosts, touchPost, log } = await import('./db.js');
 const { PLATFORMS, PLATFORM_LIST, safeZonesFor } = await import('./platforms/specs.js');
 const { connectionStatus, getAdapter } = await import('./platforms/index.js');
 const { validatePost } = await import('./validate.js');
-const { UPLOAD_DIR, storedName, kindOf, imageSize, cropFor } = await import('./media.js');
+const { UPLOAD_DIR, storedName, kindOf, imageSize, cropFor, isAllowedMedia, removeStored } =
+  await import('./media.js');
 const { publishPost } = await import('./queue/publish.js');
 const { installAuth, requireAccess } = await import('./auth.js');
+const { tooManyAttempts, clearAttempts } = await import('./ratelimit.js');
 const staffDb = await import('./staff.js');
 const planDb = await import('./plan.js');
 const projectsDb = await import('./projects.js');
@@ -38,11 +41,65 @@ const PORT = Number(process.env.PORT || 3210);
 const PUBLIC_DIR = resolve(here, '../public');
 
 app.set('trust proxy', 1); // за OpenLiteSpeed: иначе в журнале входов адрес прокси
+app.disable('x-powered-by'); // версия стека — бесплатная подсказка тому, кто ищет дыру
 app.use(express.json({ limit: '1mb' }));
 
-// Медиа отдаём без пароля: площадки забирают файлы сами, по публичной ссылке.
-// Защита — неугадываемое имя файла, выданное при загрузке.
-app.use('/media', express.static(UPLOAD_DIR, { maxAge: '7d' }));
+/*
+ * Заголовки безопасности.
+ *
+ * Все шестнадцать сайтов сети их отдают, а панель — единственный хост без
+ * них, при том что внутри неё доступы ко всем соцсетям школы. Набор тот же,
+ * что у сети, с двумя отличиями: рамки запрещены целиком (панель нечего
+ * встраивать, в отличие от сайта), и внешних источников нет вовсе — ни
+ * шрифтов, ни аналитики, поэтому 'self' без исключений.
+ *
+ * `unsafe-inline` здесь нет намеренно: ради этого из login.html убран
+ * встроенный скрипт, а из index.html — атрибут style.
+ */
+app.use((_req, res, next) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self'",
+      "img-src 'self' data: blob:",
+      "media-src 'self' blob:",
+      "connect-src 'self'",
+      "font-src 'self'",
+      "object-src 'none'",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join('; ')
+  );
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  if (String(process.env.PUBLIC_BASE_URL || '').startsWith('https://')) {
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+  next();
+});
+
+/*
+ * Медиа отдаём без пароля: площадки забирают файлы сами, по публичной ссылке.
+ * Защита — неугадываемое имя файла, выданное при загрузке.
+ *
+ * Своя политика поверх общей: даже если в каталог однажды попадёт что-то
+ * исполняемое, браузер не должен ни выполнить его, ни угадать тип вопреки
+ * заголовку. Загрузка фильтрует типы на входе, это — второй рубеж.
+ */
+app.use(
+  '/media',
+  express.static(UPLOAD_DIR, {
+    maxAge: '7d',
+    setHeaders(res) {
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    },
+  })
+);
 app.get('/healthz', (_req, res) => res.json({ ok: true, at: new Date().toISOString() }));
 
 /**
@@ -73,6 +130,9 @@ installAuth(app, {
     '/api/ingest/observed', // расширение ходит с ключом, а не с сессией
   ],
   secureCookies: String(process.env.PUBLIC_BASE_URL || '').startsWith('https://'),
+  // Файл нужен до первого входа. После — это ключ от панели, лежащий на
+  // диске открытым, и удаляется он сам.
+  ownerTokenFile: resolve(here, '../data/owner-token.txt'),
 });
 
 app.use(express.static(PUBLIC_DIR));
@@ -88,6 +148,19 @@ projectsDb.importEnvAccounts(1);
  * Какой проект открыт. Приходит параметром `project`; без него берём первый —
  * панель всегда должна что-то показывать, даже по прямой ссылке из письма.
  */
+/**
+ * Сравнение секретов за постоянное время.
+ *
+ * Обычное `!==` отваливается на первом несовпавшем знаке, и по времени ответа
+ * ключ подбирается посимвольно. Через сеть это тяжело, но и стоит нам одну
+ * строку. Хеши равной длины — чтобы `timingSafeEqual` не падал на разных.
+ */
+function sameSecret(a, b) {
+  const left = createHash('sha256').update(String(a ?? '')).digest();
+  const right = createHash('sha256').update(String(b ?? '')).digest();
+  return timingSafeEqual(left, right);
+}
+
 function currentProjectId(req) {
   const raw = Number(req.query.project || req.body?.projectId || 0);
   if (raw && projectsDb.getProject(raw)) return raw;
@@ -98,9 +171,14 @@ function currentProjectId(req) {
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-    filename: (_req, file, cb) => cb(null, storedName(file.originalname)),
+    // Расширение — из типа файла, а не из присланного имени: см. media.js.
+    filename: (_req, file, cb) => cb(null, storedName(file.mimetype)),
   }),
   limits: { fileSize: 512 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (isAllowedMedia(file.mimetype)) return cb(null, true);
+    cb(new Error(`Такой тип файла панель не принимает: ${file.mimetype || 'неизвестный'}`));
+  },
 });
 
 /* --------------------------------- справочники -------------------------------- */
@@ -299,7 +377,13 @@ app.put('/api/media/:id/focus', (req, res) => {
 });
 
 app.delete('/api/media/:id', (req, res) => {
-  db.prepare('DELETE FROM media WHERE id = ?').run(Number(req.params.id));
+  const id = Number(req.params.id);
+  // Файл с диска снимается вместе со строкой. Раньше оставался: снятый с
+  // поста кадр по-прежнему открывался по своей публичной ссылке — навсегда
+  // и для кого угодно, кто эту ссылку однажды видел.
+  const row = db.prepare('SELECT stored_name FROM media WHERE id = ?').get(id);
+  db.prepare('DELETE FROM media WHERE id = ?').run(id);
+  if (row) removeStored(row.stored_name);
   res.json({ ok: true });
 });
 
@@ -520,11 +604,18 @@ app.post('/api/trends', (req, res) => {
  * cookie панели значит отдать ключ от неё странице Threads.
  */
 app.post('/api/ingest/observed', (req, res) => {
+  // Единственная дверь наружу кроме входа, и до сих пор она была без счётчика:
+  // ключ можно было перебирать бесконечно, а главное — бесконечно писать в
+  // базу. Считаем попытки так же, как у входа.
+  if (tooManyAttempts(`ingest:${req.ip}`)) {
+    return res.status(429).json({ error: 'Слишком много попыток. Подождите десять минут' });
+  }
   const key = req.headers['x-ingest-key'];
   const expected = staffDb.getSetting('ingest_key', '') || process.env.TRENDS_INGEST_KEY || '';
-  if (!expected || key !== expected) {
+  if (!expected || !sameSecret(key, expected)) {
     return res.status(403).json({ error: 'Ключ приёма не подошёл' });
   }
+  clearAttempts(`ingest:${req.ip}`);
   const projectId = Number(req.body?.projectId) || null;
   const result = observed.ingest(req.body?.posts || [], { projectId });
   res.json(result);
@@ -875,6 +966,25 @@ function decorate(post) {
   post.validation = validatePost(post);
   return post;
 }
+
+/**
+ * Отклонённая загрузка должна объяснять себя.
+ *
+ * Фильтр типов роняет запрос исключением, и без этого обработчика СММщик
+ * видел бы пустую 500 на попытку положить, скажем, PDF — и решил бы, что
+ * сломалась панель, а не что формат не тот.
+ */
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'Файл больше 512 МБ — столько не примет ни одна сеть' });
+  }
+  if (req.path.endsWith('/media') || err?.code?.startsWith?.('LIMIT_')) {
+    return res.status(415).json({ error: err.message });
+  }
+  log('error', `необработанная ошибка на ${req.method} ${req.path}: ${err.message}`);
+  res.status(500).json({ error: 'Что-то пошло не так' });
+});
 
 app.get('*', (_req, res) => res.sendFile(join(resolve(here, '../public'), 'index.html')));
 

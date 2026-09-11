@@ -20,9 +20,34 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 const { db, log } = await import('../db.js');
 const { publishPost } = await import('./publish.js');
 const { recoverStuck, dueQuery } = await import('./recover.js');
+const { sweepOrphans } = await import('../media.js');
 
 const TICK_MS = Number(process.env.WORKER_TICK_MS || 60000);
+const SWEEP_MS = 6 * 3600 * 1000;
 let busy = false;
+let sweptAt = 0;
+
+/**
+ * Подмести файлы, на которые в базе уже никто не ссылается.
+ *
+ * Место здесь, а не в веб-морде: перебор всего каталога — работа фоновая, и
+ * делать её в обработчике запроса значит подвешивать интерфейс тем сильнее,
+ * чем больше накопилось. Диск общий с шестнадцатью сайтами сети, а кадры
+ * приходят не тысячами в час — раза в шесть часов достаточно.
+ */
+function sweep() {
+  if (Date.now() - sweptAt < SWEEP_MS) return;
+  sweptAt = Date.now();
+  try {
+    const keep = new Set(
+      db.prepare('SELECT stored_name FROM media').all().map((r) => r.stored_name)
+    );
+    const removed = sweepOrphans(keep);
+    if (removed) log('info', `убрано файлов без поста: ${removed}`);
+  } catch (err) {
+    log('warn', `не удалось подмести каталог загрузок: ${err.message}`);
+  }
+}
 
 async function tick() {
   if (busy) return; // публикация может идти дольше минуты — второй заход не нужен
@@ -32,6 +57,7 @@ async function tick() {
     // умереть и в середине дня, а пост с неизвестной судьбой должен всплыть
     // в панели через четверть часа, а не после следующей перезагрузки.
     recoverStuck(db, log);
+    sweep();
 
     const due = db.prepare(dueQuery()).all();
 

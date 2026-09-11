@@ -10,16 +10,91 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { openSync, readSync, closeSync, mkdirSync } from 'node:fs';
-import { extname, resolve, dirname } from 'node:path';
+import { openSync, readSync, closeSync, mkdirSync, unlinkSync, readdirSync, statSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const UPLOAD_DIR = process.env.UPLOAD_DIR || resolve(here, '../data/uploads');
 mkdirSync(UPLOAD_DIR, { recursive: true });
 
-export function storedName(originalName) {
-  return `${Date.now().toString(36)}-${randomBytes(8).toString('hex')}${extname(originalName).toLowerCase()}`;
+/**
+ * Что панель вообще берёт на хранение.
+ *
+ * Список закрытый, и это не формальность. Каталог загрузок раздаётся наружу
+ * без входа — площадки забирают файлы сами, по ссылке. Пока расширение файла
+ * бралось из имени, присланного клиентом, любой вошедший мог положить `.html`
+ * или `.svg` и получить исполняемую страницу **на домене панели**: запрос
+ * оттуда идёт со своего же сайта, то есть с cookie, и это уже не картинка,
+ * а действия от чужого имени.
+ *
+ * Поэтому расширение теперь выводится из типа, а не из имени, и типов ровно
+ * столько, сколько принимают сами сети.
+ */
+export const ALLOWED_MEDIA = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+};
+
+export function isAllowedMedia(mime) {
+  return Object.hasOwn(ALLOWED_MEDIA, String(mime).toLowerCase());
+}
+
+/**
+ * Имя файла на диске. Неугадываемое — оно же и вся защита от подбора чужих
+ * кадров, — и с расширением, выведенным из типа файла.
+ */
+export function storedName(mime) {
+  const ext = ALLOWED_MEDIA[String(mime).toLowerCase()] || '.bin';
+  return `${Date.now().toString(36)}-${randomBytes(8).toString('hex')}${ext}`;
+}
+
+/**
+ * Удалить файл кадра с диска.
+ *
+ * Имя берём только из базы и сверяем с каталогом: путь, пришедший запросом,
+ * до диска добираться не должен вовсе.
+ */
+export function removeStored(name) {
+  if (!name) return false;
+  const target = resolve(UPLOAD_DIR, name);
+  if (dirname(target) !== resolve(UPLOAD_DIR)) return false;
+  try {
+    unlinkSync(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Файлы, на которые в базе уже никто не ссылается.
+ *
+ * Копятся они двумя путями: кадр сняли с поста, а файл остался, и загрузка
+ * оборвалась на полпути. Диск здесь общий с шестнадцатью сайтами сети, и
+ * забитый диск кладёт не панель, а всё сразу.
+ *
+ * Младше суток не трогаем: файл может быть частью прямо сейчас идущей
+ * загрузки, для которой строка в базе ещё не создана.
+ *
+ * @param {Set<string>} keep — имена, живые по базе
+ */
+export function sweepOrphans(keep, { olderThanMs = 24 * 3600 * 1000, now = Date.now() } = {}) {
+  let removed = 0;
+  for (const name of readdirSync(UPLOAD_DIR)) {
+    if (keep.has(name)) continue;
+    try {
+      if (now - statSync(join(UPLOAD_DIR, name)).mtimeMs < olderThanMs) continue;
+    } catch {
+      continue;
+    }
+    if (removeStored(name)) removed += 1;
+  }
+  return removed;
 }
 
 export function kindOf(mime) {

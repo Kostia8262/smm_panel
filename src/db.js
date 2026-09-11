@@ -9,9 +9,11 @@
  */
 
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, chmodSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { encrypt } from './secrets.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.DB_PATH || resolve(here, '../data/smm.db');
@@ -22,6 +24,20 @@ export const db = new DatabaseSync(DB_PATH);
 
 db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA foreign_keys = ON');
+
+/*
+ * База — не публичный файл: в ней доступы площадок (пусть и шифротекстом),
+ * контент-план и переходы. Ключ шифрования рядом лежит с правами 600, а база
+ * оставалась 644 — читал бы любой пользователь сервера. WAL и SHM закрываем
+ * тоже: в них те же данные, просто ещё не слитые в основной файл.
+ */
+for (const suffix of ['', '-wal', '-shm']) {
+  try {
+    chmodSync(`${DB_PATH}${suffix}`, 0o600);
+  } catch {
+    // Файла ещё нет (первый запуск) или Windows, где прав в юникс-смысле нет.
+  }
+}
 
 const MIGRATIONS = [
   {
@@ -619,6 +635,51 @@ const MIGRATIONS = [
       CREATE INDEX idx_observed_seen ON observed_posts(last_seen);
     `,
   },
+  {
+    /*
+     * Токен сотрудника перестаёт лежать в базе открытым.
+     *
+     * Он и есть единственный ключ от панели — пароля нет вовсе. Сессии
+     * хешировались с самого начала, токены нет: украденный дамп пускал внутрь
+     * навсегда, и отзыв сессий от этого не спасал. С 11.09 база уезжает ещё и
+     * в репозиторий бэкапов, так что это перестало быть теорией.
+     *
+     * Хранится тремя полями, каждое отвечает за своё:
+     *   token_hash — sha256, по нему ищет вход. Обратно не разворачивается;
+     *   token_enc  — шифротекст (secrets.js), чтобы человек мог посмотреть
+     *                свой токен. Ключ лежит отдельным файлом и уезжает в
+     *                бэкапы другой дорогой — дамп базы без него бесполезен;
+     *   token_tail — шесть последних знаков для списка сотрудников: отличить
+     *                одну строку от другой, не трогая ключ шифрования.
+     */
+    name: '015-staff-token-hash',
+    run(database) {
+      database.exec(`
+        ALTER TABLE staff ADD COLUMN token_hash TEXT;
+        ALTER TABLE staff ADD COLUMN token_enc  TEXT;
+        ALTER TABLE staff ADD COLUMN token_tail TEXT;
+      `);
+
+      const update = database.prepare(
+        'UPDATE staff SET token_hash = ?, token_enc = ?, token_tail = ? WHERE id = ?'
+      );
+      for (const row of database.prepare('SELECT id, token FROM staff').all()) {
+        update.run(
+          createHash('sha256').update(row.token).digest('hex'),
+          encrypt(row.token),
+          String(row.token).slice(-6),
+          row.id
+        );
+      }
+
+      // Индекс висел на открытом столбце — снять его обязательно до DROP.
+      database.exec(`
+        DROP INDEX IF EXISTS idx_staff_token;
+        ALTER TABLE staff DROP COLUMN token;
+        CREATE UNIQUE INDEX idx_staff_token_hash ON staff(token_hash);
+      `);
+    },
+  },
 ];
 
 function migrate() {
@@ -631,7 +692,12 @@ function migrate() {
     if (applied.has(m.name)) continue;
     db.exec('BEGIN');
     try {
-      db.exec(m.sql);
+      // Шаг бывает двух видов. Обычный — голый SQL. Второй появился, когда
+      // понадобилось перешифровать уже лежащие в базе данные: такое SQL не
+      // умеет, а разносить это на «миграцию + скрипт руками» значит однажды
+      // выкатить схему и забыть скрипт.
+      if (m.sql) db.exec(m.sql);
+      if (m.run) m.run(db);
       db.prepare('INSERT INTO migrations (name) VALUES (?)').run(m.name);
       db.exec('COMMIT');
       console.log(`[db] применена миграция ${m.name}`);

@@ -6,12 +6,15 @@
  * всплывает ровно один раз и не лежит в localStorage, откуда его забирает
  * любой XSS; сессию к тому же можно оборвать, не трогая сам токен.
  *
- * В базе сессий лежит только sha256-отпечаток — украденный дамп не пускает.
+ * В базе и сессия, и сам токен сотрудника лежат sha256-отпечатком (миграция
+ * 015) — украденный дамп не пускает ни тем, ни другим.
  */
 
 import { randomBytes, createHash } from 'node:crypto';
+import { unlinkSync, existsSync } from 'node:fs';
 import { db, log } from './db.js';
 import { findByToken, getById, touchSeen, can } from './staff.js';
+import { tooManyAttempts, clearAttempts } from './ratelimit.js';
 
 const SESSION_COOKIE = 'smm_session';
 const SESSION_DAYS = 14;
@@ -83,25 +86,24 @@ function clearSessionCookie(res) {
   res.append('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 }
 
-/** Ограничитель попыток подбора: токен длинный, но дверь всё равно закрываем. */
-const attempts = new Map();
-
-function tooManyAttempts(ip) {
-  const now = Date.now();
-  const rec = attempts.get(ip) || { count: 0, until: 0 };
-  if (rec.until > now) return true;
-  if (now - (rec.at || 0) > 15 * 60 * 1000) rec.count = 0;
-  rec.count += 1;
-  rec.at = now;
-  if (rec.count > 10) {
-    rec.until = now + 10 * 60 * 1000;
-    rec.count = 0;
+/**
+ * Файл с токеном владельца нужен ровно один раз — прочитать его при первом
+ * входе, когда интерфейса ещё нет. Дальше это просто ключ от панели, лежащий
+ * на диске открытым текстом: чем дольше он там, тем больше поводов его найти.
+ * Сам токен от удаления файла не меняется — он в базе, и его всегда видно в
+ * «Настройках».
+ */
+function dropOwnerTokenFile(path) {
+  if (!path || !existsSync(path)) return;
+  try {
+    unlinkSync(path);
+    log('info', 'файл с токеном владельца удалён — вход выполнен, он больше не нужен');
+  } catch (err) {
+    log('warn', `не удалось удалить файл с токеном владельца: ${err.message}`);
   }
-  attempts.set(ip, rec);
-  return false;
 }
 
-export function installAuth(app, { publicPaths = [], secureCookies = false } = {}) {
+export function installAuth(app, { publicPaths = [], secureCookies = false, ownerTokenFile = null } = {}) {
   dropExpiredSessions();
 
   const isPublic = (path) =>
@@ -126,6 +128,8 @@ export function installAuth(app, { publicPaths = [], secureCookies = false } = {
     const session = createSession(staff.id, { userAgent: req.headers['user-agent'], ip: req.ip });
     setSessionCookie(res, session, secureCookies);
     touchSeen(staff.id);
+    clearAttempts(req.ip);
+    if (staff.role === 'owner') dropOwnerTokenFile(ownerTokenFile);
     log('info', `вход: ${staff.name}`);
     res.json({ user: { id: staff.id, name: staff.name, role: staff.role } });
   });
