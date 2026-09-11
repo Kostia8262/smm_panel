@@ -1083,3 +1083,122 @@
   .board { grid-template-columns: minmax(0, 1fr); }
   .plan-form__grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ====================== переключатель проектов ====================== */
+
+/* Стоит вверху навигации: отвечает на вопрос «чей это календарь»,
+   а он важнее любого раздела. */
+.projsw { position: relative; }
+
+.projsw__btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 9px var(--sp-3);
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.projsw__btn:hover { border-color: var(--gold-line); }
+.projsw__btn--open { border-color: var(--gold-line); background: var(--surface-2); }
+.projsw__btn--open .projsw__chev { transform: rotate(90deg); }
+.projsw__chev { margin-left: auto; color: var(--ink-3); transition: transform var(--dur) var(--ease); flex: none; }
+
+.projsw__dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.projsw__text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.projsw__name { font-size: var(--fs-sm); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.projsw__sub { font-size: 10px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.projsw__menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-2);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.projsw__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 8px var(--sp-3);
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.projsw__item:hover { background: var(--surface-2); }
+.projsw__item[aria-selected="true"] { background: var(--gold-dim); }
+
+/* ============================ карточки проектов ============================ */
+
+.projects { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--sp-3); }
+
+.project-tile {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-radius: var(--r);
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.project-tile:hover { border-color: var(--line); }
+.project-tile--active { border-color: var(--gold-line); background: var(--surface-2); }
+.project-tile__dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.project-tile__text { display: flex; flex-direction: column; min-width: 0; }
+.project-tile__name { font-weight: 650; font-size: var(--fs-sm); }
+.project-tile__sub { font-size: var(--fs-xs); color: var(--ink-3); }
+.project-tile .tag { margin-left: auto; }
+
+.project-head { display: flex; flex-direction: column; gap: var(--sp-3); }
+.account-form { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); }
+.account-form .input { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--fs-xs); }
+
+/* На узком рельсе переключатель сжимается до цветной метки */
+@media (max-width: 1100px) {
+  .projsw__text, .projsw__chev { display: none; }
+  .projsw__btn { justify-content: center; padding: 9px; }
+  .projsw__menu { left: 0; width: 240px; right: auto; }
+}
+
+@media (max-width: 860px) {
+  .projsw__text, .projsw__chev { display: revert; }
+  .projsw__btn { justify-content: flex-start; padding: 9px var(--sp-3); }
+  .projsw__menu { width: auto; right: 0; }
+}
+
+/* ========================== лента контент-плана ========================== */
+
+.plan-timeline { display: flex; flex-direction: column; gap: var(--sp-4); }
+.band__list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--sp-3); }
+
+/* Прошлое приглушено: это память, а не список дел */
+.band--past { opacity: 0.72; }
+.band--past .idea__foot .btn--primary { display: none; }
+.band--now { border-color: var(--gold-line); }

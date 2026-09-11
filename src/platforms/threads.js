@@ -13,20 +13,19 @@ const API = 'https://graph.threads.net/v1.0';
 
 export const id = 'threads';
 
-export function isConfigured() {
-  return Boolean(process.env.THREADS_USER_ID && process.env.THREADS_ACCESS_TOKEN);
+export function isConfigured(creds = {}) {
+  return Boolean(creds.userId && creds.accessToken);
 }
 
-export function missingConfig() {
+export function missingConfig(creds = {}) {
   const missing = [];
-  if (!process.env.THREADS_USER_ID) missing.push('THREADS_USER_ID');
-  if (!process.env.THREADS_ACCESS_TOKEN) missing.push('THREADS_ACCESS_TOKEN (живёт 60 дней)');
+  if (!creds.userId) missing.push('ID аккаунта');
+  if (!creds.accessToken) missing.push('токен доступа (живёт 60 дней)');
   return missing;
 }
 
-async function call(path, params) {
-  const token = process.env.THREADS_ACCESS_TOKEN;
-  const body = new URLSearchParams({ ...params, access_token: token });
+async function call(path, params, creds) {
+  const body = new URLSearchParams({ ...params, access_token: creds.accessToken });
   const res = await fetch(`${API}/${path}`, { method: 'POST', body });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.error) {
@@ -35,20 +34,19 @@ async function call(path, params) {
   return data;
 }
 
-export async function check() {
-  const token = process.env.THREADS_ACCESS_TOKEN;
-  const res = await fetch(`${API}/me?fields=id,username&access_token=${token}`);
+export async function check(creds) {
+  const res = await fetch(`${API}/me?fields=id,username&access_token=${creds.accessToken}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
   return { ok: true, account: data.username };
 }
 
-export async function publish({ text, media = [], publicUrl }) {
-  const user = process.env.THREADS_USER_ID;
+export async function publish({ text, media = [], publicUrl, creds }) {
+  const user = creds.userId;
   let containerId;
 
   if (!media.length) {
-    ({ id: containerId } = await call(`${user}/threads`, { media_type: 'TEXT', text }));
+    ({ id: containerId } = await call(`${user}/threads`, { media_type: 'TEXT', text }, creds));
   } else if (media.length === 1) {
     const m = media[0];
     const isVideo = m.kind === 'video';
@@ -56,7 +54,7 @@ export async function publish({ text, media = [], publicUrl }) {
       media_type: isVideo ? 'VIDEO' : 'IMAGE',
       [isVideo ? 'video_url' : 'image_url']: publicUrl(m),
       text,
-    }));
+    }, creds));
   } else {
     // Карусель: контейнер на каждый файл, затем общий.
     const children = [];
@@ -66,19 +64,19 @@ export async function publish({ text, media = [], publicUrl }) {
         media_type: isVideo ? 'VIDEO' : 'IMAGE',
         [isVideo ? 'video_url' : 'image_url']: publicUrl(m),
         is_carousel_item: 'true',
-      });
+      }, creds);
       children.push(child.id);
     }
     ({ id: containerId } = await call(`${user}/threads`, {
       media_type: 'CAROUSEL',
       children: children.join(','),
       text,
-    }));
+    }, creds));
   }
 
   // Видео обрабатывается не мгновенно; публикацию делаем с паузой.
   if (media.some((m) => m.kind === 'video')) await new Promise((r) => setTimeout(r, 30000));
 
-  const published = await call(`${user}/threads_publish`, { creation_id: containerId });
+  const published = await call(`${user}/threads_publish`, { creation_id: containerId }, creds);
   return { externalId: published.id, url: null };
 }

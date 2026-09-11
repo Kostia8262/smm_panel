@@ -17,23 +17,23 @@ const API = 'https://open.tiktokapis.com/v2';
 
 export const id = 'tiktok';
 
-export function isConfigured() {
-  return Boolean(process.env.TIKTOK_ACCESS_TOKEN);
+export function isConfigured(creds = {}) {
+  return Boolean(creds.accessToken && creds.clientKey);
 }
 
-export function missingConfig() {
+export function missingConfig(creds = {}) {
   const missing = [];
-  if (!process.env.TIKTOK_ACCESS_TOKEN) missing.push('TIKTOK_ACCESS_TOKEN');
-  if (!process.env.TIKTOK_CLIENT_KEY) missing.push('TIKTOK_CLIENT_KEY');
-  if (!process.env.TIKTOK_CLIENT_SECRET) missing.push('TIKTOK_CLIENT_SECRET');
+  if (!creds.accessToken) missing.push('токен доступа');
+  if (!creds.clientKey) missing.push('client key');
+  if (!creds.clientSecret) missing.push('client secret');
   return missing;
 }
 
-async function call(path, payload) {
+async function call(path, payload, creds) {
   const res = await fetch(`${API}/${path}`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${process.env.TIKTOK_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${creds.accessToken}`,
       'Content-Type': 'application/json; charset=UTF-8',
     },
     body: JSON.stringify(payload),
@@ -49,21 +49,21 @@ async function call(path, payload) {
  * Данные автора. Аудит требует показать имя и аватар в интерфейсе ПЕРЕД
  * публикацией — композер обязан их выводить, иначе заявку отклонят.
  */
-export async function creatorInfo() {
-  return call('post/publish/creator_info/query/', {});
+export async function creatorInfo(creds) {
+  return call('post/publish/creator_info/query/', {}, creds);
 }
 
-export async function check() {
-  const info = await creatorInfo();
+export async function check(creds) {
+  const info = await creatorInfo(creds);
   return { ok: true, account: info.creator_nickname };
 }
 
-export async function publish({ text, media = [], publicUrl }) {
+export async function publish({ text, media = [], publicUrl, creds }) {
   const video = media.find((m) => m.kind === 'video');
   if (!video) throw new Error('TikTok ждёт видео (фото-посты — отдельный порядок)');
 
-  const privacy = process.env.TIKTOK_PRIVACY || 'SELF_ONLY';
-  const useUrl = process.env.TIKTOK_DOMAIN_VERIFIED === 'true';
+  const privacy = creds.privacy || 'SELF_ONLY';
+  const useUrl = String(creds.domainVerified) === 'true';
 
   const init = await call('post/publish/video/init/', {
     post_info: {
@@ -81,7 +81,7 @@ export async function publish({ text, media = [], publicUrl }) {
           chunk_size: video.bytes,
           total_chunk_count: 1,
         },
-  });
+  }, creds);
 
   if (!useUrl) {
     const blob = await openAsBlob(video.path);
@@ -100,6 +100,6 @@ export async function publish({ text, media = [], publicUrl }) {
 }
 
 /** Публикация асинхронная: результат узнаём отдельным опросом. */
-export async function status(publishId) {
-  return call('post/publish/status/fetch/', { publish_id: publishId });
+export async function status(publishId, creds) {
+  return call('post/publish/status/fetch/', { publish_id: publishId }, creds);
 }

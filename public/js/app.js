@@ -5,7 +5,7 @@
  * к `git pull`. Ради этого держим импорты явными и без зависимостей.
  */
 
-import { api } from './api.js';
+import { api, setProject } from './api.js';
 import { icon, iconMarkup } from './icons.js';
 import { el, button, iconButton, toast } from './ui.js';
 import { calendarView } from './views/calendar.js';
@@ -16,6 +16,7 @@ import { settingsView } from './views/settings.js';
 import { staffView } from './views/staff.js';
 import { planView } from './views/plan.js';
 import { trendsView } from './views/trends.js';
+import { projectsView } from './views/projects.js';
 
 // Карта прав — зеркало ACCESS из src/staff.js. Держать в согласии: в школьной
 // панели такая же карта разъехалась, когда жила в трёх местах сразу.
@@ -23,7 +24,7 @@ const NAV = [
   { id: 'calendar', hash: '#/', title: 'Календарь', icon: 'calendar', group: 'Работа', area: 'calendar' },
   { id: 'plan', hash: '#/plan', title: 'Контент-план', icon: 'layers', group: 'Работа', area: 'plan' },
   { id: 'trends', hash: '#/trends', title: 'Тренды', icon: 'trend', group: 'Работа', area: 'trends' },
-  { id: 'platforms', hash: '#/platforms', title: 'Площадки', icon: 'plug', group: 'Работа', area: 'platforms' },
+  { id: 'projects', hash: '#/projects', title: 'Проекты', icon: 'plug', group: 'Доступ', area: 'platforms' },
   { id: 'staff', hash: '#/staff', title: 'Сотрудники', icon: 'staff', group: 'Доступ', area: 'staff' },
   { id: 'journal', hash: '#/journal', title: 'Журнал', icon: 'journal', group: 'Служебное', area: 'journal' },
   { id: 'settings', hash: '#/settings', title: 'Настройки', icon: 'settings', group: 'Служебное', area: 'settings' },
@@ -44,7 +45,7 @@ function can(area) {
   return Boolean(ACCESS[area]?.includes(state.user?.role));
 }
 
-const state = { user: null, specs: null, connections: null, weekStart: null };
+const state = { user: null, specs: null, connections: null, weekStart: null, projectId: null, projects: [] };
 
 const dom = {};
 
@@ -66,9 +67,21 @@ async function boot() {
   renderWho();
 
   try {
-    const [specs, status] = await Promise.all([api.specs(), can('platforms') ? api.status() : null]);
+    const [specs, projects] = await Promise.all([api.specs(), api.projects()]);
     state.specs = specs.platforms;
-    state.connections = status ? status.platforms : null;
+    state.projects = projects.projects;
+
+    // Выбранный проект переживает перезагрузку: СММщик ведёт одну школу
+    // неделями, и каждый раз переключаться заново — лишний шаг на ровном месте.
+    const saved = Number(localStorage.getItem('smm.project') || 0);
+    state.projectId = state.projects.some((p) => p.id === saved) ? saved : state.projects[0]?.id || null;
+    setProject(state.projectId);
+    renderProjectSwitch();
+
+    if (can('platforms')) {
+      const status = await api.status();
+      state.connections = status.platforms;
+    }
   } catch (err) {
     toast(err.message, 'danger');
   }
@@ -98,6 +111,10 @@ function buildShell() {
   brandText.append(el('span', 'brand__sub', 'My Computer Academy'));
   brand.append(brandText);
   rail.append(brand);
+
+  const switcher = el('div', 'projsw');
+  switcher.id = 'projsw';
+  rail.append(switcher);
 
   let currentGroup = null;
   let groupBox = null;
@@ -250,7 +267,7 @@ function route() {
       ? 'post'
       : hash.startsWith('#/plan') ? 'plan'
       : hash.startsWith('#/trends') ? 'trends'
-      : hash.startsWith('#/platforms') ? 'platforms'
+      : hash.startsWith('#/projects') || hash.startsWith('#/platforms') ? 'platforms'
       : hash.startsWith('#/staff') ? 'staff'
       : hash.startsWith('#/journal') ? 'journal'
       : hash.startsWith('#/settings') ? 'settings'
@@ -264,6 +281,7 @@ function route() {
     if (postMatch) dom.outlet.append(composerView(ctx, Number(postMatch[1])));
     else if (hash.startsWith('#/plan')) dom.outlet.append(planView(ctx));
     else if (hash.startsWith('#/trends')) dom.outlet.append(trendsView(ctx));
+    else if (hash.startsWith('#/projects')) dom.outlet.append(projectsView(ctx));
     else if (hash.startsWith('#/platforms')) dom.outlet.append(platformsView(ctx));
     else if (hash.startsWith('#/staff')) dom.outlet.append(staffView(ctx));
     else if (hash.startsWith('#/journal')) dom.outlet.append(journalView(ctx));
@@ -287,4 +305,75 @@ function noAccessView() {
   p.append(go);
   box.append(p);
   return box;
+}
+
+/**
+ * Переключатель проектов. Стоит вверху навигации, потому что отвечает на
+ * вопрос «чей это календарь» — а он важнее любого раздела: перепутав проект,
+ * человек опубликует пост академии в канале «Дошколярика».
+ */
+function renderProjectSwitch() {
+  const host = document.getElementById('projsw');
+  if (!host || !state.projects.length) return;
+  host.textContent = '';
+
+  const current = state.projects.find((p) => p.id === state.projectId) || state.projects[0];
+
+  const btn = el('button', 'projsw__btn');
+  btn.type = 'button';
+  btn.setAttribute('aria-haspopup', 'listbox');
+  const dot = el('span', 'projsw__dot');
+  dot.style.background = current.accent;
+  btn.append(dot);
+  const text = el('div', 'projsw__text');
+  text.append(el('span', 'projsw__name', current.title));
+  text.append(el('span', 'projsw__sub', `${current.connected}/${current.total} площадок`));
+  btn.append(text);
+  btn.append(icon('chevronRight', { size: 15, className: 'projsw__chev' }));
+  host.append(btn);
+
+  const menu = el('div', 'projsw__menu');
+  menu.setAttribute('role', 'listbox');
+  menu.hidden = true;
+  for (const project of state.projects) {
+    const item = el('button', 'projsw__item');
+    item.type = 'button';
+    item.setAttribute('role', 'option');
+    item.setAttribute('aria-selected', String(project.id === state.projectId));
+    const d = el('span', 'projsw__dot');
+    d.style.background = project.accent;
+    item.append(d);
+    const t = el('div', 'projsw__text');
+    t.append(el('span', 'projsw__name', project.title));
+    t.append(el('span', 'projsw__sub', project.subtitle || '—'));
+    item.append(t);
+    item.addEventListener('click', () => switchProject(project.id));
+    menu.append(item);
+  }
+  host.append(menu);
+
+  btn.addEventListener('click', () => {
+    menu.hidden = !menu.hidden;
+    btn.classList.toggle('projsw__btn--open', !menu.hidden);
+  });
+  document.addEventListener('click', (e) => {
+    if (!host.contains(e.target)) {
+      menu.hidden = true;
+      btn.classList.remove('projsw__btn--open');
+    }
+  });
+}
+
+function switchProject(id) {
+  if (id === state.projectId) return;
+  state.projectId = id;
+  setProject(id);
+  try {
+    localStorage.setItem('smm.project', String(id));
+  } catch {
+    // Приватное окно — переживём, просто не запомним выбор.
+  }
+  state.connections = null;
+  renderProjectSwitch();
+  route();
 }

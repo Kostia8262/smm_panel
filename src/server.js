@@ -24,6 +24,7 @@ const { publishPost } = await import('./queue/publish.js');
 const { installAuth, requireAccess } = await import('./auth.js');
 const staffDb = await import('./staff.js');
 const planDb = await import('./plan.js');
+const projectsDb = await import('./projects.js');
 const { writeFileSync } = await import('node:fs');
 
 const app = express();
@@ -55,6 +56,21 @@ app.use(express.static(PUBLIC_DIR));
 // Первый запуск: без владельца в панель не войти вовсе.
 staffDb.ensureOwner(resolve(here, '../data/owner-token.txt'), writeFileSync);
 
+// Разовый переезд доступов из .env в карточку первого проекта: молча их
+// потерять при переходе на проекты — значит остановить публикацию.
+projectsDb.importEnvAccounts(1);
+
+/**
+ * Какой проект открыт. Приходит параметром `project`; без него берём первый —
+ * панель всегда должна что-то показывать, даже по прямой ссылке из письма.
+ */
+function currentProjectId(req) {
+  const raw = Number(req.query.project || req.body?.projectId || 0);
+  if (raw && projectsDb.getProject(raw)) return raw;
+  const first = projectsDb.listProjects()[0];
+  return first ? first.id : null;
+}
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
@@ -74,21 +90,88 @@ app.get('/api/specs', (_req, res) => {
   });
 });
 
-app.get('/api/status', (_req, res) => {
-  res.json({ platforms: connectionStatus(), publicBase: publicBase() });
+app.get('/api/status', (req, res) => {
+  const projectId = currentProjectId(req);
+  res.json({
+    projectId,
+    platforms: connectionStatus((platform) => projectsDb.credentialsFor(projectId, platform)),
+    publicBase: publicBase(),
+  });
+});
+
+/* -------------------------------- проекты -------------------------------- */
+
+app.get('/api/projects', (_req, res) => {
+  res.json({ projects: projectsDb.projectsWithCounts() });
+});
+
+app.post('/api/projects', requireAccess('platforms'), (req, res) => {
+  try {
+    res.status(201).json({ project: projectsDb.createProject(req.body || {}) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.put('/api/projects/:id', requireAccess('platforms'), (req, res) => {
+  try {
+    res.json({ project: projectsDb.updateProject(Number(req.params.id), req.body || {}) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+/** Карточка проекта: его подключения. Токены наружу не отдаются — только хвосты. */
+app.get('/api/projects/:id/accounts', requireAccess('platforms'), (req, res) => {
+  const project = projectsDb.getProject(Number(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Проект не найден' });
+  res.json({ project, accounts: projectsDb.projectAccounts(project.id) });
+});
+
+app.put('/api/projects/:id/accounts/:platform', requireAccess('platforms'), (req, res) => {
+  try {
+    const status = projectsDb.saveAccount(Number(req.params.id), req.params.platform, req.body || {});
+    res.json({ account: status });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.delete('/api/projects/:id/accounts/:platform', requireAccess('platforms'), (req, res) => {
+  projectsDb.clearAccount(Number(req.params.id), req.params.platform);
+  res.json({ ok: true });
+});
+
+app.post('/api/projects/:id/accounts/:platform/check', requireAccess('platforms'), async (req, res) => {
+  const projectId = Number(req.params.id);
+  const adapter = getAdapter(req.params.platform);
+  const creds = projectsDb.credentialsFor(projectId, req.params.platform);
+  if (!adapter.isConfigured(creds)) {
+    return res.status(400).json({ ok: false, missing: adapter.missingConfig(creds) });
+  }
+  try {
+    res.json(await adapter.check(creds));
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err.message });
+  }
 });
 
 /* ----------------------------------- посты ----------------------------------- */
 
 app.get('/api/posts', (req, res) => {
-  res.json({ posts: listPosts({ from: req.query.from, to: req.query.to }).map(decorate) });
+  const posts = listPosts({
+    from: req.query.from,
+    to: req.query.to,
+    projectId: currentProjectId(req),
+  });
+  res.json({ posts: posts.map(decorate) });
 });
 
 app.post('/api/posts', (req, res) => {
   const { title = '', body = '', scheduled_at = null, targets = [] } = req.body || {};
   const info = db
-    .prepare('INSERT INTO posts (title, body, scheduled_at, author_id) VALUES (?, ?, ?, ?)')
-    .run(title, body, scheduled_at, req.user.id);
+    .prepare('INSERT INTO posts (title, body, scheduled_at, author_id, project_id) VALUES (?, ?, ?, ?, ?)')
+    .run(title, body, scheduled_at, req.user.id, currentProjectId(req));
   const id = Number(info.lastInsertRowid);
   saveTargets(id, targets);
   log('info', `создан пост #${id}`, { postId: id });
@@ -252,33 +335,23 @@ app.get('/api/posts/:id/log', (req, res) => {
   res.json({ log: rows });
 });
 
-/** Проверка связи с площадкой — по кнопке в интерфейсе. */
-app.post('/api/platforms/:id/check', requireAccess('platforms'), async (req, res) => {
-  const adapter = getAdapter(req.params.id);
-  if (!adapter.isConfigured()) {
-    return res.status(400).json({ ok: false, missing: adapter.missingConfig() });
-  }
-  try {
-    res.json(await adapter.check());
-  } catch (err) {
-    res.status(502).json({ ok: false, error: err.message });
-  }
-});
-
 /* ------------------------------ контент-план ------------------------------ */
 
 app.get('/api/plan', (req, res) => {
+  const projectId = currentProjectId(req);
   res.json({
-    items: planDb.listPlan({ status: req.query.status || null }),
+    projectId,
+    items: planDb.listPlan({ status: req.query.status || null, projectId }),
     statuses: Object.values(planDb.PLAN_STATUS),
     rubrics: planDb.RUBRICS,
-    summary: planDb.planSummary(),
+    summary: planDb.planSummary(projectId),
   });
 });
 
 app.post('/api/plan', (req, res) => {
   try {
-    res.status(201).json({ item: planDb.createPlanItem(req.body || {}, req.user.id) });
+    const payload = { ...(req.body || {}), projectId: currentProjectId(req) };
+    res.status(201).json({ item: planDb.createPlanItem(payload, req.user.id) });
   } catch (err) {
     res.status(422).json({ error: err.message });
   }
@@ -492,8 +565,12 @@ app.get('*', (_req, res) => res.sendFile(join(resolve(here, '../public'), 'index
 
 app.listen(PORT, () => {
   console.log(`Планировщик слушает http://localhost:${PORT}`);
-  const notReady = connectionStatus().filter((p) => !p.configured);
-  if (notReady.length) {
-    console.log(`Не настроены площадки: ${notReady.map((p) => p.title).join(', ')}`);
+  // Сводка по проектам: у каждого свой набор доступов, и «не настроено»
+  // без имени проекта больше ничего не значит.
+  for (const project of projectsDb.listProjects()) {
+    const notReady = connectionStatus((platform) => projectsDb.credentialsFor(project.id, platform))
+      .filter((p) => !p.configured)
+      .map((p) => p.title);
+    if (notReady.length) console.log(`${project.title}: не настроены ${notReady.join(', ')}`);
   }
 });

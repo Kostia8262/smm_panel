@@ -1,9 +1,11 @@
 /**
  * Реестр адаптеров. Все площадки говорят на одном языке:
- *   isConfigured() · missingConfig() · check() · publish({text, media, formatId, publicUrl})
+ *   isConfigured(creds) · missingConfig(creds) · check(creds)
+ *   publish({text, media, formatId, publicUrl, creds})
  *
- * Такой единый вид нужен воркеру: он не знает про особенности площадок,
- * а просто вызывает publish и складывает результат.
+ * Доступы приходят снаружи, из карточки проекта: у «Дошколярика» свои
+ * Instagram и Facebook, у академии свои, и адаптер не должен знать, чьи
+ * именно токены ему дали.
  */
 
 import * as telegram from './telegram.js';
@@ -21,17 +23,21 @@ export function getAdapter(platformId) {
   return adapter;
 }
 
-/** Что настроено, а чего не хватает — это же показывает интерфейс. */
-export function connectionStatus() {
+/**
+ * Что настроено у проекта, а чего не хватает.
+ * @param {(platform: string) => object} credentialsFor
+ */
+export function connectionStatus(credentialsFor) {
   return Object.values(PLATFORMS).map((spec) => {
     const adapter = ADAPTERS[spec.id];
-    const configured = adapter ? adapter.isConfigured() : false;
+    const creds = credentialsFor(spec.id) || {};
+    const configured = adapter ? adapter.isConfigured(creds) : false;
     return {
       id: spec.id,
       title: spec.title,
       accent: spec.accent,
       configured,
-      missing: configured ? [] : adapter?.missingConfig?.() || [],
+      missing: configured ? [] : adapter?.missingConfig?.(creds) || [],
       notes: spec.notes,
     };
   });

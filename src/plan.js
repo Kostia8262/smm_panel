@@ -143,6 +143,7 @@ function planFromRow(row) {
     statusTitle: PLAN_STATUS[row.status]?.title || row.status,
     needMedia: row.need_media,
     note: row.note,
+    projectId: row.project_id,
     trendId: row.trend_id,
     trendTitle: row.trend_title || null,
     postId: row.post_id,
@@ -163,11 +164,20 @@ const PLAN_SELECT = `
   LEFT JOIN posts po ON po.id = p.post_id
 `;
 
-export function listPlan({ status = null } = {}) {
-  const rows = status
-    ? db.prepare(`${PLAN_SELECT} WHERE p.status = ? ORDER BY p.planned_for IS NULL, p.planned_for, p.id`).all(status)
-    : db.prepare(`${PLAN_SELECT} ORDER BY p.planned_for IS NULL, p.planned_for, p.id`).all();
-  return rows.map(planFromRow);
+export function listPlan({ status = null, projectId = null } = {}) {
+  const where = [];
+  const params = [];
+  if (projectId) {
+    where.push('p.project_id = ?');
+    params.push(projectId);
+  }
+  if (status) {
+    where.push('p.status = ?');
+    params.push(status);
+  }
+  const sql = `${PLAN_SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY p.planned_for IS NULL, p.planned_for, p.id`;
+  return db.prepare(sql).all(...params).map(planFromRow);
 }
 
 export function getPlanItem(id) {
@@ -179,8 +189,8 @@ export function createPlanItem(data, authorId) {
   if (!title) throw new Error('Не указана тема');
   const info = db
     .prepare(
-      `INSERT INTO plan_items (title, idea, rubric, platforms, planned_for, need_media, note, trend_id, author_id, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO plan_items (title, idea, rubric, platforms, planned_for, need_media, note, trend_id, author_id, status, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       title,
@@ -192,7 +202,8 @@ export function createPlanItem(data, authorId) {
       String(data.note || '').slice(0, 500),
       data.trendId || null,
       authorId,
-      PLAN_STATUS[data.status] ? data.status : 'idea'
+      PLAN_STATUS[data.status] ? data.status : 'idea',
+      data.projectId || null
     );
   if (data.trendId) {
     db.prepare('UPDATE trends SET used_count = used_count + 1 WHERE id = ?').run(data.trendId);
@@ -249,8 +260,8 @@ export function planToPost(id, { db: database = db, staffId }) {
   const body = [item.idea, item.rubric ? `\n\nРубрика: ${item.rubric}` : ''].join('').trim();
 
   const info = database
-    .prepare('INSERT INTO posts (title, body, scheduled_at, author_id) VALUES (?, ?, ?, ?)')
-    .run(item.title, body, when, staffId);
+    .prepare('INSERT INTO posts (title, body, scheduled_at, author_id, project_id) VALUES (?, ?, ?, ?, ?)')
+    .run(item.title, body, when, staffId, item.projectId || null);
   const postId = Number(info.lastInsertRowid);
 
   const insertTarget = database.prepare(
@@ -270,8 +281,10 @@ export function planToPost(id, { db: database = db, staffId }) {
 }
 
 /** Сводка для шапки: сколько идей ждёт решения и сколько утверждённого в работе. */
-export function planSummary() {
-  const rows = db.prepare('SELECT status, COUNT(*) n FROM plan_items GROUP BY status').all();
+export function planSummary(projectId = null) {
+  const rows = projectId
+    ? db.prepare('SELECT status, COUNT(*) n FROM plan_items WHERE project_id = ? GROUP BY status').all(projectId)
+    : db.prepare('SELECT status, COUNT(*) n FROM plan_items GROUP BY status').all();
   const out = { idea: 0, approved: 0, in_work: 0, done: 0, rejected: 0 };
   for (const r of rows) out[r.status] = r.n;
   return out;

@@ -11,6 +11,26 @@ class ApiError extends Error {
   }
 }
 
+/**
+ * Открытый проект. Панель почти всегда спрашивает данные «этого проекта»,
+ * и таскать его через каждый вызов руками — верный способ однажды забыть
+ * и показать посты академии в карточке «Дошколярика».
+ */
+let projectId = null;
+
+export function setProject(id) {
+  projectId = id || null;
+}
+
+export function getProject() {
+  return projectId;
+}
+
+function withProject(path) {
+  if (!projectId) return path;
+  return path + (path.includes('?') ? '&' : '?') + `project=${projectId}`;
+}
+
 async function request(path, { method = 'GET', body, raw } = {}) {
   const init = { method, headers: {} };
   if (raw) {
@@ -53,8 +73,8 @@ export const api = {
   settings: () => request('/api/settings'),
   saveSettings: (body) => request('/api/settings', { method: 'PUT', body }),
 
-  plan: (status) => request(`/api/plan${status ? `?status=${status}` : ''}`),
-  createPlan: (body) => request('/api/plan', { method: 'POST', body }),
+  plan: (status) => request(withProject(`/api/plan${status ? `?status=${status}` : ''}`)),
+  createPlan: (body) => request(withProject('/api/plan'), { method: 'POST', body }),
   updatePlan: (id, body) => request(`/api/plan/${id}`, { method: 'PUT', body }),
   approvePlan: (id) => request(`/api/plan/${id}/approve`, { method: 'POST' }),
   planToPost: (id) => request(`/api/plan/${id}/to-post`, { method: 'POST' }),
@@ -69,12 +89,23 @@ export const api = {
   reject: (id, note) => request(`/api/posts/${id}/reject`, { method: 'POST', body: { note } }),
 
   specs: () => request('/api/specs'),
-  status: () => request('/api/status'),
-  checkPlatform: (id) => request(`/api/platforms/${id}/check`, { method: 'POST' }),
+  status: () => request(withProject('/api/status')),
 
-  posts: (from, to) => request(`/api/posts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  projects: () => request('/api/projects'),
+  createProject: (body) => request('/api/projects', { method: 'POST', body }),
+  updateProject: (id, body) => request(`/api/projects/${id}`, { method: 'PUT', body }),
+  projectAccounts: (id) => request(`/api/projects/${id}/accounts`),
+  saveAccount: (id, platform, body) =>
+    request(`/api/projects/${id}/accounts/${platform}`, { method: 'PUT', body }),
+  clearAccount: (id, platform) =>
+    request(`/api/projects/${id}/accounts/${platform}`, { method: 'DELETE' }),
+  checkAccount: (id, platform) =>
+    request(`/api/projects/${id}/accounts/${platform}/check`, { method: 'POST' }),
+
+  posts: (from, to) =>
+    request(withProject(`/api/posts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)),
   post: (id) => request(`/api/posts/${id}`),
-  createPost: (body) => request('/api/posts', { method: 'POST', body }),
+  createPost: (body) => request(withProject('/api/posts'), { method: 'POST', body }),
   updatePost: (id, body) => request(`/api/posts/${id}`, { method: 'PUT', body }),
   deletePost: (id) => request(`/api/posts/${id}`, { method: 'DELETE' }),
   schedule: (id) => request(`/api/posts/${id}/schedule`, { method: 'POST' }),

@@ -248,6 +248,57 @@ const MIGRATIONS = [
       CREATE INDEX idx_plan_status ON plan_items(status, planned_for);
     `,
   },
+  {
+    /**
+     * Проекты.
+     *
+     * Школ четыре, и аккаунты у них разные — у «Дошколярика» свои Instagram
+     * и Facebook, а не академии. Пока панель знала один набор токенов из
+     * `.env`, любой пост уходил в один и тот же аккаунт; проект и есть то,
+     * что отвечает на вопрос «куда именно».
+     *
+     * Токены переезжают сюда же, в карточку проекта: значения шифруются
+     * (src/secrets.js), в базе лежит только шифротекст.
+     */
+    name: '007-projects',
+    sql: `
+      CREATE TABLE projects (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        slug       TEXT NOT NULL UNIQUE,
+        title      TEXT NOT NULL,
+        subtitle   TEXT NOT NULL DEFAULT '',
+        accent     TEXT NOT NULL DEFAULT '#e0a94b',
+        position   INTEGER NOT NULL DEFAULT 0,
+        active     INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      INSERT INTO projects (slug, title, subtitle, accent, position) VALUES
+        ('education', 'Комп''ютерна академія', 'mycomputer.education', '#e0a94b', 1),
+        ('school',    'Школа дизайну',         'mycomputer.school',    '#7aa7e0', 2),
+        ('fluentfox', 'FluentFox',             'англійська',           '#6fc39a', 3),
+        ('child',     'Дошколярик',            'doshkolyarik',         '#e08a5a', 4);
+
+      CREATE TABLE project_accounts (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        platform   TEXT NOT NULL,
+        config     TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (project_id, platform)
+      );
+
+      ALTER TABLE posts ADD COLUMN project_id INTEGER REFERENCES projects(id);
+      ALTER TABLE plan_items ADD COLUMN project_id INTEGER REFERENCES projects(id);
+      ALTER TABLE trends ADD COLUMN project_id INTEGER REFERENCES projects(id);
+
+      UPDATE posts SET project_id = 1 WHERE project_id IS NULL;
+      UPDATE plan_items SET project_id = 1 WHERE project_id IS NULL;
+
+      CREATE INDEX idx_posts_project ON posts(project_id, scheduled_at);
+      CREATE INDEX idx_plan_project ON plan_items(project_id, status);
+    `,
+  },
 ];
 
 function migrate() {
@@ -290,14 +341,20 @@ export function getPost(id) {
   return post;
 }
 
-export function listPosts({ from = null, to = null } = {}) {
+export function listPosts({ from = null, to = null, projectId = null } = {}) {
   let sql = 'SELECT * FROM posts';
+  const where = [];
   const params = [];
+  if (projectId) {
+    where.push('project_id = ?');
+    params.push(projectId);
+  }
   if (from && to) {
     // Черновики без даты тоже нужны в списке — иначе их негде найти.
-    sql += " WHERE (scheduled_at BETWEEN ? AND ?) OR scheduled_at IS NULL";
+    where.push('((scheduled_at BETWEEN ? AND ?) OR scheduled_at IS NULL)');
     params.push(from, to);
   }
+  if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
   sql += ' ORDER BY scheduled_at IS NULL, scheduled_at';
   const posts = db.prepare(sql).all(...params);
   const targets = db.prepare('SELECT * FROM post_targets').all();

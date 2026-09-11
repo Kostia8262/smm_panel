@@ -13,20 +13,19 @@ const API = 'https://api.telegram.org';
 
 export const id = 'telegram';
 
-export function isConfigured() {
-  return Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
+export function isConfigured(creds = {}) {
+  return Boolean(creds.botToken && creds.chatId);
 }
 
-export function missingConfig() {
+export function missingConfig(creds = {}) {
   const missing = [];
-  if (!process.env.TELEGRAM_BOT_TOKEN) missing.push('TELEGRAM_BOT_TOKEN (у @BotFather)');
-  if (!process.env.TELEGRAM_CHAT_ID) missing.push('TELEGRAM_CHAT_ID (@имя_канала или числовой id)');
+  if (!creds.botToken) missing.push('токен бота (@BotFather)');
+  if (!creds.chatId) missing.push('канал (@имя или числовой id)');
   return missing;
 }
 
-async function call(method, form) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const res = await fetch(`${API}/bot${token}/${method}`, { method: 'POST', body: form });
+async function call(method, form, creds) {
+  const res = await fetch(`${API}/bot${creds.botToken}/${method}`, { method: 'POST', body: form });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.ok) {
     throw new Error(
@@ -37,11 +36,11 @@ async function call(method, form) {
 }
 
 /** Проверка доступа: бот жив и умеет писать в канал. */
-export async function check() {
-  const me = await call('getMe', new FormData());
+export async function check(creds) {
+  const me = await call('getMe', new FormData(), creds);
   const form = new FormData();
-  form.set('chat_id', process.env.TELEGRAM_CHAT_ID);
-  const chat = await call('getChat', form);
+  form.set('chat_id', creds.chatId);
+  const chat = await call('getChat', form, creds);
   return {
     ok: true,
     bot: me.username,
@@ -52,8 +51,8 @@ export async function check() {
 /**
  * @param {{text: string, media: Array<{path: string, kind: string, original_name: string}>}} payload
  */
-export async function publish({ text, media = [] }) {
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+export async function publish({ text, media = [], creds }) {
+  const chatId = creds.chatId;
   const caption = text || '';
 
   // Без медиа — обычное сообщение.
@@ -62,7 +61,7 @@ export async function publish({ text, media = [] }) {
     form.set('chat_id', chatId);
     form.set('text', caption);
     form.set('parse_mode', 'HTML');
-    const msg = await call('sendMessage', form);
+    const msg = await call('sendMessage', form, creds);
     return { externalId: String(msg.message_id), url: messageUrl(chatId, msg.message_id) };
   }
 
@@ -78,8 +77,8 @@ export async function publish({ text, media = [] }) {
       form.set('caption', caption.slice(0, 1024));
       form.set('parse_mode', 'HTML');
     }
-    const msg = await call(isVideo ? 'sendVideo' : 'sendPhoto', form);
-    if (caption.length > 1024) await sendTail(chatId, caption.slice(1024));
+    const msg = await call(isVideo ? 'sendVideo' : 'sendPhoto', form, creds);
+    if (caption.length > 1024) await sendTail(chatId, caption.slice(1024), creds);
     return { externalId: String(msg.message_id), url: messageUrl(chatId, msg.message_id) };
   }
 
@@ -98,18 +97,18 @@ export async function publish({ text, media = [] }) {
   for (const [i, m] of media.slice(0, 10).entries()) {
     form.set(`f${i}`, await openAsBlob(m.path), basename(m.path));
   }
-  const msgs = await call('sendMediaGroup', form);
-  if (caption.length > 1024) await sendTail(chatId, caption.slice(1024));
+  const msgs = await call('sendMediaGroup', form, creds);
+  if (caption.length > 1024) await sendTail(chatId, caption.slice(1024), creds);
   const first = msgs[0];
   return { externalId: String(first.message_id), url: messageUrl(chatId, first.message_id) };
 }
 
-async function sendTail(chatId, tail) {
+async function sendTail(chatId, tail, creds) {
   const form = new FormData();
   form.set('chat_id', chatId);
   form.set('text', tail);
   form.set('parse_mode', 'HTML');
-  await call('sendMessage', form);
+  await call('sendMessage', form, creds);
 }
 
 function messageUrl(chatId, messageId) {

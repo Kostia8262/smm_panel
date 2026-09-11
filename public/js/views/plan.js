@@ -19,11 +19,45 @@ export function planView(ctx) {
   let rubrics = [];
   const isOwner = ctx.state.user.role === 'owner';
 
-  ctx.setTopbar({
-    title: 'Контент-план',
-    subtitle: 'Идеи, из которых рождаются посты',
-    actions: [button('Новая идея', { variant: 'primary', iconName: 'plus', onClick: () => openForm() })],
-  });
+  // Два взгляда на одно и то же. Доска отвечает «на каком этапе идея»,
+  // лента — «что было, что сейчас, что впереди». Второе нужно, чтобы видеть
+  // ритм публикаций и дыры в нём, а доска этого не показывает вовсе.
+  let mode = localStorage.getItem('smm.plan.mode') === 'timeline' ? 'timeline' : 'board';
+
+  function modeSwitch() {
+    const chips = el('div', 'chips');
+    for (const [id, title] of [['board', 'Доска'], ['timeline', 'Лента']]) {
+      const chip = el('button', 'chip');
+      chip.type = 'button';
+      chip.textContent = title;
+      chip.setAttribute('aria-pressed', String(mode === id));
+      chip.addEventListener('click', () => {
+        mode = id;
+        try {
+          localStorage.setItem('smm.plan.mode', id);
+        } catch {
+          // приватное окно — просто не запомним
+        }
+        setTopbar();
+        render();
+      });
+      chips.append(chip);
+    }
+    return chips;
+  }
+
+  function setTopbar() {
+    ctx.setTopbar({
+      title: 'Контент-план',
+      subtitle: 'Идеи, из которых рождаются посты',
+      actions: [
+        modeSwitch(),
+        button('Новая идея', { variant: 'primary', iconName: 'plus', onClick: () => openForm() }),
+      ],
+    });
+  }
+
+  setTopbar();
 
   const board = el('div', 'board');
   root.append(board);
@@ -50,6 +84,15 @@ export function planView(ctx) {
 
   function render() {
     board.textContent = '';
+    root.querySelector('.plan-timeline')?.remove();
+    root.querySelectorAll('.panel.drafts-like').forEach((n) => n.remove());
+
+    if (mode === 'timeline' && items.length) {
+      board.hidden = true;
+      root.append(renderTimeline());
+      return;
+    }
+    board.hidden = false;
 
     if (!items.length) {
       const box = el('section', 'panel');
@@ -92,6 +135,59 @@ export function planView(ctx) {
       box.append(list);
       root.append(box);
     }
+  }
+
+  /**
+   * Лента по времени. Прошлое сжато и приглушено — оно нужно как память
+   * «что мы уже говорили», а не как список дел; впереди подробнее.
+   */
+  function renderTimeline() {
+    const wrap = el('div', 'plan-timeline');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const dated = items.filter((i) => i.plannedFor);
+    const undated = items.filter((i) => !i.plannedFor);
+
+    const past = dated
+      .filter((i) => new Date(i.plannedFor) < today || i.status === 'done')
+      .sort((a, b) => b.plannedFor.localeCompare(a.plannedFor));
+    const ahead = dated
+      .filter((i) => new Date(i.plannedFor) >= today && i.status !== 'done')
+      .sort((a, b) => a.plannedFor.localeCompare(b.plannedFor));
+    const now = ahead.filter((i) => daysFrom(today, i.plannedFor) <= 7);
+    const later = ahead.filter((i) => daysFrom(today, i.plannedFor) > 7);
+
+    wrap.append(band('Сейчас', 'Ближайшая неделя', now, 'now'));
+    wrap.append(band('Впереди', 'Дальше по плану', later.concat(undated), 'ahead'));
+    wrap.append(band('Было', 'Память: о чём уже говорили', past, 'past'));
+    return wrap;
+  }
+
+  function band(title, hint, list, kind) {
+    const box = panel(null);
+    box.classList.add('band', `band--${kind}`);
+
+    const head = el('div', 'panel__head');
+    head.append(el('h2', null, title));
+    head.append(el('span', 'board__hint', hint));
+    head.append(el('span', 'spacer'));
+    head.append(el('span', 'day__count', String(list.length)));
+    box.append(head);
+
+    if (!list.length) {
+      box.append(el('div', 'board__empty', kind === 'past' ? 'Пока ничего не выходило' : 'Пусто — значит, дыра в плане'));
+      return box;
+    }
+
+    const grid = el('div', 'band__list');
+    for (const item of list) grid.append(card(item));
+    box.append(grid);
+    return box;
+  }
+
+  function daysFrom(from, iso) {
+    return Math.round((new Date(iso) - from) / 86400000);
   }
 
   function card(item) {

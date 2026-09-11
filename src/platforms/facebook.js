@@ -10,20 +10,19 @@ const API = 'https://graph.facebook.com/v21.0';
 
 export const id = 'facebook';
 
-export function isConfigured() {
-  return Boolean(process.env.FACEBOOK_PAGE_ID && process.env.FACEBOOK_PAGE_TOKEN);
+export function isConfigured(creds = {}) {
+  return Boolean(creds.pageId && creds.pageToken);
 }
 
-export function missingConfig() {
+export function missingConfig(creds = {}) {
   const missing = [];
-  if (!process.env.FACEBOOK_PAGE_ID) missing.push('FACEBOOK_PAGE_ID');
-  if (!process.env.FACEBOOK_PAGE_TOKEN) missing.push('FACEBOOK_PAGE_TOKEN');
+  if (!creds.pageId) missing.push('ID страницы');
+  if (!creds.pageToken) missing.push('токен страницы');
   return missing;
 }
 
-async function call(path, params) {
-  const token = process.env.FACEBOOK_PAGE_TOKEN;
-  const body = new URLSearchParams({ ...params, access_token: token });
+async function call(path, params, creds) {
+  const body = new URLSearchParams({ ...params, access_token: creds.pageToken });
   const res = await fetch(`${API}/${path}`, { method: 'POST', body });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.error) {
@@ -32,41 +31,38 @@ async function call(path, params) {
   return data;
 }
 
-export async function check() {
-  const token = process.env.FACEBOOK_PAGE_TOKEN;
-  const page = process.env.FACEBOOK_PAGE_ID;
-  const res = await fetch(`${API}/${page}?fields=name,fan_count&access_token=${token}`);
+export async function check(creds) {
+  const res = await fetch(`${API}/${creds.pageId}?fields=name,fan_count&access_token=${creds.pageToken}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
   return { ok: true, account: data.name };
 }
 
 /** Когда протухает токен страницы — это читает сторож. */
-export async function tokenExpiry() {
-  const token = process.env.FACEBOOK_PAGE_TOKEN;
-  const appToken = `${process.env.META_APP_ID}|${process.env.META_APP_SECRET}`;
-  const res = await fetch(`${API}/debug_token?input_token=${token}&access_token=${appToken}`);
+export async function tokenExpiry(creds) {
+  const appToken = `${creds.appId}|${creds.appSecret}`;
+  const res = await fetch(`${API}/debug_token?input_token=${creds.pageToken}&access_token=${appToken}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
   const expires = data.data?.expires_at;
   return expires ? new Date(expires * 1000).toISOString() : null; // 0 = бессрочный system user token
 }
 
-export async function publish({ text, media = [], publicUrl }) {
-  const page = process.env.FACEBOOK_PAGE_ID;
+export async function publish({ text, media = [], publicUrl, creds }) {
+  const page = creds.pageId;
 
   if (!media.length) {
-    const res = await call(`${page}/feed`, { message: text });
+    const res = await call(`${page}/feed`, { message: text }, creds);
     return { externalId: res.id, url: `https://facebook.com/${res.id}` };
   }
 
   if (media.length === 1 && media[0].kind === 'image') {
-    const res = await call(`${page}/photos`, { url: publicUrl(media[0]), caption: text });
+    const res = await call(`${page}/photos`, { url: publicUrl(media[0]), caption: text }, creds);
     return { externalId: res.post_id || res.id, url: null };
   }
 
   if (media.length === 1 && media[0].kind === 'video') {
-    const res = await call(`${page}/videos`, { file_url: publicUrl(media[0]), description: text });
+    const res = await call(`${page}/videos`, { file_url: publicUrl(media[0]), description: text }, creds);
     return { externalId: res.id, url: null };
   }
 
@@ -74,13 +70,13 @@ export async function publish({ text, media = [], publicUrl }) {
   const ids = [];
   for (const m of media.slice(0, 10)) {
     if (m.kind !== 'image') continue;
-    const up = await call(`${page}/photos`, { url: publicUrl(m), published: 'false' });
+    const up = await call(`${page}/photos`, { url: publicUrl(m), published: 'false' }, creds);
     ids.push(up.id);
   }
   const params = { message: text };
   ids.forEach((id, i) => {
     params[`attached_media[${i}]`] = JSON.stringify({ media_fbid: id });
   });
-  const res = await call(`${page}/feed`, params);
+  const res = await call(`${page}/feed`, params, creds);
   return { externalId: res.id, url: `https://facebook.com/${res.id}` };
 }
