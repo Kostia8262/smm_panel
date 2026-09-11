@@ -28,6 +28,7 @@ const STATE = {
 export function composerView(ctx, postId) {
   let post = null;
   let specs = ctx.state.specs;
+  let schedule = null; // рубрики и слоты проекта
   let previewKey = null;
   let showZones = true;
   let saveTimer = null;
@@ -51,6 +52,7 @@ export function composerView(ctx, postId) {
         ctx.state.specs = specs;
       }
       post = (await api.post(postId)).post;
+      schedule = await api.schedule();
     } catch (err) {
       toast(err.message, 'danger');
       location.hash = '#/';
@@ -82,6 +84,8 @@ export function composerView(ctx, postId) {
         title: root.querySelector('#title')?.value ?? post.title,
         body: root.querySelector('#body')?.value ?? post.body,
         scheduled_at: post.scheduled_at,
+        category_id: post.category_id ?? null,
+        recycle: post.recycle ? 1 : 0,
         targets: post.targets,
       });
       post = data.post;
@@ -183,7 +187,7 @@ export function composerView(ctx, postId) {
           onClick: async () => {
             if (!(await save({ quiet: true }))) return;
             try {
-              const res = await api.schedule(post.id);
+              const res = await api.enqueue(post.id);
               for (const w of res.warnings || []) toast(`${w.platform}: ${w.message}`);
               toast(res.review ? 'Отправлен владельцу на утверждение' : 'Пост в очереди', 'ok');
               location.hash = '#/';
@@ -264,6 +268,7 @@ export function composerView(ctx, postId) {
       sectionTargets(),
       sectionMedia(),
       sectionWhen(),
+      sectionReport(),
       sectionIssues(),
     ].filter(Boolean);
     left.append(...blocks);
@@ -535,17 +540,128 @@ export function composerView(ctx, postId) {
   }
 
   function sectionWhen() {
-    const p = panel('Когда');
+    const p = panel('Когда и что это');
+
+    // Рубрика решает две вещи сразу: в какой слот пост ложится и вернётся ли
+    // он в оборот. Поэтому она стоит рядом со временем, а не в другом углу.
+    const catWrap = el('div', 'field');
+    catWrap.append(el('label', 'field__label', 'Рубрика'));
+    const cat = el('select', 'select');
+    cat.append(new Option('— без рубрики —', ''));
+    for (const c of schedule?.categories || []) {
+      const opt = new Option(c.evergreen ? `${c.title} · вечнозелёная` : c.title, String(c.id));
+      if (post.category_id === c.id) opt.selected = true;
+      cat.append(opt);
+    }
+    cat.addEventListener('change', async () => {
+      post.category_id = cat.value ? Number(cat.value) : null;
+      await save({ quiet: true });
+      renderAll();
+    });
+    catWrap.append(cat);
+    p.append(catWrap);
+
+    const current = (schedule?.categories || []).find((c) => c.id === post.category_id);
+    if (current?.evergreen) {
+      const row = el('div', 'target');
+      row.classList.add('target--on');
+      const sw = el('label', 'switch');
+      const input = el('input');
+      input.type = 'checkbox';
+      input.checked = Boolean(post.recycle);
+      input.setAttribute('aria-label', 'Повторять пост');
+      const box = el('span', 'switch__box');
+      box.innerHTML = iconMarkup('check', 12);
+      sw.append(input, box);
+      input.addEventListener('change', async () => {
+        post.recycle = input.checked;
+        await save({ quiet: true });
+      });
+      const label = el('div');
+      label.append(el('div', 'target__name', 'Пустить по второму кругу'));
+      label.append(
+        el('div', 'dim small', `После публикации копия встанет в очередь через ${current.recycleDays} дней.`)
+      );
+      row.append(sw, label, el('span'));
+      p.append(row);
+    }
+
     p.append(
       dateTimeField({
         value: post.scheduled_at,
-        label: '',
+        label: 'Время публикации',
         onChange: (dbValue) => {
           post.scheduled_at = dbValue;
           save({ quiet: true });
         },
       })
     );
+
+    // Ближайший свободный слот — чтобы не выбирать время у каждого поста.
+    const slotRow = el('div', 'target__meta');
+    slotRow.style.justifyContent = 'flex-start';
+    slotRow.append(
+      button('В ближайший слот', {
+        iconName: 'clock',
+        onClick: async () => {
+          try {
+            const res = await api.toSlot(post.id);
+            post = res.post;
+            toast(`Поставлен на ${res.scheduledAt.slice(0, 16)}`, 'ok');
+            renderAll();
+          } catch (err) {
+            toast(err.message, 'danger');
+          }
+        },
+      })
+    );
+    if (schedule?.nextFree) {
+      slotRow.append(el('span', 'dim small', `ближайший свободный: ${schedule.nextFree.slice(0, 16)}`));
+    } else {
+      slotRow.append(el('span', 'dim small', 'сетка расписания пуста — задайте её в настройках'));
+    }
+    p.append(slotRow);
+    return p;
+  }
+
+  /** Что пост принёс: переходы и заявки. Показываем только когда он вышел. */
+  function sectionReport() {
+    if (!['published', 'partial'].includes(post.status)) return null;
+    const p = panel('Что принёс пост');
+    const body = el('div', 'issues');
+    body.append(el('span', 'dim small', 'считаю переходы и заявки…'));
+    p.append(body);
+
+    api
+      .report(post.id)
+      .then((r) => {
+        body.textContent = '';
+        const row = el('div', 'counters');
+        row.append(el('span', 'counter', `переходов: ${r.clicks.total}`));
+        for (const [platform, n] of Object.entries(r.clicks.byPlatform)) {
+          const chip = el('span', 'counter');
+          chip.innerHTML = iconMarkup(platform, 12);
+          chip.append(el('span', null, String(n)));
+          row.append(chip);
+        }
+        if (r.leads) row.append(el('span', 'counter', `заявок: ${r.leads.count}`));
+        body.append(row);
+
+        if (r.campaign) body.append(el('div', 'dim small', `метка: ${r.campaign}`));
+        if (r.leadsError) body.append(note('warn', 'Заявки не посчитаны', r.leadsError));
+        if (r.leads?.items?.length) {
+          const list = el('ul', 'platform__notes');
+          for (const lead of r.leads.items) {
+            list.append(el('li', null, `${lead.name || 'без имени'} · ${lead.createdAt || ''}`));
+          }
+          body.append(list);
+        }
+      })
+      .catch((err) => {
+        body.textContent = '';
+        body.append(note('danger', 'Отчёт не собрался', err.message));
+      });
+
     return p;
   }
 

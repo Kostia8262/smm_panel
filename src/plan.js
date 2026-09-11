@@ -165,7 +165,7 @@ const PLAN_SELECT = `
 `;
 
 export function listPlan({ status = null, projectId = null } = {}) {
-  const where = [];
+  const where = ['p.deleted_at IS NULL'];
   const params = [];
   if (projectId) {
     where.push('p.project_id = ?');
@@ -175,7 +175,7 @@ export function listPlan({ status = null, projectId = null } = {}) {
     where.push('p.status = ?');
     params.push(status);
   }
-  const sql = `${PLAN_SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+  const sql = `${PLAN_SELECT} WHERE ${where.join(' AND ')}
     ORDER BY p.planned_for IS NULL, p.planned_for, p.id`;
   return db.prepare(sql).all(...params).map(planFromRow);
 }
@@ -240,8 +240,15 @@ export function approvePlanItem(id, staffId) {
   return getPlanItem(id);
 }
 
+/** Идея, дошедшая до поста, не стирается: она часть истории плана. */
 export function removePlanItem(id) {
+  const item = db.prepare('SELECT post_id FROM plan_items WHERE id = ?').get(id);
+  if (item?.post_id) {
+    db.prepare("UPDATE plan_items SET deleted_at = datetime('now') WHERE id = ?").run(id);
+    return { soft: true };
+  }
   db.prepare('DELETE FROM plan_items WHERE id = ?').run(id);
+  return { soft: false };
 }
 
 /**

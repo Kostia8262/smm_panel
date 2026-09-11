@@ -70,6 +70,17 @@ export const api = {
   reissueStaffToken: (id) => request(`/api/staff/${id}/token`, { method: 'POST' }),
   deleteStaff: (id) => request(`/api/staff/${id}`, { method: 'DELETE' }),
 
+  schedule: () => request(withProject('/api/schedule')),
+  addSlot: (body) => request(withProject('/api/schedule/slots'), { method: 'POST', body }),
+  removeSlot: (id) => request(withProject(`/api/schedule/slots/${id}`), { method: 'DELETE' }),
+  createCategory: (body) => request(withProject('/api/categories'), { method: 'POST', body }),
+  updateCategory: (id, body) => request(`/api/categories/${id}`, { method: 'PUT', body }),
+  removeCategory: (id) => request(`/api/categories/${id}`, { method: 'DELETE' }),
+  toSlot: (id) => request(`/api/posts/${id}/slot`, { method: 'POST' }),
+  report: (id) => request(`/api/posts/${id}/report`),
+  leadsSettings: () => request('/api/settings/leads'),
+  saveLeadsSettings: (body) => request('/api/settings/leads', { method: 'PUT', body }),
+
   settings: () => request('/api/settings'),
   saveSettings: (body) => request('/api/settings', { method: 'PUT', body }),
 
@@ -108,7 +119,9 @@ export const api = {
   createPost: (body) => request(withProject('/api/posts'), { method: 'POST', body }),
   updatePost: (id, body) => request(`/api/posts/${id}`, { method: 'PUT', body }),
   deletePost: (id) => request(`/api/posts/${id}`, { method: 'DELETE' }),
-  schedule: (id) => request(`/api/posts/${id}/schedule`, { method: 'POST' }),
+  // Не `schedule`: это имя занято сеткой расписания ниже, и дубль ключа
+  // в объекте молча затирал один метод другим.
+  enqueue: (id) => request(`/api/posts/${id}/schedule`, { method: 'POST' }),
   unschedule: (id) => request(`/api/posts/${id}/unschedule`, { method: 'POST' }),
   publishNow: (id) => request(`/api/posts/${id}/publish-now`, { method: 'POST' }),
 

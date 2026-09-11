@@ -8,12 +8,16 @@
 import { api } from '../api.js';
 import { icon } from '../icons.js';
 import { el, button, panel, note, toast } from '../ui.js';
+import { schedulePanel, leadsPanel } from './schedule-settings.js';
 
 export function settingsView(ctx) {
   const root = el('div', 'view');
   ctx.setTopbar({ title: 'Настройки', subtitle: 'Доступ и правила работы' });
 
   root.append(tokenPanel(), approvalPanel(ctx));
+  // Расписание и доступ к заявкам — устройство проекта, а не личный доступ:
+  // их правит владелец.
+  if (ctx.state.user.role === 'owner') root.append(schedulePanel(), leadsPanel());
   return root;
 
   /* --------------------------- свой токен --------------------------- */

@@ -25,7 +25,10 @@ const { installAuth, requireAccess } = await import('./auth.js');
 const staffDb = await import('./staff.js');
 const planDb = await import('./plan.js');
 const projectsDb = await import('./projects.js');
+const scheduleDb = await import('./schedule.js');
+const linksDb = await import('./links.js');
 const { writeFileSync } = await import('node:fs');
+const { encrypt: encryptSecret, decrypt: decryptSecret } = await import('./secrets.js');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3210);
@@ -39,6 +42,21 @@ app.use(express.json({ limit: '1mb' }));
 app.use('/media', express.static(UPLOAD_DIR, { maxAge: '7d' }));
 app.get('/healthz', (_req, res) => res.json({ ok: true, at: new Date().toISOString() }));
 
+/**
+ * Короткая ссылка из поста. Открыта без входа — по ней ходят подписчики.
+ * Неизвестный код уводит на сайт школы, а не показывает ошибку: человек
+ * пришёл по ссылке из соцсети и не виноват, что мы её потеряли.
+ */
+app.get('/r/:code', (req, res) => {
+  const link = linksDb.findByCode(req.params.code);
+  if (!link) return res.redirect(302, 'https://mycomputer.education/');
+  linksDb.registerClick(link.id, {
+    userAgent: req.headers['user-agent'],
+    referer: req.headers.referer,
+  });
+  res.redirect(302, link.target_url);
+});
+
 app.get('/login', (req, res) => {
   if (req.user) return res.redirect('/');
   res.sendFile(join(PUBLIC_DIR, 'login.html'));
@@ -47,7 +65,7 @@ app.get('/login', (req, res) => {
 // Вход, сессии и защита всего остального. Стили и скрипты открыты — без них
 // не нарисовать саму страницу входа.
 installAuth(app, {
-  publicPaths: ['/login', '/css/', '/js/', '/media/', '/healthz', '/favicon.ico'],
+  publicPaths: ['/login', '/css/', '/js/', '/media/', '/healthz', '/favicon.ico', '/r/'],
   secureCookies: String(process.env.PUBLIC_BASE_URL || '').startsWith('https://'),
 });
 
@@ -188,23 +206,40 @@ app.put('/api/posts/:id', (req, res) => {
   const id = Number(req.params.id);
   const post = getPost(id);
   if (!post) return res.status(404).json({ error: 'Пост не найден' });
-  const { title, body, scheduled_at, status, targets } = req.body || {};
+  const { title, body, scheduled_at, status, targets, category_id, recycle } = req.body || {};
   db.prepare(
-    `UPDATE posts SET title = ?, body = ?, scheduled_at = ?, status = ?, updated_at = datetime('now') WHERE id = ?`
+    `UPDATE posts SET title = ?, body = ?, scheduled_at = ?, status = ?, category_id = ?,
+     recycle = ?, updated_at = datetime('now') WHERE id = ?`
   ).run(
     title ?? post.title,
     body ?? post.body,
     scheduled_at !== undefined ? scheduled_at : post.scheduled_at,
     status ?? post.status,
+    category_id !== undefined ? category_id : post.category_id,
+    recycle === undefined ? post.recycle : recycle ? 1 : 0,
     id
   );
   if (Array.isArray(targets)) saveTargets(id, targets);
   res.json({ post: decorate(getPost(id)) });
 });
 
+/**
+ * Удаление — мягкое. Панель обязана помнить, о чём мы уже говорили, а
+ * стёртый пост уносит с собой и эту память, и след публикации: по внешнему
+ * id мы больше не свяжем вышедший в сети пост с нашим планом.
+ */
 app.delete('/api/posts/:id', (req, res) => {
-  db.prepare('DELETE FROM posts WHERE id = ?').run(Number(req.params.id));
-  res.json({ ok: true });
+  const id = Number(req.params.id);
+  const post = getPost(id);
+  if (!post) return res.status(404).json({ error: 'Пост не найден' });
+  if (post.targets.some((t) => t.status === 'published')) {
+    db.prepare("UPDATE posts SET deleted_at = datetime('now') WHERE id = ?").run(id);
+    log('warn', `пост #${id} убран из панели (уже публиковался — запись сохранена)`, { postId: id });
+    return res.json({ ok: true, soft: true });
+  }
+  // Ничего не выходило — уносим совсем, чтобы черновики не копились.
+  db.prepare('DELETE FROM posts WHERE id = ?').run(id);
+  res.json({ ok: true, soft: false });
 });
 
 /* ----------------------------------- медиа ----------------------------------- */
@@ -307,7 +342,15 @@ app.post('/api/posts/:id/unschedule', (req, res) => {
   res.json({ post: decorate(getPost(id)) });
 });
 
-app.post('/api/posts/:id/publish-now', async (req, res) => {
+/**
+ * «Опубликовать сейчас» = поставить в очередь на сию секунду.
+ *
+ * Раньше публикация шла прямо в этом запросе, а Instagram ждёт готовности
+ * видео до пяти минут: запрос отваливался по таймауту прокси, и человек не
+ * узнавал результата, хотя пост уходил. Теперь отправкой всегда занимается
+ * воркер — один владелец процесса, никакой гонки между ним и веб-мордой.
+ */
+app.post('/api/posts/:id/publish-now', (req, res) => {
   const id = Number(req.params.id);
   const post = getPost(id);
   if (!post) return res.status(404).json({ error: 'Пост не найден' });
@@ -318,8 +361,17 @@ app.post('/api/posts/:id/publish-now', async (req, res) => {
   }
   const check = validatePost(post);
   if (!check.ok) return res.status(422).json({ error: 'Пост не проходит проверку', ...check });
-  const result = await publishPost(id);
-  res.json({ post: decorate(getPost(id)), result });
+
+  db.prepare(
+    `UPDATE posts SET status = 'scheduled', scheduled_at = datetime('now', 'localtime'),
+     updated_at = datetime('now') WHERE id = ?`
+  ).run(id);
+  db.prepare(
+    "UPDATE post_targets SET status = 'pending', error = NULL WHERE post_id = ? AND status IN ('failed', 'pending')"
+  ).run(id);
+  log('info', `пост #${id} отправлен в очередь немедленно`, { postId: id });
+
+  res.status(202).json({ post: decorate(getPost(id)), queued: true });
 });
 
 app.get('/api/log', (req, res) => {
@@ -426,6 +478,123 @@ app.post('/api/trends/:id/archive', requireAccess('platforms'), (req, res) => {
 app.delete('/api/trends/:id', requireAccess('platforms'), (req, res) => {
   planDb.removeTrend(Number(req.params.id));
   res.json({ ok: true });
+});
+
+/* ------------------------------- отдача поста ------------------------------- */
+
+/**
+ * Что пост принёс: переходы и заявки. Ради этого отчёта и стоило строить
+ * свою панель — ни один сервис планирования не знает про наши заявки.
+ */
+app.get('/api/posts/:id/report', async (req, res) => {
+  const post = getPost(Number(req.params.id));
+  if (!post) return res.status(404).json({ error: 'Пост не найден' });
+  const report = await linksDb.postReport(post, {
+    apiUrl: staffDb.getSetting('leads_api_url', 'https://mycomputer.education'),
+    apiToken: leadsApiToken(),
+  });
+  res.json(report);
+});
+
+/** Токен админки школы лежит зашифрованным — как и доступы к площадкам. */
+function leadsApiToken() {
+  const stored = staffDb.getSetting('leads_api_token', '');
+  if (!stored) return process.env.LEADS_API_TOKEN || '';
+  try {
+    return decryptSecret(stored);
+  } catch {
+    return '';
+  }
+}
+
+app.put('/api/settings/leads', requireAccess('platforms'), (req, res) => {
+  const { url, token } = req.body || {};
+  if (url !== undefined) staffDb.setSetting('leads_api_url', String(url).trim());
+  if (token) staffDb.setSetting('leads_api_token', encryptSecret(String(token).trim()));
+  if (req.body?.ownDomains !== undefined) {
+    staffDb.setSetting('own_domains', String(req.body.ownDomains).trim());
+  }
+  log('info', 'обновлён доступ к заявкам школы');
+  res.json({
+    url: staffDb.getSetting('leads_api_url', ''),
+    hasToken: Boolean(staffDb.getSetting('leads_api_token', '')),
+    ownDomains: staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school'),
+  });
+});
+
+app.get('/api/settings/leads', requireAccess('platforms'), (_req, res) => {
+  res.json({
+    url: staffDb.getSetting('leads_api_url', 'https://mycomputer.education'),
+    hasToken: Boolean(staffDb.getSetting('leads_api_token', '')),
+    ownDomains: staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school'),
+  });
+});
+
+/* --------------------------- расписание и рубрики --------------------------- */
+
+app.get('/api/schedule', (req, res) => {
+  const projectId = currentProjectId(req);
+  scheduleDb.seedCategories(projectId);
+  res.json({
+    projectId,
+    weekdays: scheduleDb.WEEKDAYS,
+    categories: scheduleDb.listCategories(projectId),
+    slots: scheduleDb.listSlots(projectId),
+    nextFree: scheduleDb.nextFreeSlot(projectId),
+  });
+});
+
+app.post('/api/schedule/slots', requireAccess('platforms'), (req, res) => {
+  try {
+    res.json({ slots: scheduleDb.addSlot(currentProjectId(req), req.body || {}) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.delete('/api/schedule/slots/:id', requireAccess('platforms'), (req, res) => {
+  scheduleDb.removeSlot(Number(req.params.id));
+  res.json({ slots: scheduleDb.listSlots(currentProjectId(req)) });
+});
+
+app.post('/api/categories', requireAccess('platforms'), (req, res) => {
+  try {
+    res.status(201).json({ category: scheduleDb.createCategory(currentProjectId(req), req.body || {}) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.put('/api/categories/:id', requireAccess('platforms'), (req, res) => {
+  try {
+    res.json({ category: scheduleDb.updateCategory(Number(req.params.id), req.body || {}) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.delete('/api/categories/:id', requireAccess('platforms'), (req, res) => {
+  scheduleDb.removeCategory(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+/** Положить пост в ближайший свободный слот — вместо выбора времени руками. */
+app.post('/api/posts/:id/slot', (req, res) => {
+  const id = Number(req.params.id);
+  const post = getPost(id);
+  if (!post) return res.status(404).json({ error: 'Пост не найден' });
+
+  const when = scheduleDb.nextFreeSlot(post.project_id, {
+    categoryId: post.category_id || null,
+    excludePostId: id,
+  });
+  if (!when) {
+    return res.status(422).json({
+      error: 'Свободных слотов нет — добавьте сетку расписания в настройках',
+    });
+  }
+  db.prepare("UPDATE posts SET scheduled_at = ?, updated_at = datetime('now') WHERE id = ?").run(when, id);
+  res.json({ post: decorate(getPost(id)), scheduledAt: when });
 });
 
 /* -------------------------------- сотрудники -------------------------------- */

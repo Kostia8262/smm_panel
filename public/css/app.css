@@ -1202,3 +1202,42 @@
 .band--past { opacity: 0.72; }
 .band--past .idea__foot .btn--primary { display: none; }
 .band--now { border-color: var(--gold-line); }
+
+/* ========================= сетка слотов ========================= */
+
+.slotgrid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--sp-2); margin-top: var(--sp-3); }
+.slotgrid__day { display: flex; flex-direction: column; gap: 6px; }
+.slotgrid__list { display: flex; flex-direction: column; gap: 4px; }
+
+.slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.slot__x {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.slot__x:hover { color: var(--danger); }
+
+@media (max-width: 860px) {
+  .slotgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Строка добавления слота: поля рядом, а не на всю ширину панели */
+.slotgrid + .target__meta .select,
+.slotgrid + .target__meta .input { max-width: 200px; }

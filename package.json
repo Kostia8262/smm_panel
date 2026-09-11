@@ -11,7 +11,8 @@
     "start": "node src/server.js",
     "worker": "node src/queue/worker.js",
     "dev": "node --watch src/server.js",
-    "check": "node --check src/server.js && node src/platforms/specs.js --selftest"
+    "check": "node src/platforms/specs.js --selftest && node --test",
+    "test": "node --test"
   },
   "dependencies": {
     "express": "^4.21.2",

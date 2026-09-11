@@ -19,6 +19,7 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const { db, log } = await import('../db.js');
 const { publishPost } = await import('./publish.js');
+const { recoverStuck, dueQuery } = await import('./recover.js');
 
 const TICK_MS = Number(process.env.WORKER_TICK_MS || 60000);
 let busy = false;
@@ -27,20 +28,18 @@ async function tick() {
   if (busy) return; // публикация может идти дольше минуты — второй заход не нужен
   busy = true;
   try {
-    const due = db
-      .prepare(
-        `SELECT id, scheduled_at FROM posts
-         WHERE status IN ('scheduled', 'partial')
-           AND scheduled_at IS NOT NULL
-           AND datetime(scheduled_at) <= datetime('now')
-         ORDER BY scheduled_at
-         LIMIT 5`
-      )
-      .all();
+    // Разбор зависших идёт каждый тик, а не только при старте: процесс может
+    // умереть и в середине дня, а пост с неизвестной судьбой должен всплыть
+    // в панели через четверть часа, а не после следующей перезагрузки.
+    recoverStuck(db, log);
+
+    const due = db.prepare(dueQuery()).all();
 
     for (const post of due) {
+      // Время в базе местное и без зоны. Приписка 'Z' объявляла его UTC и
+      // сдвигала опоздание на часовой пояс — в Киеве летом на три часа.
       const lateMin = Math.round(
-        (Date.now() - new Date(post.scheduled_at + 'Z').getTime()) / 60000
+        (Date.now() - new Date(post.scheduled_at.replace(' ', 'T')).getTime()) / 60000
       );
       if (lateMin > 15) {
         log('warn', `пост #${post.id} уходит с опозданием на ${lateMin} мин`, { postId: post.id });
@@ -55,5 +54,6 @@ async function tick() {
 }
 
 log('info', `воркер запущен, тик ${TICK_MS / 1000} с`);
+recoverStuck(db, log);
 tick();
 setInterval(tick, TICK_MS);

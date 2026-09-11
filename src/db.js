@@ -299,6 +299,127 @@ const MIGRATIONS = [
       CREATE INDEX idx_plan_project ON plan_items(project_id, status);
     `,
   },
+  {
+    /**
+     * Надёжность отправки.
+     *
+     * Три дыры, которые чинятся вместе, потому что все три про один момент —
+     * пост в процессе отправки:
+     *
+     *   1. Пост, упавший в статусе `publishing` (перезапуск, падение), не
+     *      подхватывался никогда: воркер брал только `scheduled` и `partial`.
+     *   2. Публикация шла прямо в HTTP-запросе, а Instagram ждёт готовности
+     *      видео до пяти минут — запрос отваливался по таймауту.
+     *   3. Если площадка приняла пост, а запись в базу не прошла, повтор
+     *      отправлял его второй раз. Telegram ключа идемпотентности не даёт,
+     *      поэтому честный ответ — не «повторить молча», а признаться:
+     *      отметка ставится ДО вызова, и найденная при старте отметка значит
+     *      «не знаем, ушло или нет» и требует человека.
+     */
+    name: '008-delivery-safety',
+    sql: `
+      ALTER TABLE posts ADD COLUMN publishing_since TEXT;
+      ALTER TABLE posts ADD COLUMN deleted_at TEXT;
+      ALTER TABLE plan_items ADD COLUMN deleted_at TEXT;
+
+      ALTER TABLE post_targets ADD COLUMN sending_since TEXT;
+
+      ALTER TABLE project_accounts ADD COLUMN expires_at TEXT;
+      ALTER TABLE project_accounts ADD COLUMN refresh_needed INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE project_accounts ADD COLUMN checked_at TEXT;
+      ALTER TABLE project_accounts ADD COLUMN last_error TEXT;
+
+      CREATE INDEX idx_posts_publishing ON posts(status, publishing_since);
+      CREATE INDEX idx_posts_alive ON posts(deleted_at);
+    `,
+  },
+  {
+    /**
+     * Слоты и рубрики-очереди.
+     *
+     * Подсмотрено у Buffer и SocialBee, и не зря: выбирать время у каждого
+     * поста руками — самая частая операция дня, и она лишняя. Сетка «пн, ср,
+     * пт в 10:00 и 18:30» задаётся один раз, пост падает в ближайший
+     * свободный слот.
+     *
+     * Рубрика — это очередь со своим ритмом. У школы контент сезонный и
+     * повторяемый («работа ученика», «набор в группу»), и лучшие посты имеет
+     * смысл пускать по второму кругу, а не хоронить после первой публикации.
+     */
+    name: '009-slots-categories',
+    sql: `
+      CREATE TABLE categories (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title      TEXT NOT NULL,
+        color      TEXT NOT NULL DEFAULT '#e0a94b',
+        evergreen  INTEGER NOT NULL DEFAULT 0,
+        recycle_days INTEGER NOT NULL DEFAULT 60,
+        position   INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (project_id, title)
+      );
+
+      -- weekday: 1 = понедельник … 7 = воскресенье (как ISO, а не как JS,
+      -- где неделя начинается с воскресенья и путает при чтении SQL).
+      CREATE TABLE slots (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        weekday     INTEGER NOT NULL,
+        time        TEXT NOT NULL,
+        category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+        active      INTEGER NOT NULL DEFAULT 1,
+        UNIQUE (project_id, weekday, time)
+      );
+
+      ALTER TABLE posts ADD COLUMN category_id INTEGER REFERENCES categories(id);
+      ALTER TABLE posts ADD COLUMN recycle INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE posts ADD COLUMN recycled_from INTEGER REFERENCES posts(id);
+      ALTER TABLE plan_items ADD COLUMN category_id INTEGER REFERENCES categories(id);
+
+      CREATE INDEX idx_slots_project ON slots(project_id, active);
+      CREATE INDEX idx_categories_project ON categories(project_id, position);
+    `,
+  },
+  {
+    /**
+     * Ссылки, переходы и связь с заявками.
+     *
+     * Ради этого стоило строить своё. Публикацию умеют все сервисы, а вот
+     * ответить «сколько учеников пришло с этого поста» не может ни один —
+     * у них нет наших заявок.
+     *
+     * Цепочка: ссылка в посте подменяется короткой, она считает переход и
+     * уводит на сайт с метками UTM; сайт кладёт метки в заявку (поля там уже
+     * есть); панель сопоставляет заявки по `utm_campaign` с постом.
+     */
+    name: '010-links-attribution',
+    sql: `
+      CREATE TABLE links (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        code        TEXT NOT NULL UNIQUE,
+        project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        post_id     INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+        platform    TEXT,
+        target_url  TEXT NOT NULL,
+        campaign    TEXT NOT NULL,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      -- Переходы храним записями, а не счётчиком: по ним видно, когда пост
+      -- «выстрелил», а счётчик отвечает только «сколько всего».
+      CREATE TABLE link_clicks (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        link_id    INTEGER NOT NULL REFERENCES links(id) ON DELETE CASCADE,
+        at         TEXT NOT NULL DEFAULT (datetime('now')),
+        user_agent TEXT NOT NULL DEFAULT '',
+        referer    TEXT NOT NULL DEFAULT ''
+      );
+
+      CREATE INDEX idx_links_post ON links(post_id);
+      CREATE INDEX idx_clicks_link ON link_clicks(link_id, at);
+    `,
+  },
 ];
 
 function migrate() {
@@ -343,7 +464,9 @@ export function getPost(id) {
 
 export function listPosts({ from = null, to = null, projectId = null } = {}) {
   let sql = 'SELECT * FROM posts';
-  const where = [];
+  // Удалённые не показываем, но и не стираем: запись о вышедшем посте — это
+  // память о том, что мы уже говорили.
+  const where = ['deleted_at IS NULL'];
   const params = [];
   if (projectId) {
     where.push('project_id = ?');
@@ -354,7 +477,7 @@ export function listPosts({ from = null, to = null, projectId = null } = {}) {
     where.push('((scheduled_at BETWEEN ? AND ?) OR scheduled_at IS NULL)');
     params.push(from, to);
   }
-  if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
+  sql += ` WHERE ${where.join(' AND ')}`;
   sql += ' ORDER BY scheduled_at IS NULL, scheduled_at';
   const posts = db.prepare(sql).all(...params);
   const targets = db.prepare('SELECT * FROM post_targets').all();

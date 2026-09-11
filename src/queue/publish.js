@@ -10,6 +10,9 @@ import { resolve } from 'node:path';
 import { db, getPost, log } from '../db.js';
 import { getAdapter } from '../platforms/index.js';
 import { credentialsFor, getProject } from '../projects.js';
+import { requeueEvergreen } from '../schedule.js';
+import { shortenLinks } from '../links.js';
+import { getSetting } from '../staff.js';
 import { UPLOAD_DIR } from '../media.js';
 
 const MAX_ATTEMPTS = 3;
@@ -32,7 +35,7 @@ export async function publishPost(postId) {
     return { status: 'failed', results: [{ error: 'не указан проект' }] };
   }
 
-  db.prepare("UPDATE posts SET status = 'publishing' WHERE id = ?").run(postId);
+  db.prepare("UPDATE posts SET status = 'publishing', publishing_since = datetime('now') WHERE id = ?").run(postId);
 
   const publicUrl = publicUrlFactory();
   const media = post.media.map((m) => ({ ...m, path: resolve(UPLOAD_DIR, m.stored_name) }));
@@ -40,6 +43,12 @@ export async function publishPost(postId) {
 
   for (const target of post.targets) {
     if (target.status === 'published') continue; // повтор не дублирует ушедшее
+    // Неизвестную судьбу повторять нельзя: см. queue/recover.js. Такую цель
+    // разблокирует только человек, посмотрев в канал.
+    if (target.status === 'needs_check') {
+      results.push({ platform: target.platform, skipped: 'ждёт ручной проверки' });
+      continue;
+    }
     if (target.attempts >= MAX_ATTEMPTS) {
       results.push({ platform: target.platform, skipped: 'исчерпаны попытки' });
       continue;
@@ -57,11 +66,30 @@ export async function publishPost(postId) {
     }
 
     try {
-      const text = target.text_override ?? post.body ?? '';
+      const raw = target.text_override ?? post.body ?? '';
+      // Ссылки на наши сайты подменяются короткими с метками: иначе потом
+      // нечем ответить, сколько человек пришло именно с этого поста.
+      const ownDomains = String(getSetting('own_domains', 'mycomputer.education,mycomputer.school'))
+        .split(',')
+        .map((d) => d.trim())
+        .filter(Boolean);
+      const text = shortenLinks(raw, {
+        post,
+        platform: target.platform,
+        baseUrl: (process.env.PUBLIC_BASE_URL || 'http://localhost:3210').replace(/\/$/, ''),
+        ownDomains,
+      });
+      // Отметка ставится ДО вызова площадки. Если процесс умрёт между
+      // отправкой и записью результата, мы хотя бы будем знать, что попытка
+      // была, и не повторим её вслепую.
+      db.prepare(
+        "UPDATE post_targets SET status = 'sending', sending_since = datetime('now') WHERE id = ?"
+      ).run(target.id);
+
       const out = await adapter.publish({ text, media, formatId: target.format_id, publicUrl, creds });
       db.prepare(
         `UPDATE post_targets SET status = 'published', external_id = ?, external_url = ?,
-         error = NULL, published_at = datetime('now') WHERE id = ?`
+         error = NULL, sending_since = NULL, published_at = datetime('now') WHERE id = ?`
       ).run(out.externalId || null, out.url || null, target.id);
       log('info', `опубликовано: ${target.platform}`, {
         postId,
@@ -82,12 +110,27 @@ export async function publishPost(postId) {
   const after = getPost(postId);
   const allDone = after.targets.every((t) => t.status === 'published');
   const anyDone = after.targets.some((t) => t.status === 'published');
-  const status = allDone ? 'published' : anyDone ? 'partial' : 'failed';
-  db.prepare("UPDATE posts SET status = ?, updated_at = datetime('now') WHERE id = ?").run(status, postId);
+  const needsCheck = after.targets.some((t) => t.status === 'needs_check');
+  const status = needsCheck ? 'partial' : allDone ? 'published' : anyDone ? 'partial' : 'failed';
+  db.prepare(
+    "UPDATE posts SET status = ?, publishing_since = NULL, updated_at = datetime('now') WHERE id = ?"
+  ).run(status, postId);
+
+  // Вечнозелёная рубрика возвращает пост в оборот копией — исходный остаётся
+  // в истории с датой и внешними id.
+  if (status === 'published') {
+    try {
+      requeueEvergreen(postId);
+    } catch (err) {
+      log('warn', `повтор не поставился: ${err.message}`, { postId });
+    }
+  }
 
   return { status, results };
 }
 
 function markFailed(target, message) {
-  db.prepare("UPDATE post_targets SET status = 'failed', error = ? WHERE id = ?").run(message, target.id);
+  db.prepare(
+    "UPDATE post_targets SET status = 'failed', error = ?, sending_since = NULL WHERE id = ?"
+  ).run(message, target.id);
 }
