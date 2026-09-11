@@ -541,9 +541,25 @@ app.get('/api/observed/digest', (req, res) => {
 });
 
 /** Ключ приёма выдаётся владельцем и виден только ему. */
-app.get('/api/ingest/key', requireAccess('platforms'), (_req, res) => {
-  res.json({ key: staffDb.getSetting('ingest_key', '') });
+app.get('/api/ingest/key', requireAccess('platforms'), (req, res) => {
+  const key = staffDb.getSetting('ingest_key', '');
+  const projectId = currentProjectId(req);
+  const project = projectsDb.getProject(projectId);
+  res.json({
+    key,
+    projectId,
+    projectTitle: project?.title || '',
+    panelUrl: publicBase(),
+    // Одна строка вместо трёх полей: переносить руками адрес, номер и ключ —
+    // три шанса ошибиться, и первый же вопрос будет «а что куда вписывать».
+    setup: key ? encodeSetup({ panelUrl: publicBase(), projectId, ingestKey: key }) : '',
+  });
 });
+
+/** Настройка расширения одной строкой: `smm1.<base64>`. */
+function encodeSetup(payload) {
+  return `smm1.${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
+}
 
 app.post('/api/ingest/key', requireAccess('platforms'), (_req, res) => {
   const key = randomKey();

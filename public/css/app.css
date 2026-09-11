@@ -1305,3 +1305,17 @@
 /* Метка проекта на карточке в общем режиме */
 .idea__project { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-micro); color: var(--ink-3); }
 .idea__project i { width: 7px; height: 7px; border-radius: 2px; display: inline-block; }
+
+/* Пошаговая инструкция: номера должны читаться как порядок, а не как маркер */
+.steps {
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+}
+
+.steps li::marker { color: var(--gold); font-weight: 700; }
+.steps code { color: var(--gold); }

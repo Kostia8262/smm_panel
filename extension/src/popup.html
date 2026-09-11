@@ -20,7 +20,7 @@
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      width: 320px;
+      width: 340px;
       padding: 16px;
       background: var(--bg);
       color: var(--ink);
@@ -29,7 +29,7 @@
     h1 { margin: 0 0 4px; font-size: 15px; font-weight: 650; }
     .sub { color: var(--ink-3); font-size: 11px; margin-bottom: 14px; }
     label { display: block; font-size: 12px; color: var(--ink-2); margin: 10px 0 4px; }
-    input {
+    input, textarea {
       width: 100%;
       background: var(--surface);
       border: 1px solid var(--line);
@@ -37,25 +37,31 @@
       color: var(--ink);
       padding: 8px 10px;
       font: inherit;
+      resize: vertical;
     }
-    input:focus { outline: none; border-color: var(--gold); }
+    input:focus, textarea:focus { outline: none; border-color: var(--gold); }
     button {
       width: 100%;
-      margin-top: 14px;
+      margin-top: 10px;
       height: 34px;
-      border: 0;
+      border: 1px solid var(--line);
       border-radius: 8px;
-      background: var(--gold);
-      color: #241a0c;
+      background: var(--surface);
+      color: var(--ink);
       font: 600 13px/1 inherit;
       cursor: pointer;
     }
-    .row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+    button.primary { background: var(--gold); border-color: var(--gold); color: #241a0c; }
+    .row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
     .row input[type="checkbox"] { width: auto; }
+    .row label { margin: 0; color: var(--ink); }
+    details { margin-top: 14px; }
+    summary { cursor: pointer; color: var(--ink-3); font-size: 12px; }
     .stat { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
     .stat b { color: var(--ink); }
     .err { color: var(--danger); }
     .ok { color: var(--ok); }
+    .hint { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -64,19 +70,29 @@
 
   <div class="row">
     <input type="checkbox" id="enabled" />
-    <label for="enabled" style="margin: 0">Собирать</label>
+    <label for="enabled">Собирать</label>
   </div>
 
-  <label for="panelUrl">Адрес панели</label>
-  <input id="panelUrl" placeholder="https://smm.mycomputer.education" />
+  <label for="setup">Настройка одной строкой</label>
+  <textarea id="setup" rows="3" placeholder="Панель → Настройки → Сборщик ленты → «Скопировать настройку»"></textarea>
+  <div class="hint">Вставьте строку из панели — адрес, проект и ключ заполнятся сами.</div>
+  <button id="apply" class="primary">Применить</button>
 
-  <label for="projectId">Номер проекта</label>
-  <input id="projectId" placeholder="1" />
+  <!-- Поля по отдельности нужны редко: когда строка не сработала или надо
+       быстро переключить проект. Поэтому спрятаны, но доступны. -->
+  <details id="manual">
+    <summary>Вписать вручную</summary>
+    <label for="panelUrl">Адрес панели</label>
+    <input id="panelUrl" placeholder="https://smm.mycomputer.education" />
 
-  <label for="ingestKey">Ключ приёма</label>
-  <input id="ingestKey" type="password" placeholder="из настроек панели" />
+    <label for="projectId">Номер проекта</label>
+    <input id="projectId" placeholder="1" />
 
-  <button id="save">Сохранить</button>
+    <label for="ingestKey">Ключ приёма</label>
+    <input id="ingestKey" type="password" placeholder="из настроек панели" />
+
+    <button id="save">Сохранить</button>
+  </details>
 
   <div class="stat" id="stat"></div>
 

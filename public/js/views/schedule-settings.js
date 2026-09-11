@@ -259,51 +259,106 @@ export function ingestPanel() {
   const body = el('div', 'stack');
   p.append(body);
 
-  api
-    .ingestKey()
-    .then(({ key }) => render(key))
-    .catch((err) => body.append(note('danger', 'Ключ не прочитался', err.message)));
-
+  load();
   return p;
 
-  function render(key) {
+  async function load() {
+    body.textContent = '';
+    body.append(el('span', 'field__hint', 'читаю…'));
+    try {
+      render(await api.ingestKey());
+    } catch (err) {
+      body.textContent = '';
+      body.append(note('danger', 'Не прочиталось', err.message));
+    }
+  }
+
+  function render(cfg) {
     body.textContent = '';
     body.append(
       el(
         'p',
         'field__hint',
-        'Расширение читает ленту Threads, пока СММщик её листает, и присылает сюда реакции постов. Само оно ничего не листает и не нажимает — только смотрит на то, мимо чего человек прошёл.'
+        'Расширение читает ленту Threads, пока её листает человек, и присылает сюда лайки, ответы и репосты чужих постов. Официальный API этих цифр не отдаёт.'
       )
     );
 
-    if (key) {
-      const value = el('div', 'token-value', key);
-      body.append(value);
-    } else {
-      body.append(note('warn', 'Ключ не выпущен', 'Без него панель не примет данные от расширения.'));
+    if (!cfg.key) {
+      body.append(
+        note('warn', 'Ключ ещё не выпущен', 'Без него панель не примет данные. Нажмите кнопку ниже.')
+      );
+      body.append(actionRow(cfg));
+      return;
     }
 
+    // Шаги по порядку: первый вопрос после «выпустить ключ» — что дальше.
+    body.append(el('div', 'eyebrow', 'Как подключить'));
+    const steps = el('ol', 'steps');
+    steps.append(
+      step('Нажмите «Скопировать настройку» — в буфер уйдёт одна строка с адресом панели, проектом и ключом.'),
+      step('Откройте в Chrome адрес chrome://extensions и включите «Режим разработчика» — переключатель справа сверху.'),
+      step('Нажмите «Загрузить распакованное расширение» и выберите папку extension из репозитория планировщика.'),
+      step('Щёлкните значок расширения, вставьте строку в поле «Настройка одной строкой» и нажмите «Применить».'),
+      step('Откройте Threads и листайте ленту. Собранное появится в разделе «Тренды».')
+    );
+    body.append(steps);
+
+    const setup = el('div', 'token-value', cfg.setup);
+    body.append(setup);
+    body.append(
+      el(
+        'span',
+        'field__hint',
+        `Строка настроена на проект «${cfg.projectTitle}» (№${cfg.projectId}). Для другого проекта переключите его вверху и скопируйте заново.`
+      )
+    );
+
+    body.append(actionRow(cfg));
+  }
+
+  function actionRow(cfg) {
     const row = el('div', 'target__meta');
     row.style.justifyContent = 'flex-start';
+
+    if (cfg.setup) {
+      row.append(
+        button('Скопировать настройку', {
+          variant: 'primary',
+          iconName: 'check',
+          onClick: async () => {
+            try {
+              await navigator.clipboard.writeText(cfg.setup);
+              toast('Строка скопирована — вставьте её в расширение', 'ok');
+            } catch {
+              toast('Буфер недоступен — выделите строку выше и скопируйте вручную');
+            }
+          },
+        })
+      );
+    }
+
     row.append(
-      button(key ? 'Перевыпустить ключ' : 'Выпустить ключ', {
-        variant: key ? 'danger' : 'primary',
-        iconName: key ? 'refresh' : 'plus',
+      button(cfg.key ? 'Перевыпустить ключ' : 'Выпустить ключ', {
+        variant: cfg.key ? 'danger' : 'primary',
+        iconName: cfg.key ? 'refresh' : 'plus',
         onClick: async () => {
-          if (key && !confirm('Старый ключ перестанет работать — расширение придётся настроить заново. Продолжить?')) return;
+          if (cfg.key && !confirm('Старый ключ перестанет работать — расширение придётся настроить заново. Продолжить?')) {
+            return;
+          }
           try {
-            const res = await api.newIngestKey();
-            render(res.key);
-            toast('Ключ выпущен — впишите его в расширение', 'ok');
+            await api.newIngestKey();
+            await load();
+            toast('Ключ выпущен', 'ok');
           } catch (err) {
             toast(err.message, 'danger');
           }
         },
       })
     );
-    body.append(row);
-    body.append(
-      el('p', 'field__hint', 'В расширении укажите адрес панели, номер проекта и этот ключ.')
-    );
+    return row;
+  }
+
+  function step(text) {
+    return el('li', null, text);
   }
 }
