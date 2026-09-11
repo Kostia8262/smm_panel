@@ -21,7 +21,9 @@ const { connectionStatus, getAdapter } = await import('./platforms/index.js');
 const { validatePost } = await import('./validate.js');
 const { UPLOAD_DIR, storedName, kindOf, imageSize, cropFor } = await import('./media.js');
 const { publishPost } = await import('./queue/publish.js');
-const { installAuth } = await import('./auth.js');
+const { installAuth, requireAccess } = await import('./auth.js');
+const staffDb = await import('./staff.js');
+const { writeFileSync } = await import('node:fs');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3210);
@@ -48,6 +50,9 @@ installAuth(app, {
 });
 
 app.use(express.static(PUBLIC_DIR));
+
+// Первый запуск: без владельца в панель не войти вовсе.
+staffDb.ensureOwner(resolve(here, '../data/owner-token.txt'), writeFileSync);
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -81,8 +86,8 @@ app.get('/api/posts', (req, res) => {
 app.post('/api/posts', (req, res) => {
   const { title = '', body = '', scheduled_at = null, targets = [] } = req.body || {};
   const info = db
-    .prepare('INSERT INTO posts (title, body, scheduled_at) VALUES (?, ?, ?)')
-    .run(title, body, scheduled_at);
+    .prepare('INSERT INTO posts (title, body, scheduled_at, author_id) VALUES (?, ?, ?, ?)')
+    .run(title, body, scheduled_at, req.user.id);
   const id = Number(info.lastInsertRowid);
   saveTargets(id, targets);
   log('info', `создан пост #${id}`, { postId: id });
@@ -163,10 +168,53 @@ app.post('/api/posts/:id/schedule', (req, res) => {
   if (!check.ok) return res.status(422).json({ error: 'Пост не проходит проверку', ...check });
   if (!post.scheduled_at) return res.status(422).json({ error: 'Не указано время публикации' });
 
-  db.prepare("UPDATE posts SET status = 'scheduled', updated_at = datetime('now') WHERE id = ?").run(id);
+  // Согласование включается тумблером в настройках. Пока оно включено,
+  // СММщик не ставит в очередь сам — пост ждёт владельца. Владелец ставит
+  // сразу: требовать утверждения от самого себя бессмысленно.
+  const needsReview = staffDb.requireApproval() && req.user.role !== 'owner';
+  const status = needsReview ? 'review' : 'scheduled';
+
+  db.prepare("UPDATE posts SET status = ?, updated_at = datetime('now') WHERE id = ?").run(status, id);
   db.prepare("UPDATE post_targets SET status = 'pending', error = NULL WHERE post_id = ?").run(id);
-  log('info', `пост #${id} поставлен в очередь на ${post.scheduled_at}`, { postId: id });
-  res.json({ post: decorate(getPost(id)), warnings: check.warnings });
+  log(
+    'info',
+    needsReview
+      ? `пост #${id} отправлен на согласование`
+      : `пост #${id} поставлен в очередь на ${post.scheduled_at}`,
+    { postId: id }
+  );
+  res.json({ post: decorate(getPost(id)), warnings: check.warnings, review: needsReview });
+});
+
+/** Утверждение: только владелец, и только то, что этого ждёт. */
+app.post('/api/posts/:id/approve', requireAccess('platforms'), (req, res) => {
+  const id = Number(req.params.id);
+  const post = getPost(id);
+  if (!post) return res.status(404).json({ error: 'Пост не найден' });
+  const check = validatePost(post);
+  if (!check.ok) return res.status(422).json({ error: 'Пост не проходит проверку', ...check });
+
+  db.prepare(
+    `UPDATE posts SET status = 'scheduled', approved_by = ?, approved_at = datetime('now'),
+     review_note = NULL, updated_at = datetime('now') WHERE id = ?`
+  ).run(req.user.id, id);
+  log('info', `пост #${id} утверждён: ${req.user.name}`, { postId: id });
+  res.json({ post: decorate(getPost(id)) });
+});
+
+/** Возврат на доработку: без причины возвращать нельзя — иначе непонятно, что чинить. */
+app.post('/api/posts/:id/reject', requireAccess('platforms'), (req, res) => {
+  const id = Number(req.params.id);
+  const note = String(req.body?.note || '').trim();
+  if (!note) return res.status(422).json({ error: 'Напишите, что поправить' });
+  const post = getPost(id);
+  if (!post) return res.status(404).json({ error: 'Пост не найден' });
+
+  db.prepare(
+    "UPDATE posts SET status = 'draft', review_note = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(note.slice(0, 500), id);
+  log('warn', `пост #${id} возвращён на доработку`, { postId: id });
+  res.json({ post: decorate(getPost(id)) });
 });
 
 app.post('/api/posts/:id/unschedule', (req, res) => {
@@ -179,6 +227,11 @@ app.post('/api/posts/:id/publish-now', async (req, res) => {
   const id = Number(req.params.id);
   const post = getPost(id);
   if (!post) return res.status(404).json({ error: 'Пост не найден' });
+  // Иначе «опубликовать сейчас» — дыра мимо согласования: пост уходит в пять
+  // сетей, минуя ровно ту проверку, ради которой тумблер и включён.
+  if (staffDb.requireApproval() && req.user.role !== 'owner' && post.status !== 'scheduled') {
+    return res.status(403).json({ error: 'Пока включено согласование, публикует владелец' });
+  }
   const check = validatePost(post);
   if (!check.ok) return res.status(422).json({ error: 'Пост не проходит проверку', ...check });
   const result = await publishPost(id);
@@ -199,7 +252,7 @@ app.get('/api/posts/:id/log', (req, res) => {
 });
 
 /** Проверка связи с площадкой — по кнопке в интерфейсе. */
-app.post('/api/platforms/:id/check', async (req, res) => {
+app.post('/api/platforms/:id/check', requireAccess('platforms'), async (req, res) => {
   const adapter = getAdapter(req.params.id);
   if (!adapter.isConfigured()) {
     return res.status(400).json({ ok: false, missing: adapter.missingConfig() });
@@ -211,16 +264,111 @@ app.post('/api/platforms/:id/check', async (req, res) => {
   }
 });
 
+/* -------------------------------- сотрудники -------------------------------- */
+
+app.get('/api/staff', requireAccess('staff'), (_req, res) => {
+  res.json({ staff: staffDb.list(), roles: Object.values(staffDb.ROLES) });
+});
+
+app.post('/api/staff', requireAccess('staff'), (req, res) => {
+  try {
+    // Ответ содержит токен целиком — единственный раз за его жизнь.
+    res.status(201).json({ staff: staffDb.create(req.body || {}) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.put('/api/staff/:id', requireAccess('staff'), (req, res) => {
+  try {
+    res.json({ staff: staffDb.update(Number(req.params.id), req.body || {}) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.post('/api/staff/:id/token', requireAccess('staff'), (req, res) => {
+  try {
+    res.json({ staff: staffDb.reissueToken(Number(req.params.id)) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+app.delete('/api/staff/:id', requireAccess('staff'), (req, res) => {
+  try {
+    staffDb.remove(Number(req.params.id));
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+/** Свой токен можно посмотреть всегда: человек уже вошёл, тайны тут нет. */
+app.get('/api/me/token', (req, res) => {
+  const token = staffDb.tokenOf(req.user.id);
+  if (!token) return res.status(404).json({ error: 'Сотрудник не найден' });
+  res.json({ token });
+});
+
+app.post('/api/me/token', (req, res) => {
+  // Перевыпуск своего токена рвёт и текущую сессию — так и должно быть.
+  const fresh = staffDb.reissueToken(req.user.id);
+  res.json({ token: fresh.token, relogin: true });
+});
+
+/* -------------------------------- настройки -------------------------------- */
+
+app.get('/api/settings', (req, res) => {
+  res.json({
+    requireApproval: staffDb.requireApproval(),
+    canEdit: req.user.role === 'owner',
+  });
+});
+
+app.put('/api/settings', requireAccess('platforms'), (req, res) => {
+  if (req.body?.requireApproval !== undefined) {
+    staffDb.setSetting('require_approval', req.body.requireApproval ? '1' : '0');
+    log('info', `согласование постов ${req.body.requireApproval ? 'включено' : 'выключено'}`);
+  }
+  res.json({ requireApproval: staffDb.requireApproval(), canEdit: true });
+});
+
 /* --------------------------------- служебное --------------------------------- */
 
+/**
+ * Сохранение площадок поста.
+ *
+ * Раньше строки удалялись и создавались заново — и вместе с ними исчезали
+ * `status`, `external_id` и `published_at`. Для опубликованного поста это
+ * значит потерю следа публикации, а следующий прогон очереди отправил бы его
+ * повторно: пост вышел бы в сети дважды. Поэтому здесь только то, что
+ * действительно изменилось.
+ */
 function saveTargets(postId, targets) {
-  db.prepare('DELETE FROM post_targets WHERE post_id = ?').run(postId);
+  const existing = db.prepare('SELECT * FROM post_targets WHERE post_id = ?').all(postId);
+  const wanted = targets.filter((t) => PLATFORMS[t.platform]);
+
+  const keyOf = (t) => `${t.platform}:${t.format_id || PLATFORMS[t.platform].formats[0].id}`;
+  const wantedKeys = new Set(wanted.map(keyOf));
+
+  // Убираем только снятые площадки — и только те, что ещё не опубликованы.
+  const dropStmt = db.prepare('DELETE FROM post_targets WHERE id = ?');
+  for (const row of existing) {
+    const key = `${row.platform}:${row.format_id}`;
+    if (!wantedKeys.has(key) && row.status !== 'published') dropStmt.run(row.id);
+  }
+
   const insert = db.prepare(
     'INSERT OR IGNORE INTO post_targets (post_id, platform, format_id, text_override) VALUES (?, ?, ?, ?)'
   );
-  for (const t of targets) {
-    if (!PLATFORMS[t.platform]) continue;
-    insert.run(postId, t.platform, t.format_id || PLATFORMS[t.platform].formats[0].id, t.text_override ?? null);
+  const updateText = db.prepare('UPDATE post_targets SET text_override = ? WHERE id = ?');
+
+  for (const t of wanted) {
+    const formatId = t.format_id || PLATFORMS[t.platform].formats[0].id;
+    const row = existing.find((r) => r.platform === t.platform && r.format_id === formatId);
+    if (row) updateText.run(t.text_override ?? null, row.id);
+    else insert.run(postId, t.platform, formatId, t.text_override ?? null);
   }
 }
 

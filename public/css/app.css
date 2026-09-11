@@ -125,7 +125,49 @@
   flex: none;
 }
 
+.who__text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 .who__name { font-size: var(--fs-xs); font-weight: 600; }
+.who__role { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-3); }
+
+/* Токен: моноширинный, с переносом по знакам — иначе 48 символов уезжают
+   за край карточки на телефоне. */
+.token-value {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--gold-bright);
+  background: var(--surface-2);
+  border: 1px solid var(--gold-line);
+  border-radius: var(--r-sm);
+  padding: var(--sp-3);
+  margin-top: var(--sp-3);
+  word-break: break-all;
+  user-select: all;
+}
+
+.token-value--hidden { color: var(--ink-3); border-color: var(--line); letter-spacing: 0.1em; }
+
+/* Статус поста в шапке композера */
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.state--review { border-color: var(--gold-line); color: var(--gold-bright); background: var(--gold-dim); }
+.state--scheduled { border-color: rgba(224, 166, 60, 0.3); color: var(--warn); }
+.state--published { border-color: rgba(86, 190, 128, 0.3); color: var(--ok); }
+.state--failed, .state--partial { border-color: rgba(226, 96, 79, 0.3); color: var(--danger); }
+
+/* Переопределение текста под площадку */
+.override { display: flex; flex-direction: column; gap: 6px; padding: var(--sp-3) 0 0; }
+.override__head { display: flex; align-items: center; gap: var(--sp-2); }
+.override textarea { min-height: 80px; font-size: var(--fs-xs); }
 
 /* ------------------------------- верх ------------------------------- */
 

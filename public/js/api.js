@@ -41,7 +41,20 @@ async function request(path, { method = 'GET', body, raw } = {}) {
 export const api = {
   me: () => request('/api/me'),
   logout: () => request('/api/logout', { method: 'POST' }),
-  changePassword: (current, next) => request('/api/password', { method: 'POST', body: { current, next } }),
+  myToken: () => request('/api/me/token'),
+  reissueMyToken: () => request('/api/me/token', { method: 'POST' }),
+
+  staff: () => request('/api/staff'),
+  createStaff: (body) => request('/api/staff', { method: 'POST', body }),
+  updateStaff: (id, body) => request(`/api/staff/${id}`, { method: 'PUT', body }),
+  reissueStaffToken: (id) => request(`/api/staff/${id}/token`, { method: 'POST' }),
+  deleteStaff: (id) => request(`/api/staff/${id}`, { method: 'DELETE' }),
+
+  settings: () => request('/api/settings'),
+  saveSettings: (body) => request('/api/settings', { method: 'PUT', body }),
+
+  approve: (id) => request(`/api/posts/${id}/approve`, { method: 'POST' }),
+  reject: (id, note) => request(`/api/posts/${id}/reject`, { method: 'POST', body: { note } }),
 
   specs: () => request('/api/specs'),
   status: () => request('/api/status'),

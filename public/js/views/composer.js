@@ -16,6 +16,17 @@ import {
   toLocalInput, fromLocalInput, humanBytes,
 } from '../ui.js';
 
+/** Как называется состояние поста и каким цветом его показывать. */
+const STATE = {
+  draft: { title: 'Черновик', cls: '' },
+  review: { title: 'Ждёт утверждения', cls: 'state--review' },
+  scheduled: { title: 'В очереди', cls: 'state--scheduled' },
+  publishing: { title: 'Публикуется', cls: 'state--scheduled' },
+  published: { title: 'Опубликован', cls: 'state--published' },
+  partial: { title: 'Ушло не всюду', cls: 'state--partial' },
+  failed: { title: 'Не ушло', cls: 'state--failed' },
+};
+
 export function composerView(ctx, postId) {
   let post = null;
   let specs = ctx.state.specs;
@@ -54,6 +65,7 @@ export function composerView(ctx, postId) {
 
   async function reload() {
     post = (await api.post(postId)).post;
+    renderTopbar();
     renderAll();
   }
 
@@ -90,28 +102,84 @@ export function composerView(ctx, postId) {
   /* ------------------------------ шапка ------------------------------ */
 
   function renderTopbar() {
-    ctx.setTopbar({
-      title: 'Пост',
-      subtitle: '',
-      back: '#/',
-      actions: [
-        button('Опубликовать сейчас', {
-          iconName: 'send',
+    const isOwner = ctx.state.user.role === 'owner';
+    const state = STATE[post.status] || STATE.draft;
+    const actions = [];
+
+    // Уже опубликованное не редактируется кнопками очереди: пост ушёл,
+    // и «поставить в очередь» второй раз означало бы дубль в пяти сетях.
+    if (post.status === 'review' && isOwner) {
+      actions.push(
+        button('Вернуть на доработку', {
+          iconName: 'x',
           onClick: async () => {
-            if (!(await save({ quiet: true }))) return;
-            if (!confirm('Опубликовать во все выбранные площадки прямо сейчас?')) return;
+            const note = prompt('Что поправить? Это увидит автор поста.');
+            if (!note) return;
             try {
-              const res = await api.publishNow(post.id);
-              const failed = (res.result?.results || []).filter((r) => r.error);
-              if (failed.length) toast(`Не ушло: ${failed.map((f) => f.platform).join(', ')}`, 'danger');
-              else toast('Опубликовано', 'ok');
-              reload();
+              post = (await api.reject(post.id, note)).post;
+              toast('Возвращён на доработку', 'ok');
+              renderTopbar();
+              renderAll();
             } catch (err) {
               toast(err.message, 'danger');
             }
           },
-        }),
-        button('В очередь', {
+        })
+      );
+      actions.push(
+        button('Утвердить и в очередь', {
+          variant: 'primary',
+          iconName: 'check',
+          onClick: async () => {
+            try {
+              post = (await api.approve(post.id)).post;
+              toast('Утверждён — уйдёт по расписанию', 'ok');
+              location.hash = '#/';
+            } catch (err) {
+              toast(err.message, 'danger');
+            }
+          },
+        })
+      );
+    } else if (post.status === 'scheduled' || post.status === 'review') {
+      actions.push(
+        button('Снять с очереди', {
+          iconName: 'x',
+          onClick: async () => {
+            try {
+              post = (await api.unschedule(post.id)).post;
+              toast('Снят с очереди, снова черновик', 'ok');
+              renderTopbar();
+              renderAll();
+            } catch (err) {
+              toast(err.message, 'danger');
+            }
+          },
+        })
+      );
+    } else if (post.status !== 'published') {
+      if (isOwner) {
+        actions.push(
+          button('Опубликовать сейчас', {
+            iconName: 'send',
+            onClick: async () => {
+              if (!(await save({ quiet: true }))) return;
+              if (!confirm('Опубликовать во все выбранные площадки прямо сейчас?')) return;
+              try {
+                const res = await api.publishNow(post.id);
+                const failed = (res.result?.results || []).filter((r) => r.error);
+                if (failed.length) toast(`Не ушло: ${failed.map((f) => f.platform).join(', ')}`, 'danger');
+                else toast('Опубликовано', 'ok');
+                reload();
+              } catch (err) {
+                toast(err.message, 'danger');
+              }
+            },
+          })
+        );
+      }
+      actions.push(
+        button(isOwner ? 'В очередь' : 'Отправить на утверждение', {
           variant: 'primary',
           iconName: 'clock',
           onClick: async () => {
@@ -119,24 +187,97 @@ export function composerView(ctx, postId) {
             try {
               const res = await api.schedule(post.id);
               for (const w of res.warnings || []) toast(`${w.platform}: ${w.message}`);
-              toast('Пост в очереди', 'ok');
+              toast(res.review ? 'Отправлен владельцу на утверждение' : 'Пост в очереди', 'ok');
               location.hash = '#/';
             } catch (err) {
               toast(err.message, 'danger');
               reload();
             }
           },
-        }),
-      ],
+        })
+      );
+    }
+
+    // Повтор того, что не ушло, — отдельным действием: публиковать заново
+    // весь пост значит продублировать его там, где он уже вышел.
+    if (post.status === 'partial' || post.status === 'failed') {
+      actions.push(
+        button('Повторить неудачные', {
+          variant: 'primary',
+          iconName: 'refresh',
+          onClick: async () => {
+            try {
+              const res = await api.publishNow(post.id);
+              const failed = (res.result?.results || []).filter((r) => r.error);
+              toast(failed.length ? `Снова не ушло: ${failed.length}` : 'Всё ушло', failed.length ? 'danger' : 'ok');
+              reload();
+            } catch (err) {
+              toast(err.message, 'danger');
+            }
+          },
+        })
+      );
+    }
+
+    const badge = el('span', `state ${state.cls}`);
+    badge.append(el('span', `dot dot--${dotFor(post.status)}`));
+    badge.append(el('span', null, state.title));
+
+    ctx.setTopbar({
+      title: 'Пост',
+      subtitle: '',
+      back: '#/',
+      actions: [badge, ...actions, deleteButton()],
     });
+  }
+
+  function deleteButton() {
+    return iconButton('trash', {
+      title: 'Удалить пост',
+      variant: 'danger',
+      onClick: async () => {
+        if (!confirm('Удалить пост? Отменить это нельзя.')) return;
+        try {
+          await api.deletePost(post.id);
+          toast('Пост удалён', 'ok');
+          location.hash = '#/';
+        } catch (err) {
+          toast(err.message, 'danger');
+        }
+      },
+    });
+  }
+
+  function dotFor(status) {
+    if (status === 'published') return 'ok';
+    if (status === 'failed' || status === 'partial') return 'danger';
+    if (status === 'scheduled' || status === 'review') return 'warn';
+    return 'idle';
   }
 
   /* ------------------------------ отрисовка ------------------------------ */
 
   function renderAll() {
     left.textContent = '';
-    left.append(sectionText(), sectionTargets(), sectionMedia(), sectionWhen(), sectionIssues());
+    const blocks = [
+      reviewNote(),
+      sectionFailures(),
+      sectionText(),
+      sectionTargets(),
+      sectionMedia(),
+      sectionWhen(),
+      sectionIssues(),
+    ].filter(Boolean);
+    left.append(...blocks);
     renderPreview();
+  }
+
+  /** Замечание владельца при возврате: без него автор не знает, что чинить. */
+  function reviewNote() {
+    if (!post.review_note) return null;
+    const p = el('div');
+    p.append(note('warn', 'Возвращён на доработку', post.review_note));
+    return p;
   }
 
   function sectionText() {
@@ -241,12 +382,70 @@ export function composerView(ctx, postId) {
         renderAll();
       });
       meta.append(select);
-      row.append(meta);
 
+      // Переопределение текста. Нужно прежде всего Threads с его 500 знаками:
+      // общий текст туда не влезает, а резать его во всех сетях — терять смысл.
+      if (active) {
+        const hasOverride = active.text_override !== null && active.text_override !== undefined;
+        const toggle = el('button', 'chip');
+        toggle.type = 'button';
+        toggle.setAttribute('aria-pressed', String(hasOverride));
+        toggle.textContent = hasOverride ? 'Свой текст' : 'Свой текст…';
+        toggle.title = 'Написать для этой площадки отдельный текст';
+        toggle.addEventListener('click', async () => {
+          active.text_override = hasOverride ? null : (post.body || '');
+          await save({ quiet: true });
+          renderAll();
+        });
+        meta.append(toggle);
+      }
+
+      row.append(meta);
       list.append(row);
+
+      if (active && active.text_override !== null && active.text_override !== undefined) {
+        list.append(overrideBox(spec, active));
+      }
     }
 
     p.append(list);
+    return p;
+  }
+
+  function overrideBox(spec, target) {
+    const box = el('div', 'override');
+    const head = el('div', 'override__head');
+    head.append(el('span', 'field__label', `Текст только для ${spec.title}`));
+    const counter = el('span', 'counter');
+    head.append(counter);
+    box.append(head);
+
+    const area = el('textarea', 'textarea');
+    area.value = target.text_override || '';
+    const limit = (post.media || []).length ? spec.text.limitWithMedia : spec.text.limit;
+    const refresh = () => {
+      counter.textContent = `${area.value.length}/${limit}`;
+      counter.className = `counter${area.value.length > limit ? ' counter--over' : ''}`;
+    };
+    refresh();
+    area.addEventListener('input', () => {
+      target.text_override = area.value;
+      refresh();
+      autosave();
+    });
+    box.append(area);
+    return box;
+  }
+
+  /** Что именно не ушло — в самом посте, а не только в общем журнале. */
+  function sectionFailures() {
+    const failed = (post.targets || []).filter((t) => t.status === 'failed' && t.error);
+    if (!failed.length) return null;
+    const p = panel('Не ушло');
+    for (const t of failed) {
+      const spec = specs.find((s) => s.id === t.platform);
+      p.append(note('danger', spec ? spec.title : t.platform, `${t.error} · попыток: ${t.attempts}`));
+    }
     return p;
   }
 

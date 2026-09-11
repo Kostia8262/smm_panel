@@ -30,13 +30,10 @@
 
       <form class="login__form" id="form" novalidate>
         <div class="field">
-          <label class="field__label" for="login">Логин</label>
-          <input class="input" id="login" name="login" autocomplete="username" required autofocus />
-        </div>
-
-        <div class="field">
-          <label class="field__label" for="password">Пароль</label>
-          <input class="input" id="password" name="password" type="password" autocomplete="current-password" required />
+          <label class="field__label" for="token">Токен доступа</label>
+          <input class="input" id="token" name="token" type="password" autocomplete="current-password"
+                 placeholder="48 знаков из письма" required autofocus spellcheck="false" />
+          <span class="field__hint">Токен выдаёт владелец в разделе «Сотрудники».</span>
         </div>
 
         <div class="login__error" id="error" hidden>
@@ -50,8 +47,8 @@
       </form>
 
       <p class="login__foot">
-        Пока идёт сборка вход временный: <code>admin</code> / <code>admin</code>.<br />
-        Смените пароль в разделе «Настройки», когда панель отдадут в работу.
+        Токен — это ключ от панели: он открывает её с любого устройства.
+        Потеряли — владелец перевыпустит, старый сразу перестанет работать.
       </p>
     </div>
   </main>
@@ -69,31 +66,39 @@
       errorBox.hidden = false;
     }
 
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      errorBox.hidden = true;
+    // Токен можно передать ссылкой: владелец отправляет её сотруднику, тот
+    // переходит и сразу внутри. Из адреса токен убираем, чтобы он не осел
+    // в истории браузера и в журнале прокси.
+    const fromLink = new URLSearchParams(location.search).get('token');
+    if (fromLink) {
+      history.replaceState(null, '', location.pathname);
+      enter(fromLink);
+    }
 
-      const login = form.login.value.trim();
-      const password = form.password.value;
-      if (!login || !password) {
-        showError('Заполните оба поля');
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      enter(form.token.value.trim());
+    });
+
+    async function enter(token) {
+      errorBox.hidden = true;
+      if (!token) {
+        showError('Введите токен');
         return;
       }
-
       submit.disabled = true;
       submit.textContent = 'Проверяю…';
-
       try {
         const res = await fetch('/api/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ login, password }),
+          body: JSON.stringify({ token }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           showError(data.error || 'Не удалось войти');
-          form.password.value = '';
-          form.password.focus();
+          form.token.value = '';
+          form.token.focus();
           return;
         }
         // Открытый редирект недопустим: возвращаемся только внутрь панели.
@@ -104,7 +109,7 @@
         submit.disabled = false;
         submit.textContent = 'Войти';
       }
-    });
+    }
   </script>
 </body>
 </html>

@@ -140,6 +140,61 @@ const MIGRATIONS = [
       CREATE INDEX idx_sessions_user ON sessions(user_id);
     `,
   },
+  {
+    // Вход по токену вместо пароля — как в админке школы: сотрудника заводит
+    // владелец, при создании выпускается токен, он же и есть ключ от панели.
+    // Таблицы пересобираются, а не правятся: `users.password_hash` объявлен
+    // NOT NULL, а SQLite не умеет снимать это ограничение через ALTER.
+    name: '004-staff-tokens',
+    sql: `
+      CREATE TABLE staff (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        name         TEXT NOT NULL,
+        role         TEXT NOT NULL DEFAULT 'smm',
+        token        TEXT NOT NULL,
+        active       INTEGER NOT NULL DEFAULT 1,
+        note         TEXT NOT NULL DEFAULT '',
+        last_seen_at TEXT,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE UNIQUE INDEX idx_staff_token ON staff(token);
+
+      DROP TABLE sessions;
+      DROP TABLE users;
+
+      CREATE TABLE sessions (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_hash TEXT NOT NULL UNIQUE,
+        staff_id   INTEGER NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+        user_agent TEXT NOT NULL DEFAULT '',
+        ip         TEXT NOT NULL DEFAULT '',
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX idx_sessions_staff ON sessions(staff_id);
+
+      -- Настройки панели. Пока одна: требовать ли утверждение владельцем
+      -- перед тем, как пост уйдёт в очередь.
+      CREATE TABLE settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+
+      INSERT INTO settings (key, value) VALUES ('require_approval', '1');
+    `,
+  },
+  {
+    // Пост, ждущий утверждения, и след того, кто его вёл.
+    name: '005-post-review',
+    sql: `
+      ALTER TABLE posts ADD COLUMN author_id INTEGER REFERENCES staff(id);
+      ALTER TABLE posts ADD COLUMN approved_by INTEGER REFERENCES staff(id);
+      ALTER TABLE posts ADD COLUMN approved_at TEXT;
+      ALTER TABLE posts ADD COLUMN review_note TEXT;
+    `,
+  },
 ];
 
 function migrate() {

@@ -227,6 +227,9 @@ export function calendarView(ctx) {
     top.append(el('span', `dot dot--${statusDot(post)}`));
     top.append(el('time', 'post__time', post.scheduled_at ? post.scheduled_at.slice(11, 16) : 'без даты'));
     body.append(top);
+    // Ждущий утверждения виден сразу: иначе владелец узнаёт о нём, только
+    // открыв пост, и пост стоит в очереди до вечера просто так.
+    if (post.status === 'review') top.append(el('span', 'tag tag--gold', 'ждёт'));
     body.append(el('div', 'post__title', post.title || firstLine(post.body) || 'Без названия'));
 
     const marks = el('div', 'post__marks');
@@ -259,8 +262,8 @@ export function calendarView(ctx) {
 function statusDot(post) {
   if (post.status === 'published') return 'ok';
   if (post.status === 'failed') return 'danger';
-  if (post.status === 'partial') return 'warn';
-  if (post.status === 'scheduled') return 'warn';
+  if (post.status === 'partial' || post.status === 'scheduled') return 'warn';
+  if (post.status === 'review') return 'warn';
   return 'idle';
 }
 
