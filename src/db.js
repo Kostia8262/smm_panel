@@ -460,6 +460,51 @@ const MIGRATIONS = [
       WHERE slug = 'child';
     `,
   },
+  {
+    /**
+     * Настоящие контакты FluentFox и «Дошколярика» — с их сайтов.
+     *
+     * Правим только нетронутые подписи: если владелец уже переписал текст
+     * под себя, миграция не имеет права его затирать. Сравнение с точным
+     * старым значением и есть эта проверка.
+     *
+     * Подписи держим короткими: в Threads всего 500 знаков, и четыре строки
+     * контактов съели бы четверть поста. Адреса и второй телефон сознательно
+     * оставлены сайту — в подписи только то, по чему пишут и звонят.
+     */
+    name: '012-real-contacts',
+    sql: `
+      UPDATE projects SET
+        subtitle = 'fluent-fox.site',
+        signature =
+          'FluentFox English School · Дніпро' || char(10) ||
+          'Запис на пробне заняття: https://fluent-fox.site' || char(10) ||
+          'Телефон, Viber, WhatsApp: +38 (095) 462-46-72' || char(10) ||
+          'Telegram: https://t.me/fluentfox_ua'
+      WHERE slug = 'fluentfox'
+        AND signature = 'FluentFox — англійська для дітей та підлітків' || char(10) ||
+                        'Запис на пробне заняття: +38 (095) 462-46-72';
+
+      UPDATE projects SET
+        subtitle = 'child.mycomputer.education',
+        signature =
+          'Дошколярик · центр розвитку дитини, Дніпро' || char(10) ||
+          'Запис: https://child.mycomputer.education/uk/' || char(10) ||
+          'Телефон, Viber, WhatsApp: +38 (095) 462-46-72'
+      WHERE slug = 'child'
+        AND signature = 'Дошколярик — підготовка до школи' || char(10) ||
+                        'Запис і питання: +38 (095) 462-46-72';
+
+      -- Домен FluentFox — наш: без него ссылки в его постах не подменялись бы
+      -- короткими и не считали переходы.
+      INSERT INTO settings (key, value)
+      VALUES ('own_domains', 'mycomputer.education,mycomputer.school,fluent-fox.site')
+      ON CONFLICT(key) DO UPDATE SET value =
+        CASE WHEN instr(settings.value, 'fluent-fox.site') > 0
+             THEN settings.value
+             ELSE settings.value || ',fluent-fox.site' END;
+    `,
+  },
 ];
 
 function migrate() {
