@@ -264,7 +264,11 @@ export function projectsView(ctx) {
         check.disabled = true;
         try {
           const res = await api.checkAccount(project.id, account.platform);
-          toast(`${account.title}: связь есть — ${res.account || res.chat || res.bot || 'ок'}`, 'ok');
+          // Связь есть, а публикация может не пройти: id аккаунта в карточке
+          // и у площадки бывают разными. Молчать об этом нельзя — зелёная
+          // всплывашка тогда врёт.
+          if (res.warning) toast(`${account.title}: ${res.warning}`, 'warn');
+          else toast(`${account.title}: связь есть — ${res.account || res.chat || res.bot || 'ок'}`, 'ok');
         } catch (err) {
           toast(`${account.title}: ${err.message}`, 'danger');
         } finally {

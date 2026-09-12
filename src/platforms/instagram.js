@@ -75,6 +75,18 @@ export async function remainingQuota(creds) {
   return { used: row.quota_usage ?? null, limit: row.config?.quota_total ?? null };
 }
 
+/**
+ * Дождаться, пока контейнер станет FINISHED.
+ *
+ * Ждать нужно **всегда**, не только у видео: картинку площадка тоже качает
+ * с нашего сервера не мгновенно, и `media_publish` по неготовому контейнеру
+ * отвечает «Media ID is not available». Именно на этом свалилась первая
+ * боевая проба 12.09.2026 — ожидание стояло только для видео и Reels.
+ *
+ * Шаг опроса разный: картинка готова за секунду-две, и десятисекундная пауза
+ * там означала бы десять секунд на ровном месте, а видео обрабатывается
+ * минутами, и частый опрос только жёг бы лимиты.
+ */
 async function waitReady(containerId, creds, { tries = 30, pauseMs = 10000 } = {}) {
   for (let i = 0; i < tries; i++) {
     const res = await fetch(
@@ -82,7 +94,10 @@ async function waitReady(containerId, creds, { tries = 30, pauseMs = 10000 } = {
     );
     const data = await res.json();
     if (data.status_code === 'FINISHED') return;
-    if (data.status_code === 'ERROR') throw new Error(`Контейнер не собрался: ${data.status}`);
+    // Причина отказа лежит в `status`, а не в `status_code`: там текстом
+    // написано, чего площадке не хватило — чаще всего она не смогла скачать
+    // файл по нашему публичному адресу.
+    if (data.status_code === 'ERROR') throw new Error(`Контейнер не собрался: ${data.status || 'без объяснения'}`);
     await new Promise((r) => setTimeout(r, pauseMs));
   }
   throw new Error('Контейнер не дошёл до готовности за отведённое время');
@@ -128,7 +143,8 @@ export async function publish({ text, media = [], formatId = 'feed-portrait', pu
     ));
   }
 
-  if (media.some((m) => m.kind === 'video') || isReel) await waitReady(containerId, creds);
+  const heavy = media.some((m) => m.kind === 'video') || isReel;
+  await waitReady(containerId, creds, heavy ? {} : { tries: 15, pauseMs: 2000 });
 
   const published = await call(`${user}/media_publish`, { creation_id: containerId }, creds);
   return { externalId: published.id, url: null };

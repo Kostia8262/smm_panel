@@ -24,6 +24,24 @@ export function getAdapter(platformId) {
 }
 
 /**
+ * Совпадает ли вписанный в панель id аккаунта с тем, что говорит площадка.
+ *
+ * Нужно потому, что проверка связи и публикация ходят по разным адресам:
+ * Threads отвечает на `me` при любом верном токене, а публикует на тот id,
+ * что вписан руками. Разошлись — «Проверить связь» показывает зелёное, а
+ * пост не уходит с невнятным «object does not exist».
+ *
+ * Возвращает текст предупреждения или null, если сверять нечего.
+ */
+export function idMismatch(creds = {}, checkResult = {}) {
+  const said = checkResult.id;
+  const saved = creds.userId;
+  if (!said || !saved) return null;
+  if (String(said) === String(saved)) return null;
+  return `Площадка говорит, что id аккаунта — ${said}, а в карточке вписан ${saved}. Публикация уйдёт на вписанный и не пройдёт.`;
+}
+
+/**
  * Что настроено у проекта, а чего не хватает.
  * @param {(platform: string) => object} credentialsFor
  */

@@ -67,11 +67,21 @@ export async function renew(creds) {
   return { values: { accessToken: data.access_token }, expiresIn: Number(data.expires_in) || null };
 }
 
+/**
+ * Проверка связи. Ходит на `me`, а не на вписанный id — площадка сама знает,
+ * чей токен ей дали.
+ *
+ * Отсюда важное: связь может быть, а публикация падать, потому что публикация
+ * идёт на `creds.userId`. Ровно это и случилось в первой боевой пробе. Поэтому
+ * возвращаем ещё и настоящий id — вызывающий обязан сверить его с тем, что
+ * вписано в карточку, иначе панель говорит «подключено» про то, что не
+ * работает.
+ */
 export async function check(creds) {
   const res = await fetch(`${API}/me?fields=id,username&access_token=${creds.accessToken}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
-  return { ok: true, account: data.username };
+  return { ok: true, account: data.username, id: data.id };
 }
 
 /**

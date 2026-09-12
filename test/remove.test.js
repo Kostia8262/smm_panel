@@ -67,3 +67,26 @@ test('Threads возвращает id удалённого — по нему и 
   assert.equal(res.ok, true);
   assert.equal(res.deletedId, '9001');
 });
+
+/* --------------------------- сверка id аккаунта --------------------------- */
+
+const { idMismatch } = await import('../src/platforms/index.js');
+
+test('расхождение id аккаунта ловится до публикации', () => {
+  // Случай из первой боевой пробы: связь есть, публикация падает с
+  // «object does not exist», потому что проверка ходит на me, а публикация
+  // на вписанный id.
+  const warn = idMismatch({ userId: '1953688268635017' }, { ok: true, account: 'academy', id: '7148' });
+  assert.match(warn, /1953688268635017/);
+  assert.match(warn, /7148/);
+
+  assert.equal(idMismatch({ userId: '7148' }, { id: '7148' }), null, 'совпало — молчим');
+  assert.equal(idMismatch({ userId: '7148' }, { ok: true }), null, 'площадка id не сказала — сверять нечего');
+  assert.equal(idMismatch({}, { id: '7148' }), null, 'в карточке пусто — это другая беда, не эта');
+});
+
+test('числа и строки не считаются расхождением', () => {
+  // id приходит из базы строкой, а от площадки числом — сравнение без
+  // приведения дало бы ложную тревогу на каждой проверке связи.
+  assert.equal(idMismatch({ userId: '7148' }, { id: 7148 }), null);
+});

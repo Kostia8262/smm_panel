@@ -18,7 +18,7 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const { db, getPost, listPosts, touchPost, log } = await import('./db.js');
 const { PLATFORMS, PLATFORM_LIST, safeZonesFor } = await import('./platforms/specs.js');
-const { connectionStatus, getAdapter } = await import('./platforms/index.js');
+const { connectionStatus, getAdapter, idMismatch } = await import('./platforms/index.js');
 const { validatePost } = await import('./validate.js');
 const { UPLOAD_DIR, storedName, kindOf, imageSize, cropFor, isAllowedMedia, removeStored } =
   await import('./media.js');
@@ -253,7 +253,11 @@ app.post('/api/projects/:id/accounts/:platform/check', requireAccess('platforms'
     return res.status(400).json({ ok: false, missing: adapter.missingConfig(creds) });
   }
   try {
-    res.json(await adapter.check(creds));
+    const result = await adapter.check(creds);
+    // Связь есть — но это ещё не значит, что пост уйдёт: публикация идёт на
+    // вписанный id, а проверка связи у Threads на `me`.
+    const warning = idMismatch(creds, result);
+    res.json(warning ? { ...result, warning } : result);
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });
   }
