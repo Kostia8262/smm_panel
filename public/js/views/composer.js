@@ -552,7 +552,14 @@ export function composerView(ctx, postId) {
       const list = el('div', 'media');
       for (const m of post.media) {
         const item = el('div', 'media__item');
-        if (m.kind === 'video') {
+        // Файл опубликованного поста снимается с диска (retention.js):
+        // ссылки больше нет, и без заглушки здесь была бы битая картинка.
+        if (m.purged) {
+          const gone = el('div', 'media__gone');
+          gone.append(icon('check', { size: 18 }));
+          gone.append(el('span', null, 'снят после публикации'));
+          item.append(gone);
+        } else if (m.kind === 'video') {
           const v = el('video');
           v.src = m.url;
           v.muted = true;
@@ -863,7 +870,14 @@ export function composerView(ctx, postId) {
     const crop = el('div', 'frame__crop focus-pick');
     crop.style.aspectRatio = `${format.w} / ${format.h}`;
 
-    if (media) {
+    if (media?.purged) {
+      // Пост ушёл во все сети, и кадр снят с диска, чтобы не занимать место
+      // общего с сайтами сервера. Сам пост живёт в сетях — там его и смотреть.
+      const holder = el('div', 'frame__empty');
+      holder.append(icon('check', { size: 26 }));
+      holder.append(el('span', null, 'Пост опубликован, файл снят с сервера. Кадр — в самих сетях.'));
+      crop.append(holder);
+    } else if (media) {
       const node = media.kind === 'video' ? el('video') : el('img');
       node.className = 'frame__media';
       node.src = media.url;

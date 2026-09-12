@@ -742,6 +742,20 @@ const MIGRATIONS = [
       UPDATE project_accounts SET token_saved_at = strftime('%Y-%m-%dT%H:%M:%SZ', updated_at);
     `,
   },
+  {
+    /*
+     * Файл кадра снят с диска после публикации (см. retention.js).
+     *
+     * Строка остаётся: это история того, что уходило в сети. Интерфейсу
+     * отметка говорит, что картинки по ссылке больше нет и рисовать битый
+     * кадр не надо.
+     */
+    name: '018-media-purged',
+    sql: `
+      ALTER TABLE media ADD COLUMN purged_at TEXT;
+      CREATE INDEX idx_media_stored ON media(stored_name);
+    `,
+  },
 ];
 
 function migrate() {
@@ -808,7 +822,7 @@ export function listPosts({ from = null, to = null, projectId = null } = {}) {
   sql += ' ORDER BY scheduled_at IS NULL, scheduled_at';
   const posts = db.prepare(sql).all(...params);
   const targets = db.prepare('SELECT * FROM post_targets').all();
-  const media = db.prepare('SELECT id, post_id, kind, stored_name, mime FROM media ORDER BY position').all();
+  const media = db.prepare('SELECT id, post_id, kind, stored_name, mime, purged_at FROM media ORDER BY position').all();
   for (const p of posts) {
     p.targets = targets.filter((t) => t.post_id === p.id);
     p.media = media.filter((m) => m.post_id === p.id);

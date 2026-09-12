@@ -20,8 +20,8 @@ const { db, getPost, listPosts, touchPost, log } = await import('./db.js');
 const { PLATFORMS, PLATFORM_LIST, safeZonesFor } = await import('./platforms/specs.js');
 const { connectionStatus, getAdapter, idMismatch } = await import('./platforms/index.js');
 const { validatePost } = await import('./validate.js');
-const { UPLOAD_DIR, storedName, kindOf, imageSize, cropFor, isAllowedMedia, removeStored } =
-  await import('./media.js');
+const { UPLOAD_DIR, storedName, kindOf, imageSize, cropFor, isAllowedMedia } = await import('./media.js');
+const retention = await import('./retention.js');
 const { publishPost } = await import('./queue/publish.js');
 const { installAuth, requireAccess } = await import('./auth.js');
 const { tooManyAttempts, clearAttempts } = await import('./ratelimit.js');
@@ -390,13 +390,36 @@ app.delete('/api/posts/:id', (req, res) => {
     return res.json({ ok: true, soft: true });
   }
   // Ничего не выходило — уносим совсем, чтобы черновики не копились.
+  // Строки кадров уходят каскадом, а файлы на диске каскад не трогает: без
+  // этого они лежали сиротами до суточной уборки. Снимаем через retention —
+  // у вечнозелёной копии может оказаться тот же файл.
+  const files = post.media.map((m) => m.stored_name);
   db.prepare('DELETE FROM posts WHERE id = ?').run(id);
+  for (const name of files) retention.releaseFile(name);
   res.json({ ok: true, soft: false });
 });
 
 /* ----------------------------------- медиа ----------------------------------- */
 
-app.post('/api/posts/:id/media', upload.array('files', 20), (req, res) => {
+/**
+ * Квота на загрузки — до того, как multer запишет файл на диск.
+ *
+ * Проверять после записи поздно: полгигабайта уже легли на общий с сайтами
+ * сети диск. Размер берём из заголовка запроса — он чуть больше суммы файлов
+ * из-за обёртки multipart, и ошибка в эту сторону безопасна.
+ */
+function uploadQuota(req, res, next) {
+  const incoming = Number(req.headers['content-length'] || 0);
+  const { ok, used, quota } = retention.quotaCheck(incoming);
+  if (ok) return next();
+  const mb = (n) => Math.round(n / 1048576);
+  log('warn', `загрузка отклонена по квоте: занято ${mb(used)} из ${mb(quota)} МБ`);
+  res.status(507).json({
+    error: `Место под файлы кончилось: занято ${mb(used)} из ${mb(quota)} МБ. Файлы опубликованных постов снимаются сами — подождите или удалите лишние черновики.`,
+  });
+}
+
+app.post('/api/posts/:id/media', uploadQuota, upload.array('files', 20), (req, res) => {
   const id = Number(req.params.id);
   if (!getPost(id)) return res.status(404).json({ error: 'Пост не найден' });
   const insert = db.prepare(`INSERT INTO media
@@ -428,9 +451,13 @@ app.delete('/api/media/:id', (req, res) => {
   // Файл с диска снимается вместе со строкой. Раньше оставался: снятый с
   // поста кадр по-прежнему открывался по своей публичной ссылке — навсегда
   // и для кого угодно, кто эту ссылку однажды видел.
+  //
+  // Но не всегда: вечнозелёная копия ссылается на тот же файл, и прямое
+  // удаление стирало кадр у поста, который ещё ждёт своей очереди. Решает
+  // retention — файл уходит, только если больше никому не нужен.
   const row = db.prepare('SELECT stored_name FROM media WHERE id = ?').get(id);
   db.prepare('DELETE FROM media WHERE id = ?').run(id);
-  if (row) removeStored(row.stored_name);
+  if (row) retention.releaseFile(row.stored_name);
   res.json({ ok: true });
 });
 
@@ -999,7 +1026,10 @@ function decorate(post) {
   post.signatureEnabled = project ? project.signatureEnabled : false;
   post.media = (post.media || []).map((m) => ({
     ...m,
-    url: `${base}/media/${m.stored_name}`,
+    // Снятый после публикации файл по ссылке больше не открывается —
+    // интерфейс рисует вместо него заглушку, а не битую картинку.
+    purged: Boolean(m.purged_at),
+    url: m.purged_at ? null : `${base}/media/${m.stored_name}`,
     crops: Object.fromEntries(
       (post.targets || []).map((t) => {
         const format = PLATFORMS[t.platform]?.formats.find((f) => f.id === t.format_id);

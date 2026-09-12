@@ -15,6 +15,7 @@ import { shortenLinks } from '../links.js';
 import { withSignature, signatureFor } from '../signature.js';
 import { getSetting } from '../staff.js';
 import { UPLOAD_DIR } from '../media.js';
+import { fileExists } from '../retention.js';
 
 const MAX_ATTEMPTS = 3;
 
@@ -34,6 +35,25 @@ export async function publishPost(postId) {
     log('error', `у поста #${postId} нет проекта — публиковать некуда`, { postId });
     db.prepare("UPDATE posts SET status = 'failed' WHERE id = ?").run(postId);
     return { status: 'failed', results: [{ error: 'не указан проект' }] };
+  }
+
+  // Файлы на месте? Площадки скачивают кадр по ссылке сами, и пропавший файл
+  // они вернули бы невнятным «не удалось загрузить медиа» — а причина у нас.
+  // Уборка (retention.js) живому посту файл не снимает, так что сюда попадает
+  // только чрезвычайное: руками почищенный каталог, восстановление из бэкапа
+  // без загрузок. Попытки при этом не тратим — чинить здесь человеку.
+  const missing = post.media.filter((m) => m.purged_at || !fileExists(m.stored_name));
+  if (missing.length) {
+    const names = missing.map((m) => m.original_name).join(', ');
+    const message = `нет файла на сервере: ${names} — загрузите кадр заново`;
+    for (const target of post.targets) {
+      if (target.status === 'published' || target.status === 'needs_check') continue;
+      markFailed(target, message);
+    }
+    log('error', `пост #${postId} не отправлен: ${message}`, { postId });
+    const anyDone = post.targets.some((t) => t.status === 'published');
+    db.prepare('UPDATE posts SET status = ? WHERE id = ?').run(anyDone ? 'partial' : 'failed', postId);
+    return { status: anyDone ? 'partial' : 'failed', results: [{ error: message }] };
   }
 
   db.prepare("UPDATE posts SET status = 'publishing', publishing_since = datetime('now') WHERE id = ?").run(postId);

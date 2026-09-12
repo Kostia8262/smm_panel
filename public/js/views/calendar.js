@@ -202,7 +202,12 @@ export function calendarView(ctx) {
     const first = (post.media || [])[0];
     if (first) {
       const thumb = el('div', 'post__thumb');
-      if (first.kind === 'video') {
+      // Снятый после публикации файл по ссылке не отдаётся — показываем знак
+      // «вышло», а не битую картинку.
+      if (first.purged_at) {
+        thumb.append(icon('check', { size: 20 }));
+        thumb.title = 'Опубликован, файл снят с сервера';
+      } else if (first.kind === 'video') {
         thumb.append(icon('video', { size: 20 }));
       } else {
         const img = el('img');
