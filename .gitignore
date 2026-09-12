@@ -11,3 +11,7 @@ data/
 .env
 *.log
 .DS_Store
+
+# Личные настройки Claude Code: там разрешения на ssh к боевому серверу.
+# Репозиторий публичный — адресу VPS в нём не место.
+.claude/settings.local.json
