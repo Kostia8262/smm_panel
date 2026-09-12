@@ -26,7 +26,7 @@
 import { db, log } from './db.js';
 import { getAdapter } from './platforms/index.js';
 import * as facebook from './platforms/facebook.js';
-import { listProjects, credentialsFor, accountSavedAt, saveAccount } from './projects.js';
+import { listProjects, credentialsFor, tokenSavedAt, saveAccount } from './projects.js';
 
 /**
  * Что известно про срок жизни у каждой площадки.
@@ -145,13 +145,11 @@ export async function readExpiry(projectId, platform, creds) {
   }
 
   if (policy.kind === 'estimate') {
-    const savedAt = accountSavedAt(projectId, platform);
-    if (!savedAt) return { expiresAt: null, estimated: false };
-    // Приписка 'Z' здесь верна, в отличие от времени постов: `updated_at`
-    // пишется через `datetime('now')`, а это по определению UTC. У постов
-    // время местное, и такая же приписка там однажды сдвинула публикацию
-    // на три часа — не переносить отсюда туда и наоборот.
-    const at = new Date(new Date(savedAt.replace(' ', 'T') + 'Z').getTime() + policy.days * DAY_MS);
+    // Отсчёт от даты выпуска токена, а не от последней правки карточки:
+    // поправили id аккаунта — токен от этого моложе не стал.
+    const issuedAt = tokenSavedAt(projectId, platform);
+    if (!issuedAt) return { expiresAt: null, estimated: false };
+    const at = new Date(new Date(issuedAt).getTime() + policy.days * DAY_MS);
     return { expiresAt: at.toISOString(), estimated: true };
   }
 

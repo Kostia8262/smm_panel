@@ -13,6 +13,15 @@
  *
  * Секретные поля (токены) тоже можно, но значение уйдёт в историю командной
  * строки — для них лучше карточка проекта в панели.
+ *
+ * Второй режим — дата выпуска токена, от которой сторож считает срок там, где
+ * площадка его не отдаёт (Threads). Нужна, когда токен выпустили раньше, чем
+ * вписали в панель:
+ *
+ *   node tools/set-account.mjs --project 1 --platform threads --token-issued 2026-09-11T00:00:00+03:00
+ *
+ * Точного часа обычно никто не помнит — берите начало суток: ранняя дата
+ * заставит сторожа продлить на несколько часов раньше, поздняя — опоздать.
  */
 
 import { existsSync } from 'node:fs';
@@ -23,7 +32,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const envFile = resolve(here, '../.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
-const { listProjects, credentialsFor, saveAccount, ACCOUNT_FIELDS } = await import('../src/projects.js');
+const { listProjects, credentialsFor, saveAccount, ACCOUNT_FIELDS, tokenSavedAt, setTokenSavedAt } =
+  await import('../src/projects.js');
+const { DAY_MS, TOKEN_POLICY } = await import('../src/tokens.js');
 
 const args = process.argv.slice(2);
 const flag = (name) => {
@@ -35,15 +46,40 @@ const projectId = Number(flag('project'));
 const platform = flag('platform');
 const field = flag('field');
 const value = flag('value');
-
-if (!projectId || !platform || !field || value === null) {
-  console.error('Нужны все четыре: --project, --platform, --field, --value');
-  process.exit(1);
-}
+const issued = flag('token-issued');
 
 const project = listProjects().find((p) => p.id === projectId);
 if (!project) {
-  console.error('Проект не найден');
+  console.error('Проект не найден (--project)');
+  process.exit(1);
+}
+
+if (issued !== null) {
+  const before = tokenSavedAt(projectId, platform);
+  let after;
+  try {
+    after = setTokenSavedAt(projectId, platform, issued);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+
+  console.log(`${project.title} · ${platform} · дата выпуска токена`);
+  console.log(`  было:  ${before || '— пусто —'}`);
+  console.log(`  стало: ${after}`);
+
+  const days = TOKEN_POLICY[platform]?.kind === 'estimate' ? TOKEN_POLICY[platform].days : null;
+  if (days) {
+    const dies = new Date(new Date(after).getTime() + days * DAY_MS).toISOString();
+    console.log(`  токен умрёт по расчёту: ${dies}`);
+  } else {
+    console.log('  у этой площадки срок читается у самой площадки — дата выпуска на расчёт не влияет');
+  }
+  process.exit(0);
+}
+
+if (!platform || !field || value === null) {
+  console.error('Нужны --platform, --field и --value (или --token-issued)');
   process.exit(1);
 }
 

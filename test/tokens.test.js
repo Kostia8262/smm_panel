@@ -254,11 +254,9 @@ test('сторож продлевает сам, когда срок подошё
   });
   const calls = fakeThreads({ refresh: { access_token: 'auto'.padEnd(30, 'a'), expires_in: 5183944 } });
 
-  // Токен, вписанный 50 дней назад: по расчёту ему остаётся 10 дней.
+  // Токен, выпущенный 50 дней назад: по расчёту ему остаётся 10 дней.
   projects.saveAccount(projectId, 'threads', { userId: '7', accessToken: 'aging'.padEnd(30, 'g') });
-  db.prepare(
-    "UPDATE project_accounts SET updated_at = datetime('now', '-50 days') WHERE project_id = ? AND platform = 'threads'"
-  ).run(projectId);
+  projects.setTokenSavedAt(projectId, 'threads', new Date(Date.now() - 50 * DAY_MS));
 
   await sweepTokens();
 
@@ -295,9 +293,7 @@ test('неудачное продление оставляет тревогу, �
   fakeThreads({ refresh: { error: 'The session has been invalidated' } });
 
   projects.saveAccount(projectId, 'threads', { userId: '7', accessToken: 'doomed'.padEnd(30, 'd') });
-  db.prepare(
-    "UPDATE project_accounts SET updated_at = datetime('now', '-52 days') WHERE project_id = ? AND platform = 'threads'"
-  ).run(projectId);
+  projects.setTokenSavedAt(projectId, 'threads', new Date(Date.now() - 52 * DAY_MS));
 
   await sweepTokens();
 
@@ -313,9 +309,7 @@ test('мёртвый токен продлевать не пытаемся', asy
   const calls = fakeThreads({ checkFails: true, refresh: { access_token: 'x', expires_in: 100 } });
 
   projects.saveAccount(projectId, 'threads', { userId: '7', accessToken: 'dead'.padEnd(30, 'x') });
-  db.prepare(
-    "UPDATE project_accounts SET updated_at = datetime('now', '-55 days') WHERE project_id = ? AND platform = 'threads'"
-  ).run(projectId);
+  projects.setTokenSavedAt(projectId, 'threads', new Date(Date.now() - 55 * DAY_MS));
 
   await sweepTokens();
 
@@ -324,4 +318,66 @@ test('мёртвый токен продлевать не пытаемся', asy
   assert.ok(!calls.some((c) => c.includes('refresh_access_token')));
   const row = tokenHealth({ projectId }).find((t2) => t2.platform === 'threads');
   assert.equal(row.state, 'broken');
+});
+
+/* --------------------------- дата выпуска токена --------------------------- */
+
+test('правка id аккаунта не молодит токен', async () => {
+  // Случай 12.09.2026: поправили id аккаунта Threads, и расчётный срок
+  // сбросился на «60 дней от сегодня», хотя токен остался прежним.
+  projects.saveAccount(projectId, 'threads', { userId: '1', accessToken: 'steady'.padEnd(30, 's') });
+  const issued = projects.setTokenSavedAt(projectId, 'threads', new Date(Date.now() - 30 * DAY_MS));
+
+  projects.saveAccount(projectId, 'threads', { userId: '29062313960036757' });
+
+  assert.equal(projects.tokenSavedAt(projectId, 'threads'), issued, 'дата выпуска обязана устоять');
+  const { expiresAt } = await readExpiry(projectId, 'threads', {});
+  const left = daysLeft(expiresAt, new Date());
+  assert.ok(left >= 29 && left <= 30, `ожидалось ~30 дней, получено ${left}`);
+});
+
+test('тот же токен, присланный заново, — не новый', () => {
+  projects.saveAccount(projectId, 'threads', { userId: '1', accessToken: 'same'.padEnd(30, 'm') });
+  const issued = projects.setTokenSavedAt(projectId, 'threads', new Date(Date.now() - 20 * DAY_MS));
+
+  // Форма или скрипт могут прислать уже сохранённое значение целиком.
+  projects.saveAccount(projectId, 'threads', { accessToken: 'same'.padEnd(30, 'm') });
+  assert.equal(projects.tokenSavedAt(projectId, 'threads'), issued);
+});
+
+test('новый токен сдвигает дату выпуска на сегодня', () => {
+  projects.saveAccount(projectId, 'threads', { userId: '1', accessToken: 'before'.padEnd(30, 'b') });
+  projects.setTokenSavedAt(projectId, 'threads', new Date(Date.now() - 40 * DAY_MS));
+
+  projects.saveAccount(projectId, 'threads', { accessToken: 'after'.padEnd(30, 'a') });
+
+  const age = Date.now() - new Date(projects.tokenSavedAt(projectId, 'threads')).getTime();
+  assert.ok(age < 60000, 'дата должна стать сегодняшней');
+});
+
+test('дату выпуска нельзя выставить в будущее или мусором', () => {
+  projects.saveAccount(projectId, 'threads', { userId: '1', accessToken: 'guard'.padEnd(30, 'u') });
+
+  // Будущая дата подарила бы токену лишние дни — ровно та ошибка, от которой
+  // эта дата и заведена.
+  assert.throws(() => projects.setTokenSavedAt(projectId, 'threads', new Date(Date.now() + 2 * DAY_MS)), /будущем/);
+  assert.throws(() => projects.setTokenSavedAt(projectId, 'threads', 'вчера'), /Не понимаю/);
+  assert.throws(() => projects.setTokenSavedAt(projectId, 'tiktok', new Date()), /нет доступов/);
+});
+
+test('продление сторожем ставит дату выпуска на день продления', async (t) => {
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  fakeThreads({ refresh: { access_token: 'renewed'.padEnd(30, 'r'), expires_in: 5183944 } });
+
+  projects.saveAccount(projectId, 'threads', { userId: '7', accessToken: 'old-one'.padEnd(30, 'o') });
+  projects.setTokenSavedAt(projectId, 'threads', new Date(Date.now() - 50 * DAY_MS));
+
+  await renewToken(projectId, 'threads');
+
+  // Иначе следующий обход снова посчитал бы срок от старой даты и продлевал
+  // токен при каждом заходе.
+  const age = Date.now() - new Date(projects.tokenSavedAt(projectId, 'threads')).getTime();
+  assert.ok(age < 60000);
 });

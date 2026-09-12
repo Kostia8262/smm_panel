@@ -16,30 +16,34 @@ import { PLATFORMS } from './platforms/specs.js';
 /**
  * Какие поля нужны каждой площадке. Отсюда же рисуется форма в карточке
  * проекта — второго списка полей в интерфейсе нет.
+ *
+ * `token: true` — поле, смена которого означает новый токен. От него, и
+ * только от него, отсчитывается срок жизни там, где площадка срок не отдаёт.
+ * Секрет приложения тоже секретный, но токена он не меняет.
  */
 export const ACCOUNT_FIELDS = {
   telegram: [
-    { key: 'botToken', title: 'Токен бота', hint: 'Выдаёт @BotFather', secret: true },
+    { key: 'botToken', title: 'Токен бота', hint: 'Выдаёт @BotFather', secret: true, token: true },
     { key: 'chatId', title: 'Канал', hint: '@имя_канала или числовой id', secret: false },
   ],
   threads: [
     { key: 'userId', title: 'ID аккаунта', secret: false },
-    { key: 'accessToken', title: 'Токен доступа', hint: 'Живёт 60 дней', secret: true },
+    { key: 'accessToken', title: 'Токен доступа', hint: 'Живёт 60 дней', secret: true, token: true },
   ],
   instagram: [
     { key: 'userId', title: 'ID аккаунта', hint: 'Business или Creator', secret: false },
-    { key: 'pageToken', title: 'Токен страницы', hint: 'Тот же, что у Facebook', secret: true },
+    { key: 'pageToken', title: 'Токен страницы', hint: 'Тот же, что у Facebook', secret: true, token: true },
   ],
   facebook: [
     { key: 'pageId', title: 'ID страницы', secret: false },
-    { key: 'pageToken', title: 'Токен страницы', hint: 'Бессрочный — у system user', secret: true },
+    { key: 'pageToken', title: 'Токен страницы', hint: 'Бессрочный — у system user', secret: true, token: true },
     { key: 'appId', title: 'ID приложения', secret: false },
     { key: 'appSecret', title: 'Секрет приложения', secret: true },
   ],
   tiktok: [
     { key: 'clientKey', title: 'Client key', secret: false },
     { key: 'clientSecret', title: 'Client secret', secret: true },
-    { key: 'accessToken', title: 'Токен доступа', secret: true },
+    { key: 'accessToken', title: 'Токен доступа', secret: true, token: true },
     { key: 'refreshToken', title: 'Refresh token', secret: true },
     { key: 'privacy', title: 'Приватность', hint: 'SELF_ONLY до аудита, потом PUBLIC_TO_EVERYONE', secret: false },
     { key: 'domainVerified', title: 'Домен подтверждён', hint: 'true или false', secret: false },
@@ -125,16 +129,40 @@ export function credentialsFor(projectId, platform) {
 }
 
 /**
- * Когда доступы этой площадки правили в последний раз.
+ * Когда выпущен нынешний токен, в ISO с зоной.
  *
- * Нужно сторожу токенов: у Threads срок жизни негде спросить, и единственная
- * точка отсчёта — день, когда токен вписали в панель.
+ * Нужно сторожу: у Threads срок жизни негде спросить, и единственная точка
+ * отсчёта — день выпуска токена. Правка остальных полей эту дату не трогает.
  */
-export function accountSavedAt(projectId, platform) {
+export function tokenSavedAt(projectId, platform) {
   const row = db
-    .prepare('SELECT updated_at FROM project_accounts WHERE project_id = ? AND platform = ?')
+    .prepare('SELECT token_saved_at FROM project_accounts WHERE project_id = ? AND platform = ?')
     .get(projectId, platform);
-  return row?.updated_at || null;
+  return row?.token_saved_at || null;
+}
+
+/**
+ * Выставить дату выпуска токена руками.
+ *
+ * Нужно, когда токен выпустили раньше, чем вписали в панель: иначе расчётный
+ * срок вышел бы длиннее настоящего, и продление опоздало бы. Ошибиться лучше в
+ * сторону более ранней даты — это лишь заставит сторожа продлить на несколько
+ * часов раньше, а более поздняя дата заставит его опоздать.
+ */
+export function setTokenSavedAt(projectId, platform, when) {
+  const at = new Date(when);
+  if (Number.isNaN(at.getTime())) throw new Error(`Не понимаю дату «${when}»`);
+  if (at.getTime() > Date.now() + 60000) throw new Error('Дата выпуска токена не может быть в будущем');
+
+  const info = db
+    .prepare('UPDATE project_accounts SET token_saved_at = ? WHERE project_id = ? AND platform = ?')
+    .run(at.toISOString(), projectId, platform);
+  if (!info.changes) throw new Error(`У проекта #${projectId} нет доступов ${platform}`);
+
+  // Срок пересчитается — старая отметка сторожа больше не верна.
+  db.prepare('DELETE FROM token_health WHERE project_id = ? AND platform = ?').run(projectId, platform);
+  log('info', `дата выпуска токена ${platform} у проекта #${projectId}: ${at.toISOString()}`);
+  return at.toISOString();
 }
 
 export function saveAccount(projectId, platform, values) {
@@ -150,11 +178,26 @@ export function saveAccount(projectId, platform, values) {
     merged[field.key] = incoming === undefined || incoming === '' ? current[field.key] || '' : String(incoming).trim();
   }
 
+  // Дата выпуска токена сдвигается, только когда сменился сам токен. Тот же
+  // токен, присланный повторно, — не новый: иначе сохранение формы с
+  // заполненным полем незаметно продлевало бы расчётный срок.
+  const tokenField = fields.find((f) => f.token);
+  const tokenChanged = Boolean(
+    tokenField && merged[tokenField.key] && merged[tokenField.key] !== (current[tokenField.key] || '')
+  );
+  const previous = db
+    .prepare('SELECT token_saved_at FROM project_accounts WHERE project_id = ? AND platform = ?')
+    .get(projectId, platform);
+  const tokenAt = tokenChanged ? new Date().toISOString() : previous?.token_saved_at || null;
+
   db.prepare(
-    `INSERT INTO project_accounts (project_id, platform, config, updated_at)
-     VALUES (?, ?, ?, datetime('now'))
-     ON CONFLICT(project_id, platform) DO UPDATE SET config = excluded.config, updated_at = datetime('now')`
-  ).run(projectId, platform, JSON.stringify(encryptFields(merged)));
+    `INSERT INTO project_accounts (project_id, platform, config, updated_at, token_saved_at)
+     VALUES (?, ?, ?, datetime('now'), ?)
+     ON CONFLICT(project_id, platform) DO UPDATE SET
+       config = excluded.config,
+       updated_at = datetime('now'),
+       token_saved_at = excluded.token_saved_at`
+  ).run(projectId, platform, JSON.stringify(encryptFields(merged)), tokenAt);
 
   // Отметку сторожа снимаем: вписали новый токен — старое предупреждение
   // врёт, а ждать шести часов до следующего обхода, глядя на красную плашку
