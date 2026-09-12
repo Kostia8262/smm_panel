@@ -72,6 +72,11 @@ for (const project of projects) {
       continue;
     }
 
+    if (scopes === 'unknown') {
+      console.log(`  ${platform}: список разрешений площадка не отдаёт — проверяется только пробой`);
+      console.log(`     важно: ${need.note}`);
+      continue;
+    }
     if (!scopes) {
       console.log(`  ${platform}: площадка не отдала список разрешений`);
       continue;
@@ -97,10 +102,10 @@ for (const project of projects) {
  * «неизвестно», а не выдуманный список.
  */
 async function readScopes(platform, token, projectId) {
-  if (platform === 'threads') {
-    console.log('  threads: список разрешений площадка не отдаёт — проверяется только пробой');
-    return null;
-  }
+  // Список разрешений Threads не отдаёт ни одним вызовом: `threads_delete`
+  // проверяется только пробой удаления. Возвращаем признак «спрашивать
+  // негде», а печатает это вызывающий — иначе выходили две строки подряд.
+  if (platform === 'threads') return 'unknown';
 
   const fb = credentialsFor(projectId, 'facebook');
   if (!fb.appId || !fb.appSecret) throw new Error('не заполнены ID и секрет приложения в карточке Facebook');
