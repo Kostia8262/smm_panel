@@ -66,8 +66,10 @@ export async function remove(externalId, creds) {
 
 /** Суточный лимит у аккаунта свой — читаем, а не гадаем по документации. */
 export async function remainingQuota(creds) {
+  // Без явного `fields` площадка отдаёт только использованное, без размера
+  // лимита — проба 12.09.2026 показывала «5 из ?».
   const res = await fetch(
-    `${API}/${creds.userId}/content_publishing_limit?access_token=${creds.pageToken}`
+    `${API}/${creds.userId}/content_publishing_limit?fields=config,quota_usage&access_token=${creds.pageToken}`
   );
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
