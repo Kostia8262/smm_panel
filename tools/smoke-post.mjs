@@ -43,13 +43,24 @@ const flag = (name, fallback = null) => {
   const i = args.indexOf(`--${name}`);
   return i === -1 ? fallback : args[i + 1];
 };
+// Ключ, который можно повторить: `--image a.jpg --image b.jpg` — карусель.
+const flags = (name) => args.flatMap((a, i) => (a === `--${name}` && args[i + 1] ? [args[i + 1]] : []));
 const has = (name) => args.includes(`--${name}`);
 
 const projectId = Number(flag('project')) || listProjects()[0]?.id;
 const platforms = String(flag('platforms', 'threads,facebook')).split(',').map((s) => s.trim()).filter(Boolean);
-const image = flag('image');
+const images = flags('image');
+const video = flag('video');
+// Раскладка площадки: feed-square, feed-portrait, story, reels. Без неё
+// адаптер выбирает ленту — как делала панель до появления форматов.
+const formatId = flag('format');
 const waitSec = Number(flag('wait', 45));
 const keep = has('keep');
+
+const media = [
+  ...(video ? [{ kind: 'video', url: video }] : []),
+  ...images.map((url) => ({ kind: 'image', url })),
+];
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const text = flag('text') || `Технічна перевірка публікації, ${new Date().toLocaleString('uk-UA')}. Пост буде видалено автоматично.`;
@@ -62,6 +73,7 @@ if (!project) {
 
 console.log(`Проект: ${project.title}`);
 console.log(`Площадки: ${platforms.join(', ')}`);
+console.log(`Формат: ${formatId || 'лента'} · файлов: ${media.length}${video ? ' (есть видео)' : ''}`);
 console.log(`Текст: ${text}`);
 console.log(keep ? 'Пост останется висеть — снимать руками.' : `Пост будет снят через ${waitSec} с.`);
 console.log('');
@@ -69,9 +81,24 @@ console.log('');
 // Instagram текстом не умеет вовсе — это не наша недоработка, а устройство
 // площадки: контейнер требует image_url или video_url. Ловим до публикации,
 // иначе проба свалится на середине, уже наследив в двух других сетях.
-if (platforms.includes('instagram') && !image) {
-  console.error('Instagram не принимает пост без картинки. Дайте --image с публичным адресом JPEG.');
+if (platforms.includes('instagram') && !media.length) {
+  console.error('Instagram не принимает пост без медиа. Дайте --image (JPEG) или --video.');
   process.exit(1);
+}
+if (formatId === 'reels' && !video) {
+  console.error('Reels без видео не бывает. Дайте --video с публичным адресом MP4.');
+  process.exit(1);
+}
+
+// Сколько публикаций Instagram осталось на сутки: проба форматов тратит их
+// пачкой, а лимит у аккаунта общий с живой работой СММщика.
+if (platforms.includes('instagram')) {
+  try {
+    const q = await getAdapter('instagram').remainingQuota(credentialsFor(projectId, 'instagram'));
+    console.log(`Instagram: использовано публикаций за сутки ${q.used ?? '?'} из ${q.limit ?? '?'}`);
+  } catch (err) {
+    console.log(`Instagram: лимит прочитать не удалось — ${err.message}`);
+  }
 }
 
 const published = [];
@@ -90,10 +117,11 @@ for (const platform of platforms) {
   try {
     const out = await adapter.publish({
       text,
-      media: image ? [{ kind: 'image', url: image }] : [],
+      media,
+      formatId,
       // Адаптеры сами не знают, где лежит файл: снаружи им дают готовый адрес.
-      // Здесь это просто тот адрес, что передали ключом --image.
-      publicUrl: () => image,
+      // Здесь это тот адрес, что передан ключом --image или --video.
+      publicUrl: (m) => m.url,
       creds,
     });
     published.push({ platform, externalId: out.externalId, url: out.url });
