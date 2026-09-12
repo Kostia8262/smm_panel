@@ -125,6 +125,24 @@ export async function insights(creds, mediaId) {
   return out;
 }
 
+/**
+ * Удалить свой пост.
+ *
+ * Требует отдельного разрешения `threads_delete` — одного `threads_basic`
+ * мало. Удалять можно только посты того аккаунта, чьим токеном ходим.
+ *
+ * Ограничение площадки: **сто удалений в сутки на аккаунт**. Для панели это
+ * не помеха, но чистить историю пачкой через неё не выйдет.
+ */
+export async function remove(externalId, creds) {
+  const res = await fetch(`${API}/${externalId}?access_token=${creds.accessToken}`, { method: 'DELETE' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    throw new Error(`Threads удаление: ${data.error?.message || res.status}`);
+  }
+  return { ok: Boolean(data.success ?? true), deletedId: data.deleted_id || externalId };
+}
+
 export async function publish({ text, media = [], publicUrl, creds }) {
   const user = creds.userId;
   let containerId;

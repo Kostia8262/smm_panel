@@ -44,6 +44,26 @@ export async function check(creds) {
   return { ok: true, account: data.username };
 }
 
+/**
+ * Удалить публикацию.
+ *
+ * Работает только у Instagram, подключённого «входом через Facebook» — то
+ * есть ровно у нашего случая. Требует `instagram_manage_contents`: это
+ * отдельное разрешение, которого нет у токена, выпущенного только под
+ * публикацию, и добавлять его нужно в сценарий использования приложения.
+ *
+ * Карусель удаляется только целиком, по id самого поста; отдельный кадр
+ * внутри неё — нет.
+ */
+export async function remove(externalId, creds) {
+  const res = await fetch(`${API}/${externalId}?access_token=${creds.pageToken}`, { method: 'DELETE' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    throw new Error(`Instagram удаление: ${data.error?.message || res.status}`);
+  }
+  return { ok: Boolean(data.success ?? true) };
+}
+
 /** Суточный лимит у аккаунта свой — читаем, а не гадаем по документации. */
 export async function remainingQuota(creds) {
   const res = await fetch(

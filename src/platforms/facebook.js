@@ -48,6 +48,26 @@ export async function tokenExpiry(creds) {
   return expires ? new Date(expires * 1000).toISOString() : null; // 0 = бессрочный system user token
 }
 
+/**
+ * Снять пост со страницы.
+ *
+ * Документация Meta оговаривает: «only select developers can perform this
+ * operation» — то есть отказ здесь возможен и при верном токене. Значит
+ * нельзя считать удаление само собой разумеющимся: если не вышло, пост
+ * придётся снимать руками, и сказать об этом надо вслух.
+ *
+ * Нужен `pages_manage_posts`. С одним `pages_manage_engagement` вызов
+ * вернёт ошибку прав, а не «удалено».
+ */
+export async function remove(externalId, creds) {
+  const res = await fetch(`${API}/${externalId}?access_token=${creds.pageToken}`, { method: 'DELETE' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    throw new Error(`Facebook удаление: ${data.error?.message || res.status}`);
+  }
+  return { ok: Boolean(data.success ?? true) };
+}
+
 export async function publish({ text, media = [], publicUrl, creds }) {
   const page = creds.pageId;
 
