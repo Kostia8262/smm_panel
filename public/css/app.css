@@ -99,6 +99,17 @@
 .nav__dot { display: none; width: 6px; height: 6px; border-radius: 50%; background: var(--gold); flex: none; }
 .nav__item[aria-current="page"] .nav__dot { display: block; }
 
+/*
+ * Значок беды у раздела. Рисуется, только когда сторож нашёл мёртвый или
+ * умирающий токен, — постоянного места в разметке не занимает, поэтому
+ * `display` ему не задаём вовсе: узел просто добавляют и убирают.
+ */
+/* Две точки подряд у активного раздела читаются как рябь: тревога важнее. */
+.nav__item:has(.nav__alert) .nav__dot { display: none; }
+.nav__alert { width: 7px; height: 7px; border-radius: 50%; flex: none; margin-left: auto; }
+.nav__alert--warn { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-dim); }
+.nav__alert--danger { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-dim); }
+
 .rail__foot { margin-top: auto; display: flex; flex-direction: column; gap: var(--sp-2); }
 
 .who {

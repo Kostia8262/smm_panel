@@ -124,6 +124,19 @@ export function credentialsFor(projectId, platform) {
   }
 }
 
+/**
+ * Когда доступы этой площадки правили в последний раз.
+ *
+ * Нужно сторожу токенов: у Threads срок жизни негде спросить, и единственная
+ * точка отсчёта — день, когда токен вписали в панель.
+ */
+export function accountSavedAt(projectId, platform) {
+  const row = db
+    .prepare('SELECT updated_at FROM project_accounts WHERE project_id = ? AND platform = ?')
+    .get(projectId, platform);
+  return row?.updated_at || null;
+}
+
 export function saveAccount(projectId, platform, values) {
   if (!PLATFORMS[platform]) throw new Error(`Неизвестная площадка «${platform}»`);
   const fields = ACCOUNT_FIELDS[platform] || [];
@@ -143,12 +156,18 @@ export function saveAccount(projectId, platform, values) {
      ON CONFLICT(project_id, platform) DO UPDATE SET config = excluded.config, updated_at = datetime('now')`
   ).run(projectId, platform, JSON.stringify(encryptFields(merged)));
 
+  // Отметку сторожа снимаем: вписали новый токен — старое предупреждение
+  // врёт, а ждать шести часов до следующего обхода, глядя на красную плашку
+  // над уже исправленным, незачем.
+  db.prepare('DELETE FROM token_health WHERE project_id = ? AND platform = ?').run(projectId, platform);
+
   log('info', `обновлены доступы ${platform} у проекта #${projectId}`);
   return accountStatus(projectId, platform);
 }
 
 export function clearAccount(projectId, platform) {
   db.prepare('DELETE FROM project_accounts WHERE project_id = ? AND platform = ?').run(projectId, platform);
+  db.prepare('DELETE FROM token_health WHERE project_id = ? AND platform = ?').run(projectId, platform);
   log('warn', `сняты доступы ${platform} у проекта #${projectId}`);
 }
 

@@ -21,11 +21,15 @@ const { db, log } = await import('../db.js');
 const { publishPost } = await import('./publish.js');
 const { recoverStuck, dueQuery } = await import('./recover.js');
 const { sweepOrphans } = await import('../media.js');
+const { sweepTokens } = await import('../tokens.js');
 
 const TICK_MS = Number(process.env.WORKER_TICK_MS || 60000);
 const SWEEP_MS = 6 * 3600 * 1000;
+const TOKENS_MS = Number(process.env.TOKEN_SWEEP_MS || 6 * 3600 * 1000);
 let busy = false;
 let sweptAt = 0;
+let tokensAt = 0;
+let tokensBusy = false;
 
 /**
  * Подмести файлы, на которые в базе уже никто не ссылается.
@@ -49,6 +53,28 @@ function sweep() {
   }
 }
 
+/**
+ * Сторож токенов. Место здесь по той же причине, что и подметание файлов:
+ * это хождение по внешним API, и делать его в обработчике запроса — значит
+ * подвешивать интерфейс на минуту ради служебной проверки.
+ *
+ * Отдельно от `busy`: публикация может идти дольше шести часов только в
+ * страшном сне, но привязывать к ней сторожа незачем — у него своя очередь
+ * из одного места, чтобы два обхода не пошли внахлёст.
+ */
+async function watchTokens() {
+  if (tokensBusy || Date.now() - tokensAt < TOKENS_MS) return;
+  tokensBusy = true;
+  tokensAt = Date.now();
+  try {
+    await sweepTokens();
+  } catch (err) {
+    log('warn', `сторож токенов не отработал: ${err.message}`);
+  } finally {
+    tokensBusy = false;
+  }
+}
+
 async function tick() {
   if (busy) return; // публикация может идти дольше минуты — второй заход не нужен
   busy = true;
@@ -58,6 +84,9 @@ async function tick() {
     // в панели через четверть часа, а не после следующей перезагрузки.
     recoverStuck(db, log);
     sweep();
+    // Намеренно без await: обход площадок не должен задерживать созревшие
+    // посты — иначе медленный Graph API отодвигает публикацию по времени.
+    watchTokens();
 
     const due = db.prepare(dueQuery()).all();
 

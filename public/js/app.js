@@ -81,6 +81,7 @@ async function boot() {
     if (can('platforms')) {
       const status = await api.status();
       state.connections = status.platforms;
+      markTokenAlerts();
     }
   } catch (err) {
     toast(err.message, 'danger');
@@ -88,6 +89,43 @@ async function boot() {
 
   window.addEventListener('hashchange', route);
   route();
+}
+
+/**
+ * Значок у раздела «Проекты», когда сторож нашёл беду с токенами.
+ *
+ * Без него о смерти токена узнаёшь, только зайдя в карточку проекта, а
+ * заходят туда раз в месяц. Владелец же сидит в календаре — значит сказать
+ * надо там, где он есть.
+ *
+ * Сторож ходит по площадкам в воркере, здесь только чтение отметок: лишней
+ * задержки при открытии панели это не даёт.
+ */
+async function markTokenAlerts() {
+  let alerts;
+  try {
+    alerts = await api.tokenAlerts();
+  } catch {
+    return; // сторож — не повод ронять панель
+  }
+  if (!alerts.count) return;
+
+  const link = dom.rail?.querySelector('[data-nav="projects"]');
+  if (!link) return;
+
+  const mark = el('span', `nav__alert nav__alert--${alerts.worst}`);
+  mark.title =
+    alerts.worst === 'danger'
+      ? 'Токен площадки истёк или отозван — публикация туда не уйдёт'
+      : 'Токен площадки скоро умрёт';
+  link.append(mark);
+
+  toast(
+    alerts.worst === 'danger'
+      ? `Токены площадок: ${alerts.count} — не работают. Откройте «Проекты»`
+      : `Токены площадок: ${alerts.count} — скоро умрут. Откройте «Проекты»`,
+    alerts.worst
+  );
 }
 
 /* ------------------------------- каркас ------------------------------- */

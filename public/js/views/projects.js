@@ -13,17 +13,21 @@
 
 import { api } from '../api.js';
 import { icon, iconMarkup } from '../icons.js';
-import { el, button, iconButton, panel, note, toast, skeleton } from '../ui.js';
+import { el, button, iconButton, panel, note, toast, skeleton, humanDate } from '../ui.js';
 
 export function projectsView(ctx) {
   const root = el('div', 'view');
   let projects = [];
   let openId = ctx.state.projectId;
+  // Что сторож знает о сроках, по площадкам открытого проекта.
+  let health = {};
+
+  const recheck = button('Проверить токены', { iconName: 'refresh', onClick: runWatch });
 
   ctx.setTopbar({
     title: 'Проекты',
     subtitle: 'Аккаунты и доступы каждой школы',
-    actions: [button('Новый проект', { iconName: 'plus', onClick: openCreate })],
+    actions: [recheck, button('Новый проект', { iconName: 'plus', onClick: openCreate })],
   });
 
   const list = el('div', 'projects');
@@ -48,6 +52,23 @@ export function projectsView(ctx) {
     if (!projects.some((p) => p.id === openId)) openId = projects[0]?.id;
     renderList();
     renderCard();
+  }
+
+  /**
+   * Прогнать сторожа сейчас. Обычно он ходит сам раз в шесть часов, но после
+   * замены токена ждать полдня, чтобы увидеть новый срок, незачем.
+   */
+  async function runWatch() {
+    recheck.disabled = true;
+    try {
+      const res = await api.checkTokens();
+      toast(`Сторож проверил подключений: ${res.checked}`, 'ok');
+      await renderCard();
+    } catch (err) {
+      toast(err.message, 'danger');
+    } finally {
+      recheck.disabled = false;
+    }
   }
 
   function renderList() {
@@ -90,6 +111,10 @@ export function projectsView(ctx) {
     let data;
     try {
       data = await api.projectAccounts(openId);
+      // Сроки читаются тем же заходом: показывать карточку без них значит
+      // показывать «подключено» рядом с мёртвым токеном.
+      const watch = await api.tokens(openId);
+      health = Object.fromEntries(watch.tokens.map((t) => [t.platform, t]));
     } catch (err) {
       card.textContent = '';
       card.append(note('danger', 'Не удалось прочитать карточку', err.message));
@@ -198,7 +223,12 @@ export function projectsView(ctx) {
     state.append(el('span', null, account.configured ? 'подключено' : 'не заполнено'));
     titles.append(state);
     head.append(titles);
+
+    const watch = health[account.platform];
+    if (account.configured && watch) head.append(healthTag(watch));
+
     box.append(head);
+    if (account.configured && watch) box.append(healthLine(watch));
 
     const form = el('form', 'account-form');
     const inputs = {};
@@ -340,4 +370,80 @@ function inputField(label, placeholder) {
   lab.htmlFor = id;
   wrap.append(lab, input);
   return { wrap, input };
+}
+
+/* ----------------------------- сроки токенов ----------------------------- */
+
+/**
+ * Плашка со сроком у названия площадки.
+ *
+ * Главное здесь — разница между «истёк» и «не отвечает». Первое лечится
+ * новым токеном по сроку, второе означает, что доступ отобрали прямо сейчас:
+ * сменили пароль, вышли из всех сеансов, сняли права приложению. Лечится это
+ * по-разному, и валить их в одно «ошибка» значит отправить владельца искать
+ * не там.
+ */
+function healthTag(watch) {
+  const kinds = {
+    ok: ['tag--ok', watch.expiresAt ? `ещё ${watch.left} дн.` : 'бессрочный'],
+    // Порог тот же, что у подробностей ниже: жёлтая плашка над красной
+    // запиской читается как «да ничего страшного» — ровно наоборот смыслу.
+    soon: [watch.left <= 3 ? 'tag--danger' : 'tag--warn', `${watch.left} дн.`],
+    expired: ['tag--danger', 'истёк'],
+    broken: ['tag--danger', 'не отвечает'],
+    unknown: ['', 'срок неизвестен'],
+  };
+  const [cls, text] = kinds[watch.state] || kinds.unknown;
+
+  const tag = el('span', `tag ${cls}`.trim(), text);
+  tag.style.marginLeft = 'auto';
+  tag.title = watch.why || '';
+  return tag;
+}
+
+/** Подробности под карточкой — только когда есть о чём беспокоиться. */
+function healthLine(watch) {
+  const when = watch.expiresAt ? humanDate(new Date(watch.expiresAt)) : null;
+  // Расчётный срок так и называем: у Threads его негде спросить, и выдавать
+  // догадку за точную дату — значит однажды подвести на день раньше.
+  const guess = watch.estimated ? ' Срок посчитан от дня, когда токен вписали, а не прочитан у площадки.' : '';
+
+  if (watch.state === 'broken') {
+    return note(
+      'danger',
+      'Площадка не пускает с этим токеном',
+      `${watch.error || 'проверка не прошла'}. Так выглядит отозванный доступ: смена пароля, выход из всех сеансов или снятые права приложению. Публикация туда не уйдёт.`
+    );
+  }
+  if (watch.state === 'expired') {
+    return note('danger', `Токен истёк ${when}`, `Публикация на эту площадку не уйдёт — нужен новый токен.${guess}`);
+  }
+  if (watch.state === 'soon') {
+    return note(
+      watch.left <= 3 ? 'danger' : 'warn',
+      `Токен умрёт ${when} — осталось дней: ${watch.left}`,
+      `Выпустить новый лучше заранее: после смерти постинг встанет молча.${guess}`
+    );
+  }
+
+  const line = el('div', 'dim small');
+  line.textContent = watch.checkedAt
+    ? `Сторож проверял ${stampToLocal(watch.checkedAt)}${watch.error ? ` · срок не прочитан (${watch.error})` : ''}`
+    : 'Сторож ещё не проверял';
+  return line;
+}
+
+/**
+ * Отметка сторожа — в местное время.
+ *
+ * `checked_at` пишется через `datetime('now')`, а это UTC: показать её как
+ * есть значит сообщить киевскому владельцу, что проверка была три часа назад,
+ * когда она была только что. Время постов, наоборот, местное и правки не
+ * требует — см. `toLocalInput`.
+ */
+function stampToLocal(stamp) {
+  const d = new Date(`${stamp.replace(' ', 'T')}Z`);
+  if (Number.isNaN(d.getTime())) return stamp;
+  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return `${humanDate(d)}, ${time}`;
 }

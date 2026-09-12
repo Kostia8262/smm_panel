@@ -124,6 +124,11 @@ export const api = {
   checkAccount: (id, platform) =>
     request(`/api/projects/${id}/accounts/${platform}/check`, { method: 'POST' }),
 
+  // Сроки жизни токенов: их пишет сторож в воркере, панель только читает.
+  tokens: (id) => request(`/api/tokens?project=${id}`),
+  tokenAlerts: () => request('/api/tokens/alerts'),
+  checkTokens: () => request('/api/tokens/check', { method: 'POST' }),
+
   posts: (from, to) =>
     request(withProject(`/api/posts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)),
   post: (id) => request(`/api/posts/${id}`),

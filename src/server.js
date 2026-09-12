@@ -33,6 +33,7 @@ const linksDb = await import('./links.js');
 const collector = await import('./trends/collector.js');
 const observed = await import('./trends/observed.js');
 const { signatureFor, withSignature } = await import('./signature.js');
+const tokensDb = await import('./tokens.js');
 const { writeFileSync } = await import('node:fs');
 const { encrypt: encryptSecret, decrypt: decryptSecret } = await import('./secrets.js');
 
@@ -253,6 +254,33 @@ app.post('/api/projects/:id/accounts/:platform/check', requireAccess('platforms'
   }
   try {
     res.json(await adapter.check(creds));
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+/* --------------------------- сроки жизни токенов --------------------------- */
+
+/**
+ * Что сторож знает о токенах. Обход площадок делает воркер раз в шесть часов,
+ * здесь только чтение отметок: ходить в Graph API из обработчика запроса —
+ * значит держать открытую карточку проекта на минуту ради служебной справки.
+ */
+app.get('/api/tokens', requireAccess('platforms'), (req, res) => {
+  const scope = req.query.project === 'all' ? null : currentProjectId(req);
+  res.json({ tokens: tokensDb.tokenHealth({ projectId: scope }), policy: tokensDb.TOKEN_POLICY });
+});
+
+/** Тревога для значка у раздела «Проекты»: владелец сидит в календаре. */
+app.get('/api/tokens/alerts', requireAccess('platforms'), (_req, res) => {
+  res.json(tokensDb.tokenAlerts());
+});
+
+/** Прогнать обход сейчас, не дожидаясь воркера. */
+app.post('/api/tokens/check', requireAccess('platforms'), async (_req, res) => {
+  try {
+    const checked = await tokensDb.sweepTokens();
+    res.json({ ok: true, checked: checked.length, tokens: tokensDb.tokenHealth() });
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });
   }
