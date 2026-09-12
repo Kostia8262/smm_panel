@@ -34,6 +34,39 @@ async function call(path, params, creds) {
   return data;
 }
 
+/**
+ * Продлить долгоживущий токен. Threads — единственная наша площадка, которая
+ * умеет это сама, без похода человека в настройки приложения.
+ *
+ * Условия площадки, и все три важны:
+ *   — токену должно быть **больше суток**: свежевыпущенный продлить нельзя;
+ *   — он не должен быть истёкшим: **после смерти продлевать уже нечего**,
+ *     выпускать придётся заново руками;
+ *   — приложению должно быть выдано `threads_basic`.
+ *
+ * Новый токен живёт 60 дней **от дня продления**, а не от старого срока:
+ * тянуть до последнего смысла нет, ничего этим не выигрывается.
+ *
+ * Возвращает поля в том же виде, в каком их принимает карточка проекта, —
+ * сторож не должен знать, как у Threads называется поле с токеном.
+ */
+export async function renew(creds) {
+  if (!creds?.accessToken) throw new Error('Нет токена Threads');
+  const params = new URLSearchParams({
+    grant_type: 'th_refresh_token',
+    access_token: creds.accessToken,
+  });
+
+  const res = await fetch(`${API}/refresh_access_token?${params}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    throw new Error(`Threads продление: ${data.error?.message || res.status}`);
+  }
+  if (!data.access_token) throw new Error('Threads продление: площадка не вернула новый токен');
+
+  return { values: { accessToken: data.access_token }, expiresIn: Number(data.expires_in) || null };
+}
+
 export async function check(creds) {
   const res = await fetch(`${API}/me?fields=id,username&access_token=${creds.accessToken}`);
   const data = await res.json();

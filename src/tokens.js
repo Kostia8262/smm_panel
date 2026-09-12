@@ -26,7 +26,7 @@
 import { db, log } from './db.js';
 import { getAdapter } from './platforms/index.js';
 import * as facebook from './platforms/facebook.js';
-import { listProjects, credentialsFor, accountSavedAt } from './projects.js';
+import { listProjects, credentialsFor, accountSavedAt, saveAccount } from './projects.js';
 
 /**
  * Что известно про срок жизни у каждой площадки.
@@ -42,11 +42,37 @@ export const TOKEN_POLICY = {
     kind: 'estimate',
     days: 60,
     why: 'Threads не отдаёт срок ни одним вызовом — считаем 60 дней от дня, когда токен вписали',
+    renew: 'Продлевается сам, за две недели до смерти',
   },
-  instagram: { kind: 'read', why: 'Тот же токен страницы, что у Facebook — срок читается через debug_token' },
-  facebook: { kind: 'read', why: 'Срок читается через debug_token; у системного пользователя его нет вовсе' },
+  instagram: {
+    kind: 'read',
+    why: 'Тот же токен страницы, что у Facebook — срок читается через debug_token',
+    renew: null,
+  },
+  facebook: {
+    kind: 'read',
+    why: 'Срок читается через debug_token; у системного пользователя его нет вовсе',
+    // Обменять истекающий токен страницы можно только на токен пользователя,
+    // а его у панели нет и быть не должно. Настоящее решение другое: выпустить
+    // токен от системного пользователя в Business Manager — он бессрочный.
+    renew: null,
+  },
   tiktok: { kind: 'unknown', why: 'Площадка ещё не подключена' },
 };
+
+/**
+ * За сколько дней до смерти продлевать самим.
+ *
+ * Две недели, а не день: продление даёт 60 дней **от дня продления**, а не
+ * от старого срока, так что тянуть до последнего нечего не выигрывает. Зато
+ * запас в две недели означает, что при первой неудаче остаётся ещё двадцать
+ * восемь попыток по полдня — и время, чтобы человек вмешался, если площадка
+ * упёрлась всерьёз.
+ */
+export const RENEW_BEFORE_DAYS = 14;
+
+/** Продление можно выключить — на время разбирательств с площадкой. */
+const AUTORENEW = process.env.TOKEN_AUTORENEW !== '0';
 
 /**
  * За сколько дней до смерти начинать беспокоить и насколько громко.
@@ -183,6 +209,43 @@ export async function inspectToken(projectId, platform) {
   return out;
 }
 
+/* ------------------------------- продление ------------------------------- */
+
+/** Умеет ли площадка продлевать токен сама. */
+export function canRenew(platform) {
+  return typeof getAdapter(platform)?.renew === 'function';
+}
+
+/**
+ * Продлить токен одной площадки и сразу сохранить новый.
+ *
+ * Порядок здесь важнее красоты: новый токен записывается в карточку проекта
+ * первым же действием. Если упасть между «площадка выдала» и «мы сохранили»,
+ * новый токен потерян навсегда — в журнал его не напишешь (там ему не место),
+ * а старый Threads к тому времени уже считает заменённым.
+ */
+export async function renewToken(projectId, platform) {
+  const adapter = getAdapter(platform);
+  if (!adapter.renew) throw new Error(`${platform}: площадка не умеет продлевать токен сама`);
+
+  const creds = credentialsFor(projectId, platform);
+  if (!adapter.isConfigured(creds)) throw new Error(`${platform}: доступы не заполнены`);
+
+  const { values, expiresIn } = await adapter.renew(creds);
+
+  // saveAccount заодно снимает отметку сторожа — она относилась к старому
+  // токену. Новую пишем следом, уже с точным сроком от площадки.
+  saveAccount(projectId, platform, values);
+
+  const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null;
+  saveHealth({ projectId, platform, expiresAt, estimated: !expiresIn, account: '' });
+
+  log('info', `токен ${platform} продлён до ${expiresAt ? expiresAt.slice(0, 10) : 'неизвестной даты'}`, {
+    platform,
+  });
+  return { expiresAt };
+}
+
 /* ------------------------------- хранение ------------------------------- */
 
 export function saveHealth(row, now = new Date()) {
@@ -246,6 +309,14 @@ export async function sweepTokens({ now = new Date() } = {}) {
       }
       if (!row) continue;
 
+      // Продлеваем до записи тревоги: успешное продление снимает повод для
+      // неё, и беспокоить владельца тем, что сторож починил сам, незачем.
+      const renewed = await maybeRenew(project, row, now);
+      if (renewed) {
+        checked.push({ ...renewed, state: 'ok', stage: null });
+        continue;
+      }
+
       const { state, stage, worsened } = saveHealth(row, now);
       checked.push({ ...row, state, stage });
 
@@ -277,6 +348,34 @@ export async function sweepTokens({ now = new Date() } = {}) {
   return checked;
 }
 
+/**
+ * Продлить, если пора и если площадка умеет.
+ *
+ * Мёртвый токен не трогаем: продлевать нечего, а площадка на такой запрос
+ * отвечает ошибкой, которая в журнале выглядит как новая беда поверх старой.
+ * Неудача продления тоже не гасит тревогу — наоборот, о ней говорят вслух:
+ * молча не сумевший продлить сторож хуже отсутствующего.
+ */
+async function maybeRenew(project, row, now) {
+  if (!AUTORENEW || row.error || !canRenew(row.platform)) return null;
+
+  const left = daysLeft(row.expiresAt, now);
+  if (left === null || left < 0 || left > RENEW_BEFORE_DAYS) return null;
+
+  try {
+    const { expiresAt } = await renewToken(project.id, row.platform);
+    log('info', `${project.title}: токен ${row.platform} продлён сторожем, было дней: ${left}`, {
+      platform: row.platform,
+    });
+    return { ...row, expiresAt, estimated: false, error: null, renewed: true };
+  } catch (err) {
+    log('error', `${project.title}: не удалось продлить токен ${row.platform} — ${err.message}`, {
+      platform: row.platform,
+    });
+    return null; // тревога остаётся: продлевать придётся руками
+  }
+}
+
 /* ------------------------------- для панели ------------------------------- */
 
 /** Всё, что сторож знает, — в том виде, в каком это рисует карточка проекта. */
@@ -296,6 +395,8 @@ export function tokenHealth({ projectId = null } = {}) {
     checkedAt: r.checked_at,
     error: r.last_error,
     why: TOKEN_POLICY[r.platform]?.why || '',
+    renewable: canRenew(r.platform),
+    renewNote: TOKEN_POLICY[r.platform]?.renew || null,
   }));
 }
 

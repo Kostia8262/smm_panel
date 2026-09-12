@@ -128,6 +128,7 @@ export const api = {
   tokens: (id) => request(`/api/tokens?project=${id}`),
   tokenAlerts: () => request('/api/tokens/alerts'),
   checkTokens: () => request('/api/tokens/check', { method: 'POST' }),
+  renewToken: (id, platform) => request(`/api/tokens/${platform}/renew?project=${id}`, { method: 'POST' }),
 
   posts: (from, to) =>
     request(withProject(`/api/posts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)),

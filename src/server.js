@@ -276,6 +276,21 @@ app.get('/api/tokens/alerts', requireAccess('platforms'), (_req, res) => {
   res.json(tokensDb.tokenAlerts());
 });
 
+/**
+ * Продлить токен руками. Обычно это делает сторож сам за две недели до
+ * смерти, но кнопка нужна: после разбирательств с площадкой ждать очередного
+ * обхода незачем.
+ */
+app.post('/api/tokens/:platform/renew', requireAccess('platforms'), async (req, res) => {
+  const projectId = currentProjectId(req);
+  try {
+    const { expiresAt } = await tokensDb.renewToken(projectId, req.params.platform);
+    res.json({ ok: true, expiresAt });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
 /** Прогнать обход сейчас, не дожидаясь воркера. */
 app.post('/api/tokens/check', requireAccess('platforms'), async (_req, res) => {
   try {

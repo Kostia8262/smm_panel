@@ -31,6 +31,10 @@ const {
   tokenHealth,
   tokenAlerts,
   readExpiry,
+  renewToken,
+  canRenew,
+  sweepTokens,
+  RENEW_BEFORE_DAYS,
   DAY_MS,
 } = await import('../src/tokens.js');
 
@@ -171,4 +175,153 @@ test('база не хранит отметки об удалённом прое
   saveHealth({ projectId: temp, platform: 'telegram', expiresAt: null }, NOW);
   db.prepare('DELETE FROM projects WHERE id = ?').run(temp);
   assert.equal(tokenHealth({ projectId: temp }).length, 0);
+});
+
+
+/* ------------------------------- продление ------------------------------- */
+
+/**
+ * Подменяем сеть целиком: в тестах ходить в Threads нельзя, а весь смысл
+ * продления — именно в том, что и как отвечает площадка.
+ */
+const realFetch = globalThis.fetch;
+
+function fakeThreads({ refresh = null, checkFails = false } = {}) {
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    calls.push(href);
+
+    if (href.includes('refresh_access_token')) {
+      if (refresh?.error) {
+        return { ok: false, json: async () => ({ error: { message: refresh.error } }) };
+      }
+      return { ok: true, json: async () => refresh };
+    }
+    if (checkFails) {
+      return { ok: false, json: async () => ({ error: { message: 'Invalid OAuth access token' } }) };
+    }
+    return { ok: true, json: async () => ({ id: '1', username: 'academy' }) };
+  };
+  return calls;
+}
+
+test('Threads умеет продлевать себя, Facebook — нет', () => {
+  assert.equal(canRenew('threads'), true);
+  // У Facebook токен страницы меняется не панелью, а выпуском от системного
+  // пользователя: кнопка «продлить» тут обманывала бы.
+  assert.equal(canRenew('facebook'), false);
+  assert.equal(canRenew('telegram'), false);
+});
+
+test('продление записывает новый токен и точный срок от площадки', async (t) => {
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  fakeThreads({ refresh: { access_token: 'new-token-'.padEnd(30, 'z'), expires_in: 5183944 } });
+
+  projects.saveAccount(projectId, 'threads', { userId: '7', accessToken: 'old'.padEnd(30, 'o') });
+  const { expiresAt } = await renewToken(projectId, 'threads');
+
+  const creds = projects.credentialsFor(projectId, 'threads');
+  assert.match(creds.accessToken, /^new-token-/, 'в карточке должен лежать новый токен');
+  assert.equal(creds.userId, '7', 'остальные поля продление не трогает');
+
+  const left = daysLeft(expiresAt, new Date());
+  assert.ok(left >= 58 && left <= 60, `ожидались ~60 дней, получено ${left}`);
+
+  const row = tokenHealth({ projectId }).find((t2) => t2.platform === 'threads');
+  assert.equal(row.state, 'ok');
+  assert.equal(row.estimated, false, 'срок от площадки — факт, а не расчёт');
+});
+
+test('площадка без нового токена в ответе — это ошибка, а не тихий успех', async (t) => {
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  fakeThreads({ refresh: { token_type: 'bearer', expires_in: 5183944 } });
+
+  projects.saveAccount(projectId, 'threads', { userId: '7', accessToken: 'keep'.padEnd(30, 'k') });
+  await assert.rejects(() => renewToken(projectId, 'threads'), /не вернула новый токен/);
+
+  const creds = projects.credentialsFor(projectId, 'threads');
+  assert.match(creds.accessToken, /^keep/, 'старый токен обязан уцелеть');
+});
+
+test('сторож продлевает сам, когда срок подошёл', async (t) => {
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  const calls = fakeThreads({ refresh: { access_token: 'auto'.padEnd(30, 'a'), expires_in: 5183944 } });
+
+  // Токен, вписанный 50 дней назад: по расчёту ему остаётся 10 дней.
+  projects.saveAccount(projectId, 'threads', { userId: '7', accessToken: 'aging'.padEnd(30, 'g') });
+  db.prepare(
+    "UPDATE project_accounts SET updated_at = datetime('now', '-50 days') WHERE project_id = ? AND platform = 'threads'"
+  ).run(projectId);
+
+  await sweepTokens();
+
+  assert.ok(
+    calls.some((c) => c.includes('refresh_access_token')),
+    'сторож обязан был сходить за продлением'
+  );
+  const creds = projects.credentialsFor(projectId, 'threads');
+  assert.match(creds.accessToken, /^auto/, 'новый токен должен оказаться в карточке');
+
+  const row = tokenHealth({ projectId }).find((t2) => t2.platform === 'threads');
+  assert.equal(row.state, 'ok', 'после продления тревоги быть не должно');
+});
+
+test('свежий токен сторож не трогает', async (t) => {
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  const calls = fakeThreads({ refresh: { access_token: 'nope'.padEnd(30, 'n'), expires_in: 5183944 } });
+
+  projects.saveAccount(projectId, 'threads', { userId: '7', accessToken: 'fresh'.padEnd(30, 'f') });
+  await sweepTokens();
+
+  assert.ok(
+    !calls.some((c) => c.includes('refresh_access_token')),
+    `продление за ${RENEW_BEFORE_DAYS} дней, а не при каждом обходе`
+  );
+});
+
+test('неудачное продление оставляет тревогу, а не гасит её', async (t) => {
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  fakeThreads({ refresh: { error: 'The session has been invalidated' } });
+
+  projects.saveAccount(projectId, 'threads', { userId: '7', accessToken: 'doomed'.padEnd(30, 'd') });
+  db.prepare(
+    "UPDATE project_accounts SET updated_at = datetime('now', '-52 days') WHERE project_id = ? AND platform = 'threads'"
+  ).run(projectId);
+
+  await sweepTokens();
+
+  const row = tokenHealth({ projectId }).find((t2) => t2.platform === 'threads');
+  assert.equal(row.state, 'soon', 'сторож не сумел — значит человек должен увидеть беду');
+  assert.ok(row.left <= 14);
+});
+
+test('мёртвый токен продлевать не пытаемся', async (t) => {
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  const calls = fakeThreads({ checkFails: true, refresh: { access_token: 'x', expires_in: 100 } });
+
+  projects.saveAccount(projectId, 'threads', { userId: '7', accessToken: 'dead'.padEnd(30, 'x') });
+  db.prepare(
+    "UPDATE project_accounts SET updated_at = datetime('now', '-55 days') WHERE project_id = ? AND platform = 'threads'"
+  ).run(projectId);
+
+  await sweepTokens();
+
+  // Продлевать нечего: площадка на такой запрос ответит ошибкой, и в журнале
+  // она ляжет поверх настоящей — отозванного доступа.
+  assert.ok(!calls.some((c) => c.includes('refresh_access_token')));
+  const row = tokenHealth({ projectId }).find((t2) => t2.platform === 'threads');
+  assert.equal(row.state, 'broken');
 });

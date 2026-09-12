@@ -274,6 +274,30 @@ export function projectsView(ctx) {
     });
     foot.append(check);
 
+    // Продление руками — только там, где площадка это умеет. У Facebook и
+    // Instagram кнопки нет намеренно: их токен страницы меняется не здесь,
+    // а выпуском от системного пользователя в Business Manager.
+    if (account.configured && watch?.renewable) {
+      const renew = button('Продлить токен', {
+        iconName: 'refresh',
+        title: 'Обычно сторож продлевает сам за две недели до смерти',
+        onClick: async () => {
+          renew.disabled = true;
+          try {
+            const res = await api.renewToken(project.id, account.platform);
+            toast(`${account.title}: токен продлён до ${res.expiresAt?.slice(0, 10) || '—'}`, 'ok');
+            await renderCard();
+          } catch (err) {
+            // Без приставки с названием: адаптер продления уже начинает
+            // сообщение с площадки, и выходило «Threads: Threads продление…».
+            toast(err.message, 'danger');
+            renew.disabled = false;
+          }
+        },
+      });
+      foot.append(renew);
+    }
+
     if (account.configured) {
       foot.append(
         button('Снять доступ', {
@@ -416,19 +440,25 @@ function healthLine(watch) {
     );
   }
   if (watch.state === 'expired') {
-    return note('danger', `Токен истёк ${when}`, `Публикация на эту площадку не уйдёт — нужен новый токен.${guess}`);
+    // Отдельно про продление: истёкший Threads продлить уже нельзя, и звать
+    // человека жать кнопку «Продлить» здесь значит звать его впустую.
+    const dead = watch.renewable ? ' Продлить его уже нельзя — выпускается только заново.' : '';
+    return note('danger', `Токен истёк ${when}`, `Публикация на эту площадку не уйдёт — нужен новый токен.${dead}${guess}`);
   }
   if (watch.state === 'soon') {
-    return note(
-      watch.left <= 3 ? 'danger' : 'warn',
-      `Токен умрёт ${when} — осталось дней: ${watch.left}`,
-      `Выпустить новый лучше заранее: после смерти постинг встанет молча.${guess}`
-    );
+    // Для площадки, которая продлевается сама, паника неуместна: сторож уже
+    // пробовал и попробует снова через шесть часов. Но и молчать нельзя —
+    // если он пробует и не может, человек должен об этом знать.
+    const hint = watch.renewable
+      ? `Сторож продлевает такой токен сам за две недели до смерти. Если срок не сдвинулся за сутки, продление не проходит — посмотрите журнал.${guess}`
+      : `Выпустить новый лучше заранее: после смерти постинг встанет молча.${guess}`;
+    return note(watch.left <= 3 ? 'danger' : 'warn', `Токен умрёт ${when} — осталось дней: ${watch.left}`, hint);
   }
 
   const line = el('div', 'dim small');
+  const renew = watch.renewNote ? ` · ${watch.renewNote.toLowerCase()}` : '';
   line.textContent = watch.checkedAt
-    ? `Сторож проверял ${stampToLocal(watch.checkedAt)}${watch.error ? ` · срок не прочитан (${watch.error})` : ''}`
+    ? `Сторож проверял ${stampToLocal(watch.checkedAt)}${renew}${watch.error ? ` · срок не прочитан (${watch.error})` : ''}`
     : 'Сторож ещё не проверял';
   return line;
 }
