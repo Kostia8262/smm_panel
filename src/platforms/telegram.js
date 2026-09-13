@@ -25,7 +25,10 @@ export function missingConfig(creds = {}) {
 }
 
 async function call(method, form, creds) {
-  const res = await fetch(`${API}/bot${creds.botToken}/${method}`, { method: 'POST', body: form });
+  // Пустую multipart-форму Telegram отвергает голым 400 ещё до проверки токена —
+  // так ломался getMe. Без полей шлём запрос без тела.
+  const body = [...form.keys()].length ? form : undefined;
+  const res = await fetch(`${API}/bot${creds.botToken}/${method}`, { method: 'POST', body });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.ok) {
     throw new Error(
