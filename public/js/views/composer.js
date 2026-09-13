@@ -18,6 +18,9 @@ import { withSignature } from '../signature.js';
 import { emojiButton } from '../emoji.js';
 import { audioField } from '../audio.js';
 import { reelBuilder, reelPhotos } from '../reel-builder.js';
+// Общие с сервером: так счётчик и превью делят текст ровно как отправка.
+import { withShortLinks } from '../shared/shortlink.js';
+import { splitText, TEXT_LIMIT, CAPTION_LIMIT } from '../shared/text-split.js';
 
 /** Как называется состояние поста и каким цветом его показывать. */
 const STATE = {
@@ -355,6 +358,12 @@ export function composerView(ctx, postId) {
     return withSignature(own, post.skip_signature ? '' : post.signature);
   }
 
+  /** Текст таким, каким уйдёт: с подписью и нашими ссылками, ставшими короткими. */
+  function sentText(target = null) {
+    const text = finalText(target);
+    return post.shortLink ? withShortLinks(text, post.shortLink) : text;
+  }
+
   function renderCounters() {
     const host = root.querySelector('#counters');
     if (!host) return;
@@ -370,7 +379,8 @@ export function composerView(ctx, postId) {
       seen.add(spec.id);
       const hasMedia = mediaOf(t).length > 0;
       const limit = hasMedia ? spec.text.limitWithMedia : spec.text.limit;
-      const text = finalText(t);
+      const written = finalText(t);
+      const text = sentText(t);
       // Telegram длинный текст не отвергает, а досылает сообщениями — это
       // предупреждение, а не красный отказ.
       const soft = Boolean(spec.text.splits);
@@ -378,10 +388,14 @@ export function composerView(ctx, postId) {
       const near = !over && text.length > limit * (soft ? 1 : 0.9);
       const chip = el('span', `counter${over ? ' counter--over' : near ? ' counter--warn' : ''}`);
       chip.innerHTML = iconMarkup(t.platform, 12);
-      chip.append(el('span', null, `${text.length}/${limit}`));
-      chip.title = soft
-        ? `${spec.title}: ${limit} символов в ${hasMedia ? 'подписи' : 'сообщении'}, длиннее — продолжение уйдёт следом`
-        : `${spec.title}: предел ${limit} символов`;
+      const parts = soft ? splitText(text, hasMedia ? CAPTION_LIMIT : TEXT_LIMIT).length : 1;
+      chip.append(el('span', null, `${text.length}/${limit}${parts > 1 ? ` · ${parts} сообщ.` : ''}`));
+      // Короткие ссылки меняют длину: говорим об этом, иначе цифра расходится с набранным.
+      const viaLinks = text.length !== written.length ? ` Считаются короткие ссылки: набрано ${written.length}, уйдёт ${text.length}.` : '';
+      chip.title =
+        (soft
+          ? `${spec.title}: ${limit} символов в ${hasMedia ? 'подписи' : 'сообщении'}, длиннее — продолжение уйдёт следом.`
+          : `${spec.title}: предел ${limit} символов.`) + viaLinks;
       host.append(chip);
     }
   }
@@ -760,10 +774,14 @@ export function composerView(ctx, postId) {
 
     const area = el('textarea', 'textarea');
     area.value = value || '';
-    const limit = (post.media || []).length ? spec.text.limitWithMedia : spec.text.limit;
+    const limit = mediaOf(targets[0]).length ? spec.text.limitWithMedia : spec.text.limit;
+    // Тот же счёт, что у общего счётчика: с подписью и короткими ссылками.
     const refresh = () => {
-      counter.textContent = `${area.value.length}/${limit}`;
-      counter.className = `counter${area.value.length > limit ? ' counter--over' : ''}`;
+      const length = sentText(targets[0]).length;
+      const over = length > limit;
+      counter.textContent = `${length}/${limit}`;
+      counter.className = `counter${over ? (spec.text.splits ? ' counter--warn' : ' counter--over') : ''}`;
+      counter.title = 'С подписью проекта и нашими ссылками, ставшими короткими';
     };
     refresh();
     area.addEventListener('input', () => {
@@ -1461,6 +1479,15 @@ export function composerView(ctx, postId) {
     const media = frames[previewFrame];
     const text = format.noText ? '' : finalText(activeTarget);
 
+    // Telegram кадр не режет, а пост бывает несколькими сообщениями с кнопкой
+    // под последним — рамка телефона с обрезкой здесь показала бы неправду.
+    if (platformId === 'telegram') {
+      const tgStage = el('div', 'preview__stage');
+      tgStage.append(telegramPreview(activeTarget, frames));
+      right.append(tgStage, limitsPanel(spec, format));
+      return;
+    }
+
     const stage = el('div', 'preview__stage');
     const frame = el('div', 'frame');
     const crop = el('div', 'frame__crop focus-pick');
@@ -1591,6 +1618,120 @@ export function composerView(ctx, postId) {
     }
 
     right.append(limitsPanel(spec, format));
+  }
+
+  /**
+   * Лента канала Telegram так, как её увидит подписчик: сообщения разрезаны
+   * тем же splitText, что и при отправке, файлы — у первого, кнопка — под
+   * последним, карточка ссылки — если превью не выключено, плашка закрепа.
+   */
+  function telegramPreview(target, frames) {
+    const options = target?.options || {};
+    const written = finalText(target).trim();
+    const sent = sentText(target).trim();
+    const hasMedia = frames.length > 0;
+    const parts = splitText(sent, hasMedia ? CAPTION_LIMIT : TEXT_LIMIT);
+    const button = options.button;
+    const album = frames.length > 1;
+
+    const phone = el('div', 'tgp');
+    const project = ctx.state.projects.find((pr) => pr.id === post.project_id);
+    const head = el('div', 'tgp__head');
+    head.innerHTML = iconMarkup('telegram', 14);
+    head.append(el('span', null, project ? project.title : 'Канал'));
+    phone.append(head);
+
+    if (options.pin) {
+      const pinned = el('div', 'tgp__pinned');
+      pinned.append(el('span', 'tgp__pinned-title', 'Закреплено'));
+      const firstLine = (parts[0] || (hasMedia ? 'Фото' : '')).split('\n')[0].replace(/\/r\/x{7}/g, '/r/…');
+      pinned.append(el('span', 'tgp__pinned-text', firstLine));
+      phone.append(pinned);
+    }
+
+    const feed = el('div', 'tgp__feed');
+    const count = Math.max(parts.length, 1);
+    for (let i = 0; i < count; i++) {
+      const msg = el('div', 'tgp__msg');
+      if (i === 0 && hasMedia) msg.append(album ? telegramAlbum(frames) : telegramMedia(frames[0], 'tgp__single'));
+      const part = parts[i];
+      if (part) msg.append(telegramText(part));
+      // Карточку ссылки Telegram рисует только у текстового сообщения.
+      const isText = !(i === 0 && hasMedia);
+      const link = isText && !options.noPreview ? firstOwnLink(written, part) : null;
+      if (link) msg.append(el('div', 'tgp__card', `${link} · превью сайта`));
+      if (count > 1) msg.append(el('div', 'tgp__meta', `сообщение ${i + 1} из ${count}`));
+      if (!part && !(i === 0 && hasMedia)) msg.append(el('div', 'tgp__text tgp__text--muted', 'Пусто — ни текста, ни файла'));
+      feed.append(msg);
+    }
+
+    if (button) {
+      const lastIsAlbumOnly = album && parts.length <= 1;
+      if (lastIsAlbumOnly) {
+        feed.append(el('div', 'tgp__issue', 'К альбому Telegram кнопку не ставит — пост не пройдёт проверку'));
+      } else {
+        const b = el('div', 'tgp__button');
+        b.append(el('span', null, button.text || 'Текст кнопки'));
+        b.append(icon('link', { size: 12 }));
+        b.title = button.url || 'ссылка не указана';
+        feed.append(b);
+      }
+    }
+    phone.append(feed);
+    return phone;
+  }
+
+  function telegramMedia(media, cls) {
+    if (!media || (media.purged && !media.thumbUrl)) {
+      const holder = el('div', `${cls} tgp__placeholder`);
+      holder.append(icon(media?.kind === 'video' ? 'video' : 'image', { size: 22 }));
+      return holder;
+    }
+    const video = media.kind === 'video' && !media.purged;
+    const node = el(video ? 'video' : 'img', cls);
+    node.src = media.purged ? media.thumbUrl : media.url;
+    if (video) Object.assign(node, { muted: true, loop: true, autoplay: true, playsInline: true });
+    else node.alt = '';
+    // Telegram кадр не режет — показываем его пропорции, а не раскладки.
+    if (media.width && media.height) node.style.aspectRatio = `${media.width} / ${media.height}`;
+    return node;
+  }
+
+  function telegramAlbum(frames) {
+    const grid = el('div', 'tgp__album');
+    for (const m of frames.slice(0, 10)) grid.append(telegramMedia(m, 'tgp__cell'));
+    return grid;
+  }
+
+  /** Текст сообщения: ссылки подсвечены, код короткой ссылки не выдумываем. */
+  function telegramText(part) {
+    const box = el('div', 'tgp__text');
+    const re = /https?:\/\/[^\s<>"')]+/g;
+    let last = 0;
+    for (const m of part.matchAll(re)) {
+      if (m.index > last) box.append(document.createTextNode(part.slice(last, m.index)));
+      box.append(el('span', 'tgp__url', m[0].replace(/\/r\/x{7}/, '/r/…')));
+      box.lastChild.title = /\/r\/x{7}/.test(m[0]) ? 'Короткая ссылка со счётчиком переходов — код появится при отправке' : m[0];
+      last = m.index + m[0].length;
+    }
+    if (last < part.length) box.append(document.createTextNode(part.slice(last)));
+    return box;
+  }
+
+  /**
+   * Чей сайт Telegram покажет карточкой. Короткая ссылка ведёт редиректом на
+   * наш сайт — карточка будет его, поэтому берём адрес из набранного текста.
+   */
+  function firstOwnLink(written, part) {
+    const found = (part || '').match(/https?:\/\/[^\s<>"')]+/);
+    if (!found) return null;
+    const shortened = /\/r\/x{7}/.test(found[0]);
+    const source = shortened ? written.match(/https?:\/\/[^\s<>"')]+/)?.[0] : found[0];
+    try {
+      return new URL(source).hostname.replace(/^www\./, '');
+    } catch {
+      return null;
+    }
   }
 
   function limitsPanel(spec, format) {

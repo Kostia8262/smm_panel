@@ -20,7 +20,7 @@ import { PLATFORMS, formatOf, mediaRulesFor } from './platforms/specs.js';
 import { withSignature } from './signature.js';
 import { withShortLinks } from './shortlink.js';
 import { optionIssues } from './target-options.js';
-import { splitText, CAPTION_LIMIT, TEXT_LIMIT } from './platforms/telegram.js';
+import { splitText, CAPTION_LIMIT, TEXT_LIMIT } from './text-split.js';
 import { parseAudio, audioAllowed, audioLabel } from './audio.js';
 
 const mimeToType = {

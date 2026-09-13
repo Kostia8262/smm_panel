@@ -162,6 +162,18 @@ installAuth(app, {
   ownerTokenFile: resolve(here, '../data/owner-token.txt'),
 });
 
+/*
+ * Модули без зависимостей, общие у сервера и браузера: деление текста на
+ * сообщения и подмена ссылок короткими. Отдаются из src, а не копией в public —
+ * копия однажды разошлась бы с тем, что реально уходит в сеть.
+ */
+const SHARED_MODULES = { 'text-split.js': 'text-split.js', 'shortlink.js': 'shortlink.js' };
+app.get('/js/shared/:file', (req, res, next) => {
+  const file = SHARED_MODULES[req.params.file];
+  if (!file) return next();
+  res.type('text/javascript').sendFile(resolve(here, file));
+});
+
 app.use(express.static(PUBLIC_DIR));
 
 /*
@@ -1756,12 +1768,15 @@ function checkPost(post) {
     const project = post.project_id ? projectsDb.getProject(post.project_id) : null;
     post.signature = signatureFor(post, project);
   }
-  return validatePost(post, {
-    shortLink: {
-      baseUrl: publicBase(),
-      ownDomains: parseOwnDomains(staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school')),
-    },
-  });
+  return validatePost(post, { shortLink: shortLinkContext() });
+}
+
+/** Во что превратятся наши ссылки при отправке — для проверки, счётчика и превью. */
+function shortLinkContext() {
+  return {
+    baseUrl: publicBase(),
+    ownDomains: parseOwnDomains(staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school')),
+  };
 }
 
 /** Пост + всё, что нужно интерфейсу: ссылки на файлы, кропы, итог проверки. */
@@ -1802,6 +1817,9 @@ function decorate(post) {
     ),
   }));
   post.validation = checkPost(post);
+  // Композер считает длину и делит текст на сообщения теми же модулями, что
+  // сервер, — им нужно знать, во что превратятся наши ссылки.
+  post.shortLink = shortLinkContext();
   return post;
 }
 
