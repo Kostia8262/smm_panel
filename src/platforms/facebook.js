@@ -40,14 +40,25 @@ export async function check(creds) {
   return { ok: true, account: data.name };
 }
 
-/** Когда протухает токен страницы — это читает сторож. */
-export async function tokenExpiry(creds) {
+/**
+ * Два срока токена страницы — это читает сторож.
+ *
+ *   expiresAt           — срок самого токена; 0 от площадки — бессрочный (null);
+ *   dataAccessExpiresAt — правило Meta «90 дней без входа в приложение»: токен
+ *                         может быть бессрочным, а доступ к данным — кончиться.
+ */
+export async function tokenLifetime(creds) {
   const appToken = `${creds.appId}|${creds.appSecret}`;
   const res = await fetch(`${API}/debug_token?input_token=${creds.pageToken}&access_token=${appToken}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
-  const expires = data.data?.expires_at;
-  return expires ? new Date(expires * 1000).toISOString() : null; // 0 = бессрочный system user token
+  const iso = (sec) => (sec ? new Date(sec * 1000).toISOString() : null);
+  return { expiresAt: iso(data.data?.expires_at), dataAccessExpiresAt: iso(data.data?.data_access_expires_at) };
+}
+
+/** Когда протухает токен страницы. Оставлено для вызовов, которым нужен только срок. */
+export async function tokenExpiry(creds) {
+  return (await tokenLifetime(creds)).expiresAt;
 }
 
 /**

@@ -740,6 +740,7 @@ export function composerView(ctx, postId) {
       dateTimeField({
         value: post.scheduled_at,
         label: 'Время публикации',
+        status: post.status,
         onChange: (dbValue) => {
           post.scheduled_at = dbValue;
           save({ quiet: true });

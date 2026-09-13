@@ -381,3 +381,88 @@ test('продление сторожем ставит дату выпуска �
   const age = Date.now() - new Date(projects.tokenSavedAt(projectId, 'threads')).getTime();
   assert.ok(age < 60000);
 });
+
+/* ---------------------- доступ к данным (правило 90 дней) ---------------------- */
+
+test('бессрочный токен с кончающимся доступом к данным — тревога по данным', () => {
+  // Ровно случай 13.09.2026: токены страницы бессрочные, а доступ к данным
+  // кончается 12.12 — и сторож об этом молчал.
+  const s = tokenState({ expiresAt: null, dataAccessAt: inDays(5) }, NOW);
+  assert.equal(s.state, 'soon');
+  assert.equal(s.reason, 'data');
+  assert.equal(s.stage, '7');
+});
+
+test('тревогу поднимает ближайший из двух сроков', () => {
+  assert.equal(tokenState({ expiresAt: inDays(4), dataAccessAt: inDays(40) }, NOW).reason, 'token');
+  assert.equal(tokenState({ expiresAt: inDays(40), dataAccessAt: inDays(4) }, NOW).reason, 'data');
+  // Поровну — токен: его смерть однозначна, про данные у Meta оговорки.
+  assert.equal(tokenState({ expiresAt: inDays(4), dataAccessAt: inDays(4) }, NOW).reason, 'token');
+});
+
+test('кончившийся доступ к данным — «истёк» с причиной «данные»', () => {
+  const s = tokenState({ expiresAt: null, dataAccessAt: inDays(-1) }, NOW);
+  assert.equal(s.state, 'expired');
+  assert.equal(s.reason, 'data');
+});
+
+test('отметка сторожа хранит второй срок и причину', () => {
+  saveHealth({ projectId, platform: 'instagram', expiresAt: null, dataAccessAt: inDays(6) }, NOW);
+  const row = tokenHealth({ projectId }).find((t) => t.platform === 'instagram');
+  assert.equal(row.reason, 'data');
+  assert.ok(row.dataAccessAt);
+  assert.equal(row.reconnect, 'Подключить через Facebook', 'совет — войти кнопкой, а не перевыпускать токен');
+});
+
+function fakeDebug(data) {
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ data }) };
+  };
+  return calls;
+}
+
+test('срок Threads читается у площадки — это факт, а не расчёт', async (t) => {
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  const expires = Math.floor(Date.now() / 1000) + 30 * 86400;
+  const access = Math.floor(Date.now() / 1000) + 50 * 86400;
+  const calls = fakeDebug({ is_valid: true, expires_at: expires, data_access_expires_at: access });
+
+  const res = await readExpiry(projectId, 'threads', { accessToken: 'token' });
+  assert.ok(calls.some((c) => c.includes('graph.threads.net') && c.includes('debug_token')));
+  assert.equal(res.estimated, false);
+  assert.equal(new Date(res.expiresAt).getTime(), expires * 1000);
+  assert.equal(new Date(res.dataAccessAt).getTime(), access * 1000);
+});
+
+test('Threads молчит — остаётся прежний расчёт, помеченный как догадка', async (t) => {
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => ({ error: { message: 'down' } }) });
+  projects.saveAccount(projectId, 'threads', { userId: '1', accessToken: 'fallback'.padEnd(30, 'f') });
+
+  const res = await readExpiry(projectId, 'threads', { accessToken: 'fallback'.padEnd(30, 'f') });
+  assert.equal(res.estimated, true);
+  assert.ok(res.expiresAt);
+});
+
+test('у Facebook доступ к данным не отслеживается, у Instagram — да', async (t) => {
+  // Права страниц выведены из-под правила 90 дней — тревога по Facebook
+  // была бы ложной. Токен общий, так что предупредит карточка Instagram.
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  const soon = Math.floor(Date.now() / 1000) + 3 * 86400;
+  fakeDebug({ is_valid: true, expires_at: 0, data_access_expires_at: soon });
+  projects.saveAccount(projectId, 'facebook', { pageId: '1', pageToken: 'page'.padEnd(30, 'p'), appId: '1', appSecret: 's' });
+
+  const fb = await readExpiry(projectId, 'facebook', projects.credentialsFor(projectId, 'facebook'));
+  const ig = await readExpiry(projectId, 'instagram', { userId: '2', pageToken: 'page'.padEnd(30, 'p') });
+  assert.equal(fb.expiresAt, null, 'бессрочный');
+  assert.equal(fb.dataAccessAt, null);
+  assert.equal(new Date(ig.dataAccessAt).getTime(), soon * 1000);
+});

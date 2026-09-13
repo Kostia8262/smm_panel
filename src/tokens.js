@@ -26,6 +26,7 @@
 import { db, log } from './db.js';
 import { getAdapter } from './platforms/index.js';
 import * as facebook from './platforms/facebook.js';
+import * as threadsAdapter from './platforms/threads.js';
 import { listProjects, credentialsFor, tokenSavedAt, saveAccount } from './projects.js';
 
 /**
@@ -35,27 +36,44 @@ import { listProjects, credentialsFor, tokenSavedAt, saveAccount } from './proje
  *   estimate — спросить негде, считаем от дня, когда токен вписали в панель;
  *   none     — срока нет вовсе, сторожим только живость;
  *   unknown  — площадка ещё не заведена, гадать не о чем.
+ *
+ * `dataAccess` — следить ли за вторым сроком, правилом Meta «90 дней без входа
+ * в приложение» (`data_access_expires_at`). Токен может быть бессрочным, а
+ * доступ к данным — кончиться; продлевается он входом кнопкой подключения.
  */
 export const TOKEN_POLICY = {
   telegram: { kind: 'none', why: 'Токен бота не протухает — его можно только отозвать у @BotFather' },
   threads: {
-    kind: 'estimate',
-    days: 60,
-    why: 'Threads не отдаёт срок ни одним вызовом — считаем 60 дней от дня, когда токен вписали',
+    // Срок читается у площадки (debug_token, найден 13.09.2026). Если она не
+    // ответит — прежний расчёт от дня выпуска, помеченный как догадка.
+    kind: 'read',
+    fallbackDays: 60,
+    dataAccess: true,
+    why: 'Срок и доступ к данным читаются через debug_token Threads',
     renew: 'Продлевается сам, за две недели до смерти',
+    reconnect: 'Подключить через Threads',
   },
   instagram: {
     kind: 'read',
+    // Для прав Instagram документация Meta про правило 90 дней молчит —
+    // значит следим: лучше лишнее предупреждение, чем молча вставший постинг.
+    dataAccess: true,
     why: 'Тот же токен страницы, что у Facebook — срок читается через debug_token',
     renew: null,
+    reconnect: 'Подключить через Facebook',
   },
   facebook: {
     kind: 'read',
+    // Права страниц (`pages_*`) документация явно выводит из-под правила 90
+    // дней, и предупреждение здесь было бы ложным. Токен общий с Instagram:
+    // предупреждение по Instagram покрывает оба, и один вход лечит оба.
+    dataAccess: false,
     why: 'Срок читается через debug_token; у системного пользователя его нет вовсе',
     // Обменять истекающий токен страницы можно только на токен пользователя,
     // а его у панели нет и быть не должно. Настоящее решение другое: выпустить
     // токен от системного пользователя в Business Manager — он бессрочный.
     renew: null,
+    reconnect: 'Подключить через Facebook',
   },
   tiktok: { kind: 'unknown', why: 'Площадка ещё не подключена' },
 };
@@ -104,18 +122,27 @@ export function daysLeft(expiresAt, now = new Date()) {
  * Состояние токена одной площадки. Чистая функция — от неё зависит и цвет
  * плашки в панели, и то, напишет ли сторож в журнал.
  *
- * @returns {{state: 'ok'|'soon'|'expired'|'broken'|'unknown', stage: string|null, left: number|null}}
+ * Сроков два — у самого токена и у доступа к данным, — и тревогу поднимает
+ * ближайший. `reason` говорит, какой именно: от этого зависит совет, а
+ * лечатся они по-разному (продлить токен или войти кнопкой заново).
+ *
+ * @returns {{state: 'ok'|'soon'|'expired'|'broken'|'unknown', stage: string|null, left: number|null, reason: 'token'|'data'|null}}
  */
-export function tokenState({ expiresAt = null, error = null } = {}, now = new Date()) {
+export function tokenState({ expiresAt = null, dataAccessAt = null, error = null } = {}, now = new Date()) {
   // Мёртвый токен важнее любого срока: он уже не работает, независимо от даты.
-  if (error) return { state: 'broken', stage: 'broken', left: null };
+  if (error) return { state: 'broken', stage: 'broken', left: null, reason: null };
 
-  const left = daysLeft(expiresAt, now);
-  if (left === null) return { state: 'ok', stage: null, left: null };
-  if (left < 0) return { state: 'expired', stage: 'expired', left };
+  const tokenLeft = daysLeft(expiresAt, now);
+  const dataLeft = daysLeft(dataAccessAt, now);
+  // При равенстве — токен: его смерть однозначна, а про данные у Meta оговорки.
+  const reason = tokenLeft === null && dataLeft === null ? null : dataLeft !== null && (tokenLeft === null || dataLeft < tokenLeft) ? 'data' : 'token';
+  const left = reason === 'data' ? dataLeft : tokenLeft;
+
+  if (left === null) return { state: 'ok', stage: null, left: null, reason: null };
+  if (left < 0) return { state: 'expired', stage: 'expired', left, reason };
 
   const hit = STAGES.filter((s) => left <= s.within).sort((a, b) => a.within - b.within)[0];
-  return hit ? { state: 'soon', stage: hit.stage, left } : { state: 'ok', stage: null, left };
+  return hit ? { state: 'soon', stage: hit.stage, left, reason } : { state: 'ok', stage: null, left, reason };
 }
 
 /** Стадия тревоги ухудшилась? Только тогда стоит снова писать в журнал. */
@@ -141,16 +168,26 @@ export async function readExpiry(projectId, platform, creds) {
   const policy = TOKEN_POLICY[platform] || { kind: 'unknown' };
 
   if (policy.kind === 'none' || policy.kind === 'unknown') {
-    return { expiresAt: null, estimated: false };
+    return { expiresAt: null, estimated: false, dataAccessAt: null };
   }
 
-  if (policy.kind === 'estimate') {
-    // Отсчёт от даты выпуска токена, а не от последней правки карточки:
-    // поправили id аккаунта — токен от этого моложе не стал.
-    const issuedAt = tokenSavedAt(projectId, platform);
-    if (!issuedAt) return { expiresAt: null, estimated: false };
-    const at = new Date(new Date(issuedAt).getTime() + policy.days * DAY_MS);
-    return { expiresAt: at.toISOString(), estimated: true };
+  if (platform === 'threads') {
+    // Сперва — факт от площадки. Сетевой сбой или молчание debug_token не
+    // повод остаться без срока вовсе: тогда прежний расчёт, честно помеченный.
+    let lifetime = null;
+    try {
+      lifetime = await threadsAdapter.tokenLifetime(creds);
+    } catch {
+      lifetime = null;
+    }
+    if (lifetime) {
+      return {
+        expiresAt: lifetime.expiresAt,
+        estimated: false,
+        dataAccessAt: policy.dataAccess ? lifetime.dataAccessExpiresAt : null,
+      };
+    }
+    return { ...estimateFromIssue(projectId, platform, policy.fallbackDays), dataAccessAt: null };
   }
 
   const app =
@@ -158,15 +195,30 @@ export async function readExpiry(projectId, platform, creds) {
   if (!app.appId || !app.appSecret) {
     // Без ключей приложения debug_token не ответит. Это не поломка токена —
     // просто нечем спросить, и врать «бессрочный» тут нельзя.
-    return { expiresAt: null, estimated: false, unreadable: 'не заполнены ID и секрет приложения' };
+    return { expiresAt: null, estimated: false, dataAccessAt: null, unreadable: 'не заполнены ID и секрет приложения' };
   }
 
-  const expiresAt = await facebook.tokenExpiry({
+  const lifetime = await facebook.tokenLifetime({
     appId: app.appId,
     appSecret: app.appSecret,
     pageToken: creds.pageToken,
   });
-  return { expiresAt, estimated: false };
+  return {
+    expiresAt: lifetime.expiresAt,
+    estimated: false,
+    dataAccessAt: policy.dataAccess ? lifetime.dataAccessExpiresAt : null,
+  };
+}
+
+/**
+ * Запасной расчёт срока: от даты выпуска токена, а не от последней правки
+ * карточки — поправили id аккаунта, токен от этого моложе не стал.
+ */
+function estimateFromIssue(projectId, platform, days) {
+  const issuedAt = tokenSavedAt(projectId, platform);
+  if (!issuedAt || !days) return { expiresAt: null, estimated: false };
+  const at = new Date(new Date(issuedAt).getTime() + days * DAY_MS);
+  return { expiresAt: at.toISOString(), estimated: true };
 }
 
 function pickAppKeys(creds = {}) {
@@ -182,7 +234,7 @@ export async function inspectToken(projectId, platform) {
   const creds = credentialsFor(projectId, platform);
   if (!adapter.isConfigured(creds)) return null; // не подключено — и сторожить нечего
 
-  const out = { projectId, platform, account: '', error: null, expiresAt: null, estimated: false };
+  const out = { projectId, platform, account: '', error: null, expiresAt: null, estimated: false, dataAccessAt: null };
 
   try {
     const res = await adapter.check(creds);
@@ -193,9 +245,10 @@ export async function inspectToken(projectId, platform) {
   }
 
   try {
-    const { expiresAt, estimated, unreadable } = await readExpiry(projectId, platform, creds);
+    const { expiresAt, estimated, dataAccessAt, unreadable } = await readExpiry(projectId, platform, creds);
     out.expiresAt = expiresAt;
     out.estimated = Boolean(estimated);
+    out.dataAccessAt = dataAccessAt ?? null;
     if (unreadable) out.unreadable = unreadable;
   } catch (err) {
     // Связь есть, а срок не прочитался: это не смерть токена, и поднимать
@@ -247,7 +300,7 @@ export async function renewToken(projectId, platform) {
 /* ------------------------------- хранение ------------------------------- */
 
 export function saveHealth(row, now = new Date()) {
-  const { state, stage } = tokenState(row, now);
+  const { state, stage, reason } = tokenState(row, now);
   const previous = db
     .prepare('SELECT warned_stage FROM token_health WHERE project_id = ? AND platform = ?')
     .get(row.projectId, row.platform);
@@ -259,8 +312,8 @@ export function saveHealth(row, now = new Date()) {
 
   db.prepare(
     `INSERT INTO token_health (project_id, platform, expires_at, estimated, state, account,
-                               checked_at, last_error, warned_stage)
-     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?, ?)
+                               checked_at, last_error, warned_stage, data_access_at, reason)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?, ?)
      ON CONFLICT(project_id, platform) DO UPDATE SET
        expires_at = excluded.expires_at,
        estimated = excluded.estimated,
@@ -268,7 +321,9 @@ export function saveHealth(row, now = new Date()) {
        account = excluded.account,
        checked_at = excluded.checked_at,
        last_error = excluded.last_error,
-       warned_stage = excluded.warned_stage`
+       warned_stage = excluded.warned_stage,
+       data_access_at = excluded.data_access_at,
+       reason = excluded.reason`
   ).run(
     row.projectId,
     row.platform,
@@ -279,10 +334,12 @@ export function saveHealth(row, now = new Date()) {
     state,
     row.account || '',
     row.error || row.unreadable || null,
-    warnedStage
+    warnedStage,
+    row.dataAccessAt ?? null,
+    reason
   );
 
-  return { state, stage, worsened };
+  return { state, stage, worsened, reason };
 }
 
 /**
@@ -315,17 +372,32 @@ export async function sweepTokens({ now = new Date() } = {}) {
         continue;
       }
 
-      const { state, stage, worsened } = saveHealth(row, now);
-      checked.push({ ...row, state, stage });
+      const { state, stage, worsened, reason } = saveHealth(row, now);
+      checked.push({ ...row, state, stage, reason });
 
       if (!worsened) continue;
+
+      // Доступ к данным лечится не продлением токена, а входом кнопкой — это и
+      // пишем, иначе человек пойдёт перевыпускать токен, который в порядке.
+      const reconnect = TOKEN_POLICY[platform]?.reconnect;
+      const cure = reconnect ? ` Продлевается входом: «Проекты» → «${reconnect}».` : '';
 
       if (state === 'broken') {
         log('error', `${project.title}: ${platform} не отвечает на проверку — ${row.error}`, {
           platform,
         });
+      } else if (state === 'expired' && reason === 'data') {
+        log('error', `${project.title}: у ${platform} кончился доступ к данным (правило Meta, 90 дней без входа) — публикация может перестать проходить.${cure}`, {
+          platform,
+        });
       } else if (state === 'expired') {
         log('error', `${project.title}: токен ${platform} истёк — публикация туда не уйдёт`, {
+          platform,
+        });
+      } else if (reason === 'data') {
+        const left = daysLeft(row.dataAccessAt, now);
+        const level = STAGES.find((s) => s.stage === stage)?.level || 'warn';
+        log(level, `${project.title}: у ${platform} кончается доступ к данным (правило Meta, 90 дней без входа) — осталось дней: ${left}.${cure}`, {
           platform,
         });
       } else {
@@ -388,7 +460,13 @@ export function tokenHealth({ projectId = null } = {}) {
     state: r.state,
     expiresAt: r.expires_at,
     estimated: Boolean(r.estimated),
-    left: daysLeft(r.expires_at),
+    // Дни — по тому сроку, из-за которого поднята тревога; иначе по токену.
+    left: daysLeft(r.reason === 'data' ? r.data_access_at : r.expires_at),
+    tokenLeft: daysLeft(r.expires_at),
+    dataAccessAt: r.data_access_at,
+    dataLeft: daysLeft(r.data_access_at),
+    reason: r.reason || null,
+    reconnect: TOKEN_POLICY[r.platform]?.reconnect || null,
     account: r.account,
     checkedAt: r.checked_at,
     error: r.last_error,

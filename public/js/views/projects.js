@@ -605,8 +605,9 @@ function healthTag(watch) {
     ok: ['tag--ok', watch.expiresAt ? `ещё ${watch.left} дн.` : 'бессрочный'],
     // Порог тот же, что у подробностей ниже: жёлтая плашка над красной
     // запиской читается как «да ничего страшного» — ровно наоборот смыслу.
-    soon: [watch.left <= 3 ? 'tag--danger' : 'tag--warn', `${watch.left} дн.`],
-    expired: ['tag--danger', 'истёк'],
+    soon: [watch.left <= 3 ? 'tag--danger' : 'tag--warn', watch.reason === 'data' ? `данные: ${watch.left} дн.` : `${watch.left} дн.`],
+    // Кончился доступ к данным — не «истёк»: сам токен может быть бессрочным.
+    expired: ['tag--danger', watch.reason === 'data' ? 'нет доступа к данным' : 'истёк'],
     broken: ['tag--danger', 'не отвечает'],
     unknown: ['', 'срок неизвестен'],
   };
@@ -632,6 +633,18 @@ function healthLine(watch) {
       `${watch.error || 'проверка не прошла'}. Так выглядит отозванный доступ: смена пароля, выход из всех сеансов или снятые права приложению. Публикация туда не уйдёт.`
     );
   }
+  // Доступ к данным (правило Meta, 90 дней без входа) лечится не продлением и
+  // не перевыпуском токена, а входом кнопкой. Так и говорим — иначе человек
+  // пойдёт менять токен, который в полном порядке.
+  if (watch.reason === 'data' && (watch.state === 'expired' || watch.state === 'soon')) {
+    const whenData = watch.dataAccessAt ? humanDate(new Date(watch.dataAccessAt)) : '';
+    const cure = watch.reconnect
+      ? `Продлевается входом: кнопка «${watch.reconnect}» здесь, в карточке. Нажать «Отмена» на экране выбора можно — сам вход уже продлевает срок, токен при этом не меняется.`
+      : 'Продлевается повторным входом в приложение.';
+    return watch.state === 'expired'
+      ? note('danger', `Доступ к данным кончился ${whenData}`, `Правило Meta: 90 дней без входа в приложение. Публикация может перестать проходить. ${cure}`)
+      : note(watch.left <= 3 ? 'danger' : 'warn', `Доступ к данным кончится ${whenData} — осталось дней: ${watch.left}`, `Правило Meta: 90 дней без входа в приложение. Сам токен при этом живой. ${cure}`);
+  }
   if (watch.state === 'expired') {
     // Отдельно про продление: истёкший Threads продлить уже нельзя, и звать
     // человека жать кнопку «Продлить» здесь значит звать его впустую.
@@ -650,8 +663,10 @@ function healthLine(watch) {
 
   const line = el('div', 'dim small');
   const renew = watch.renewNote ? ` · ${watch.renewNote.toLowerCase()}` : '';
+  // Второй срок — на виду и когда всё в порядке: 90 дней проходят незаметно.
+  const data = watch.dataAccessAt ? ` · доступ к данным до ${humanDate(new Date(watch.dataAccessAt))}` : '';
   line.textContent = watch.checkedAt
-    ? `Сторож проверял ${stampToLocal(watch.checkedAt)}${renew}${watch.error ? ` · срок не прочитан (${watch.error})` : ''}`
+    ? `Сторож проверял ${stampToLocal(watch.checkedAt)}${renew}${data}${watch.error ? ` · срок не прочитан (${watch.error})` : ''}`
     : 'Сторож ещё не проверял';
   return line;
 }

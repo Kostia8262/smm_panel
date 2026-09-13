@@ -86,10 +86,31 @@ export function parseTyped(text, base = new Date()) {
 }
 
 /**
- * @param {{value: string|null, onChange: (dbValue: string|null) => void}} opts
+ * Что сказать под полем, если время уже прошло, — зависит от того, где пост.
+ *
+ * Раньше фраза была одна на всё: «пост уйдёт при первой же проверке очереди».
+ * Она врала дважды: опубликованному посту (он уже ушёл) и черновику (в очереди
+ * его нет, и никуда он сам не уйдёт).
+ *
+ * @returns {{text: string, tone: 'warn'|'danger'|null}|null} null — статус не решает, показываем обычный отсчёт
+ */
+export function pastHint(status, isPast) {
+  // Эти состояния не про будущее время: пост уже в работе или отработан.
+  if (status === 'published') return { text: 'Пост опубликован.', tone: null };
+  if (status === 'publishing') return { text: 'Пост публикуется прямо сейчас.', tone: null };
+  if (status === 'partial') return { text: 'Ушёл не во все сети — неудачные повторяются кнопкой «Повторить неудачные».', tone: 'warn' };
+  if (status === 'failed') return { text: 'Не ушёл — повторите кнопкой «Повторить неудачные».', tone: 'danger' };
+  if (!isPast) return null;
+  if (status === 'scheduled') return { text: 'Время уже прошло — пост уйдёт при первой же проверке очереди.', tone: 'warn' };
+  if (status === 'review') return { text: 'Время уже прошло — пост уйдёт сразу после утверждения.', tone: 'warn' };
+  return { text: 'Время уже прошло — черновик сам не уйдёт: после «В очередь» он отправится сразу.', tone: 'warn' };
+}
+
+/**
+ * @param {{value: string|null, onChange: (dbValue: string|null) => void, status?: string}} opts
  * @returns {HTMLElement} поле целиком
  */
-export function dateTimeField({ value, onChange, label = 'Время публикации' } = {}) {
+export function dateTimeField({ value, onChange, label = 'Время публикации', status = 'draft' } = {}) {
   let current = parseDb(value);
   let popup = null;
 
@@ -161,9 +182,10 @@ export function dateTimeField({ value, onChange, label = 'Время публи�
     }
     const now = new Date();
     const diff = current - now;
-    if (diff < 0) {
-      hint.textContent = 'Время уже прошло — пост уйдёт при первой же проверке очереди.';
-      hint.style.color = 'var(--warn)';
+    const byStatus = pastHint(status, diff < 0);
+    if (byStatus) {
+      hint.textContent = byStatus.text;
+      hint.style.color = byStatus.tone ? `var(--${byStatus.tone})` : '';
       return;
     }
     const hours = Math.round(diff / 3600000);

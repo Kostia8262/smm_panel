@@ -77,6 +77,24 @@ export async function renew(creds) {
  * вписано в карточку, иначе панель говорит «подключено» про то, что не
  * работает.
  */
+/**
+ * Два срока токена Threads: сам токен и доступ к данным (правило 90 дней).
+ *
+ * `debug_token` у Threads в документации не описан, но отвечает, и спрашивать
+ * можно самим токеном — выяснено 13.09.2026. До этого срок считался от дня
+ * выпуска, то есть был догадкой; теперь это факт от площадки.
+ *
+ * @returns {{expiresAt: string|null, dataAccessExpiresAt: string|null}} или null, если площадка не ответила
+ */
+export async function tokenLifetime(creds) {
+  if (!creds?.accessToken) return null;
+  const res = await fetch(`${API}/debug_token?input_token=${creds.accessToken}&access_token=${creds.accessToken}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error || !data.data) return null;
+  const iso = (sec) => (sec ? new Date(sec * 1000).toISOString() : null);
+  return { expiresAt: iso(data.data.expires_at), dataAccessExpiresAt: iso(data.data.data_access_expires_at) };
+}
+
 export async function check(creds) {
   const res = await fetch(`${API}/me?fields=id,username&access_token=${creds.accessToken}`);
   const data = await res.json();
