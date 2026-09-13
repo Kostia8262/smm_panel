@@ -1002,6 +1002,29 @@ const MIGRATIONS = [
       ALTER TABLE post_targets ADD COLUMN parts TEXT;
     `,
   },
+  {
+    /*
+     * Звук Instagram (13.09.2026, src/audio.js).
+     *
+     * `post_targets.audio` — выбранный трек из библиотеки Instagram или
+     * название собственного звука ролика, JSON. У цели, а не у поста: звук
+     * бывает только у Instagram и только у Reels.
+     *
+     * `media.derived` — кадр, собранный панелью из других кадров (Reels из
+     * фото рендерит браузер). JSON: из каких кадров и с какими настройками.
+     * Такой кадр не «ещё один файл поста»: в цели, где кадры не выбраны явно,
+     * он не попадает — иначе ролик ушёл бы в Telegram рядом с теми же фото.
+     *
+     * `trends.audio` — трендовый звук на доске трендов: из идеи он доезжает
+     * до поста уже выбранным.
+     */
+    name: '023-instagram-audio',
+    sql: `
+      ALTER TABLE post_targets ADD COLUMN audio TEXT;
+      ALTER TABLE media ADD COLUMN derived TEXT;
+      ALTER TABLE trends ADD COLUMN audio TEXT;
+    `,
+  },
 ];
 
 function migrate() {

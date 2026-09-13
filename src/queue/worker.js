@@ -24,6 +24,11 @@ const { sweepOrphans, THUMB_DIR } = await import('../media.js');
 const { sweepTokens } = await import('../tokens.js');
 const { purgePublishedMedia, quotaCheck } = await import('../retention.js');
 const { workerHeartbeat } = await import('../journal.js');
+const { checkUpcomingAudio } = await import('../audio.js');
+const { audioInfo } = await import('../platforms/instagram-audio.js');
+const { collectTrendingSounds } = await import('../trends/sounds.js');
+const { credentialsFor, listProjects } = await import('../projects.js');
+const { getSetting, setSetting } = await import('../staff.js');
 
 const TICK_MS = Number(process.env.WORKER_TICK_MS || 60000);
 const SWEEP_MS = 3600 * 1000;
@@ -47,6 +52,10 @@ let purgedAt = 0;
 let quotaWarned = false;
 let tokensAt = 0;
 let tokensBusy = false;
+const AUDIO_MS = 3600 * 1000;
+const SOUNDS_MS = 24 * 3600 * 1000;
+let audioAt = 0;
+let audioBusy = false;
 
 /**
  * Подмести файлы, на которые в базе уже никто не ссылается.
@@ -129,6 +138,46 @@ async function watchTokens() {
   }
 }
 
+/**
+ * Звук Instagram: раз в час — не пропал ли трек у постов ближайших двух суток
+ * (src/audio.js), раз в сутки — трендовые звуки на доску трендов.
+ *
+ * Трек выбирают за дни до выхода, а библиотека меняется: без проверки пост
+ * упал бы в момент публикации, когда выбрать другой звук уже некогда. Отметка
+ * о последнем сборе трендов лежит в базе, а не в памяти: иначе каждая выкатка
+ * с перезапуском воркера дёргала бы Instagram заново.
+ */
+async function watchAudio() {
+  if (audioBusy || Date.now() - audioAt < AUDIO_MS) return;
+  audioBusy = true;
+  audioAt = Date.now();
+  try {
+    await checkUpcomingAudio({
+      db,
+      log,
+      fetchInfo: (audioId, projectId) => audioInfo(audioId, credentialsFor(projectId, 'instagram')),
+    });
+
+    const last = Number(getSetting('sounds_collected_at', '0')) || 0;
+    if (Date.now() - last >= SOUNDS_MS) {
+      setSetting('sounds_collected_at', String(Date.now()));
+      for (const project of listProjects()) {
+        const creds = credentialsFor(project.id, 'instagram');
+        if (!creds.userId || !creds.pageToken) continue;
+        try {
+          await collectTrendingSounds(project.id);
+        } catch (err) {
+          log('warn', `сбор трендов, звуки Instagram «${project.title}»: ${err.message}`);
+        }
+      }
+    }
+  } catch (err) {
+    log('warn', `сторож звука не отработал: ${err.message}`);
+  } finally {
+    audioBusy = false;
+  }
+}
+
 async function tick() {
   // Отметка до проверки `busy`: воркер, занятый выгрузкой видео, жив, и
   // журнал не должен рисовать его молчащим. Упавшая отметка не повод
@@ -153,6 +202,7 @@ async function tick() {
     // Намеренно без await: обход площадок не должен задерживать созревшие
     // посты — иначе медленный Graph API отодвигает публикацию по времени.
     watchTokens();
+    watchAudio();
 
     const due = db.prepare(dueQuery()).all().filter((post) => !inFlight.has(post.id));
 

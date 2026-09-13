@@ -13,6 +13,7 @@
  */
 
 import { db, log } from './db.js';
+import { parseAudio, storeAudio } from './audio.js';
 
 const pad = (n) => String(n).padStart(2, '0');
 
@@ -339,15 +340,33 @@ export function requeueEvergreen(postId) {
     newIdOf.set(m.id, Number(info.lastInsertRowid));
   }
 
+  // Ролик из фото помнит, из каких фото собран, — по id. У копии фото свои,
+  // и без перекладки проверка сочла бы ролик собранным «из других фото».
+  // Перекладываем после всех кадров: фото может стоять и после ролика.
+  const setDerived = db.prepare('UPDATE media SET derived = ? WHERE id = ?');
+  for (const m of media) {
+    if (!m.derived) continue;
+    try {
+      const d = JSON.parse(m.derived);
+      d.sources = (d.sources || []).map((s) => ({ ...s, id: newIdOf.get(Number(s.id)) ?? s.id }));
+      setDerived.run(JSON.stringify(d), newIdOf.get(m.id));
+    } catch {
+      setDerived.run(m.derived, newIdOf.get(m.id));
+    }
+  }
+
   // Выбор кадров цели хранит id кадров — у копии они свои. Не переложи их, и
   // сторис копии указывала бы на кадры оригинала, которых у неё нет. Части
   // серии не копируются: у копии ещё ничего не вышло.
   const targets = db
-    .prepare('SELECT platform, format_id, text_override, media_ids FROM post_targets WHERE post_id = ?')
+    .prepare('SELECT platform, format_id, text_override, media_ids, audio FROM post_targets WHERE post_id = ?')
     .all(postId);
   const insert = db.prepare(
     'INSERT OR IGNORE INTO post_targets (post_id, platform, format_id, text_override, media_ids) VALUES (?, ?, ?, ?, ?)'
   );
+  // Звук копии — тот же трек. Отметку о пропаже не переносим: до выхода
+  // копии месяцы, сторож перепроверит трек сам.
+  const setAudio = db.prepare('UPDATE post_targets SET audio = ? WHERE post_id = ? AND platform = ? AND format_id = ?');
   for (const t of targets) {
     let mediaIds = null;
     if (t.media_ids) {
@@ -358,6 +377,12 @@ export function requeueEvergreen(postId) {
       }
     }
     insert.run(copyId, t.platform, t.format_id, t.text_override, mediaIds);
+    const audio = parseAudio(t.audio);
+    if (audio) {
+      delete audio.missing;
+      delete audio.checkedAt;
+      setAudio.run(storeAudio(audio), copyId, t.platform, t.format_id);
+    }
   }
 
   log('info', `вечнозелёный повтор: пост #${postId} вернулся копией #${copyId} на ${when}`, { postId: copyId });

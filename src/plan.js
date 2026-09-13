@@ -12,6 +12,7 @@
  */
 
 import { db, log } from './db.js';
+import { parseAudio, storeAudio } from './audio.js';
 
 export const PLAN_STATUS = {
   idea: { id: 'idea', title: 'Идея', hint: 'Предложена, ещё не смотрели' },
@@ -42,6 +43,8 @@ export const TREND_SOURCES = {
   own_stats: { id: 'own_stats', title: 'Наша статистика', auto: true },
   google_trends: { id: 'google_trends', title: 'Google Trends', auto: true },
   youtube: { id: 'youtube', title: 'YouTube в тренде', auto: true },
+  // С июня 2026 — первый машинный сигнал от Instagram: трендовые звуки Reels.
+  ig_audio: { id: 'ig_audio', title: 'Звуки Instagram', auto: true },
 };
 
 /* -------------------------------- тренды -------------------------------- */
@@ -64,6 +67,7 @@ function trendFromRow(row) {
     projectId: row.project_id,
     archived: Boolean(row.archived),
     stale: isStale(row),
+    audio: parseAudio(row.audio),
   };
 }
 
@@ -289,6 +293,27 @@ export function planToPost(id, { db: database = db, staffId }) {
   for (const target of item.platforms) {
     if (typeof target === 'string') insertTarget.run(postId, target, 'any');
     else if (target?.platform) insertTarget.run(postId, target.platform, target.format_id || 'any');
+  }
+
+  // Идея из трендового звука: звук и есть суть идеи, и искать его заново в
+  // композере значило бы потерять тот самый трек. Звук бывает только у Reels
+  // Instagram — туда пост и нацеливаем.
+  const trendAudio = item.trendId
+    ? parseAudio(database.prepare('SELECT audio FROM trends WHERE id = ?').get(item.trendId)?.audio)
+    : null;
+  if (trendAudio?.id) {
+    const rows = database
+      .prepare("SELECT id, format_id FROM post_targets WHERE post_id = ? AND platform = 'instagram' ORDER BY id")
+      .all(postId);
+    if (!rows.some((r) => r.format_id === 'reels')) {
+      // Площадка без раскладки («any» из плана) становится Reels, а не
+      // обрастает второй целью рядом.
+      if (rows[0]) database.prepare("UPDATE post_targets SET format_id = 'reels' WHERE id = ?").run(rows[0].id);
+      else insertTarget.run(postId, 'instagram', 'reels');
+    }
+    database
+      .prepare("UPDATE post_targets SET audio = ? WHERE post_id = ? AND platform = 'instagram' AND format_id = 'reels'")
+      .run(storeAudio(trendAudio), postId);
   }
 
   database

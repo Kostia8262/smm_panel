@@ -61,6 +61,12 @@ app.use(express.json({ limit: '1mb' }));
  *
  * `unsafe-inline` здесь нет намеренно: ради этого из login.html убран
  * встроенный скрипт, а из index.html — атрибут style.
+ *
+ * Одно исключение с 13.09.2026 — CDN Meta, и только для картинок и звука:
+ * обложки треков и файлы прослушки библиотеки Instagram лежат там и живут
+ * полтора дня. Гонять их через сервер значило бы нагружать общий с сайтами
+ * VPS ради того, что браузер возьмёт сам; скрипты с чужих хостов по-прежнему
+ * запрещены.
  */
 app.use((_req, res, next) => {
   res.setHeader(
@@ -69,8 +75,8 @@ app.use((_req, res, next) => {
       "default-src 'self'",
       "script-src 'self'",
       "style-src 'self'",
-      "img-src 'self' data: blob:",
-      "media-src 'self' blob:",
+      "img-src 'self' data: blob: https://*.fbcdn.net",
+      "media-src 'self' blob: https://*.fbcdn.net",
       "connect-src 'self'",
       "font-src 'self'",
       "object-src 'none'",
@@ -1027,6 +1033,194 @@ app.get('/api/posts/:id/log', (req, res) => {
   res.json({ log: rows });
 });
 
+/* ------------------------------ звук Instagram ------------------------------ */
+
+const igAudio = await import('./platforms/instagram-audio.js');
+const audioStore = await import('./audio.js');
+
+/*
+ * Ответы площадки держим десять минут. Композер спрашивает на каждую паузу в
+ * наборе, а трендовая витрина за это время не меняется; ссылка на прослушку
+ * живёт полтора дня — десятиминутный кэш её не протухнет.
+ */
+const AUDIO_CACHE_MS = 10 * 60 * 1000;
+const audioCache = new Map();
+
+function cachedAudio(key, load) {
+  const hit = audioCache.get(key);
+  if (hit && Date.now() - hit.at < AUDIO_CACHE_MS) return hit.promise;
+  const promise = load();
+  audioCache.set(key, { at: Date.now(), promise });
+  // Отказ не кэшируем: поправленный токен должен заработать сразу.
+  promise.catch(() => audioCache.delete(key));
+  if (audioCache.size > 300) audioCache.delete(audioCache.keys().next().value);
+  return promise;
+}
+
+function instagramCredsOr422(req, res) {
+  const projectId = currentProjectId(req);
+  const creds = projectsDb.credentialsFor(projectId, 'instagram');
+  if (!creds.userId || !creds.pageToken) {
+    res.status(422).json({ error: 'У проекта не подключён Instagram — звуки искать негде' });
+    return null;
+  }
+  return { projectId, creds };
+}
+
+function audioFailure(res, err) {
+  const gone = igAudio.isGone(err);
+  res.status(gone ? 404 : 502).json({
+    error: gone ? 'Такого звука в Instagram больше нет' : `Instagram не отдал звуки: ${err.message}`,
+  });
+}
+
+/** Поиск в библиотеке; без запроса — трендовые звуки выбранного типа. */
+app.get('/api/audio', async (req, res) => {
+  const ctx = instagramCredsOr422(req, res);
+  if (!ctx) return;
+  const type = igAudio.AUDIO_TYPES.includes(req.query.type) ? req.query.type : 'music';
+  const q = String(req.query.q || '').trim().slice(0, 100);
+  const after = String(req.query.after || '').slice(0, 200);
+  try {
+    const data = await cachedAudio(`${ctx.projectId}:s:${type}:${q}:${after}`, () =>
+      igAudio.searchAudio(ctx.creds, { type, q, after })
+    );
+    res.json(data);
+  } catch (err) {
+    audioFailure(res, err);
+  }
+});
+
+/** Карточка трека — со свежей ссылкой на прослушку для уже выбранного звука. */
+app.get('/api/audio/:id', async (req, res) => {
+  const ctx = instagramCredsOr422(req, res);
+  if (!ctx) return;
+  try {
+    const audio = await cachedAudio(`${ctx.projectId}:i:${req.params.id}`, () =>
+      igAudio.audioInfo(req.params.id, ctx.creds)
+    );
+    res.json({ audio });
+  } catch (err) {
+    audioFailure(res, err);
+  }
+});
+
+/*
+ * Reels из фото.
+ *
+ * Музыку к фотопосту Instagram через API не прикрепить никак — только к
+ * Reels. Ролик из фото собирает браузер (public/js/reel-render.js): у VPS одно
+ * ядро на шестнадцать сайтов, ffmpeg здесь положил бы их все. Сюда приходит
+ * готовый MP4, и сервер лишь сверяет его паспорт и привязывает к цели.
+ *
+ * Такой кадр помечен `derived`: в цели без явного выбора кадров он не
+ * участвует (иначе ролик ушёл бы в Telegram рядом с теми же фото), а в
+ * `derived` записано, из каких фото и с какой точкой фокуса он собран — по
+ * этому проверка поста видит, что фото поменялись после сборки.
+ */
+const reelUpload = upload.fields([
+  { name: 'files', maxCount: 1 },
+  { name: 'thumbs', maxCount: 1 },
+]);
+
+app.post('/api/posts/:id/reel', uploadQuota, reelUpload, (req, res) => {
+  const id = Number(req.params.id);
+  const file = req.files?.files?.[0];
+  let thumb = req.files?.thumbs?.[0];
+  const fail = (status, error) => {
+    if (file) removeStored(file.filename);
+    if (thumb) removeStored(thumb.filename, THUMB_DIR);
+    return res.status(status).json({ error });
+  };
+
+  const post = getPost(id);
+  if (!post) return fail(404, 'Пост не найден');
+  if (!file || file.mimetype !== 'video/mp4') return fail(422, 'Нужен собранный ролик MP4');
+  const target = post.targets.find((t) => t.platform === 'instagram' && t.format_id === 'reels');
+  if (!target) return fail(422, 'У поста нет цели Instagram · Reels');
+  if (target.status === 'published') return fail(422, 'Reels уже опубликован — пересобирать поздно');
+
+  let sourceIds = [];
+  try {
+    sourceIds = JSON.parse(String(req.body?.sources || '[]')).map(Number);
+  } catch {
+    sourceIds = [];
+  }
+  const photos = new Map(
+    post.media.filter((m) => m.kind === 'image' && !m.derived && !m.purged_at).map((m) => [m.id, m])
+  );
+  if (!sourceIds.length || sourceIds.length > 10 || new Set(sourceIds).size !== sourceIds.length || !sourceIds.every((s) => photos.has(s))) {
+    return fail(422, 'Фото поста изменились — обновите страницу и соберите ролик заново');
+  }
+
+  // Паспорт проверяем, а не верим браузеру на слово: площадка откажет уже
+  // после постановки в очередь, и отказ этот будет безымянным.
+  const passport = probeVideo(file.path);
+  if (passport.videoCodec !== 'h264' || passport.width !== 1080 || passport.height !== 1920 || !(passport.duration >= 3)) {
+    return fail(422, 'Ролик собрался не так, как ждёт Reels (H.264, 1080×1920, от 3 с) — соберите ещё раз');
+  }
+
+  if (thumb) {
+    const verdict = checkThumb(thumb.path, thumb.size);
+    if (!verdict.ok) {
+      log('warn', `миниатюра отклонена: ${verdict.reason}`, { postId: id });
+      removeStored(thumb.filename, THUMB_DIR);
+      thumb = null;
+    }
+  }
+
+  const seconds = Math.min(8, Math.max(2, Number(req.body?.secondsPerSlide) || 3));
+  const derived = JSON.stringify({
+    from: 'photos',
+    secondsPerSlide: seconds,
+    sources: sourceIds.map((s) => ({ id: s, focus_x: photos.get(s).focus_x, focus_y: photos.get(s).focus_y })),
+  });
+  const position = db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS n FROM media WHERE post_id = ?').get(id).n;
+  const mediaId = Number(
+    db
+      .prepare(
+        `INSERT INTO media
+          (post_id, kind, original_name, stored_name, mime, bytes, width, height, duration, video_codec, audio_codec, fps,
+           position, thumb_name, thumb_bytes, derived)
+         VALUES (?, 'video', 'Reels из фото.mp4', ?, 'video/mp4', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id, file.filename, file.size, passport.width, passport.height, passport.duration, passport.videoCodec,
+        passport.audioCodec, passport.fps, position, thumb?.filename || null, thumb?.size || null, derived
+      ).lastInsertRowid
+  );
+  db.prepare('UPDATE post_targets SET media_ids = ? WHERE id = ?').run(JSON.stringify([mediaId]), target.id);
+
+  // Прежний ролик из фото больше не нужен, если его не выбрала другая цель.
+  const selectedElsewhere = new Set(post.targets.filter((t) => t.id !== target.id).flatMap((t) => targetMediaIds(t) || []));
+  const stale = db
+    .prepare('SELECT id, stored_name, thumb_name FROM media WHERE post_id = ? AND derived IS NOT NULL AND id != ?')
+    .all(id, mediaId);
+  for (const old of stale) {
+    if (selectedElsewhere.has(old.id)) continue;
+    db.prepare('DELETE FROM media WHERE id = ?').run(old.id);
+    retention.releaseFile(old.stored_name);
+    retention.releaseThumb(old.thumb_name);
+  }
+
+  log('info', `пост #${id}: собран Reels из фото — кадров ${sourceIds.length}, ${Math.round(passport.duration)} с`, {
+    postId: id,
+    platform: 'instagram',
+  });
+  touchPost(id);
+  res.json({ post: decorate(getPost(id)) });
+});
+
+/** Звуки в тренде — на доску трендов, как «Собрать сейчас» у фраз. */
+const soundTrends = await import('./trends/sounds.js');
+app.post('/api/trends/sounds', requireAccess('platforms'), async (req, res) => {
+  try {
+    res.json(await soundTrends.collectTrendingSounds(currentProjectId(req)));
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
 /* ------------------------------ контент-план ------------------------------ */
 
 app.get('/api/plan', (req, res) => {
@@ -1466,6 +1660,10 @@ function saveTargets(postId, targets) {
   );
   const updateText = db.prepare('UPDATE post_targets SET text_override = ? WHERE id = ?');
   const updateMedia = db.prepare('UPDATE post_targets SET media_ids = ? WHERE id = ?');
+  // Звук — только у Instagram. `undefined` — клиент звук не прислал (старая
+  // вкладка из кэша): оставляем как есть, а не стираем выбранный трек.
+  const updateAudio = db.prepare('UPDATE post_targets SET audio = ? WHERE post_id = ? AND platform = ? AND format_id = ?');
+  const audioOf = (t) => (t.audio === undefined ? undefined : t.platform === 'instagram' ? audioStore.storeAudio(t.audio) : null);
 
   // Выбор кадров цели: только кадры этого поста. `undefined` — клиент выбор
   // не прислал, оставляем как есть; `null` — все кадры.
@@ -1487,6 +1685,8 @@ function saveTargets(postId, targets) {
     } else {
       insert.run(postId, t.platform, formatId, t.text_override ?? null, mediaIds ?? null);
     }
+    const audio = audioOf(t);
+    if (audio !== undefined && row?.status !== 'published') updateAudio.run(audio, postId, t.platform, formatId);
   }
 }
 
@@ -1505,7 +1705,12 @@ function decorate(post) {
   post.projectSignature = project ? project.signature : '';
   post.signatureEnabled = project ? project.signatureEnabled : false;
   // В базе выбор кадров и части серии — JSON-строки; интерфейсу — массивы.
-  post.targets = (post.targets || []).map((t) => ({ ...t, media_ids: targetMediaIds(t), parts: partsOf(t) }));
+  post.targets = (post.targets || []).map((t) => ({
+    ...t,
+    media_ids: targetMediaIds(t),
+    parts: partsOf(t),
+    audio: audioStore.parseAudio(t.audio),
+  }));
   post.media = (post.media || []).map((m) => ({
     ...m,
     // Снятый после публикации файл по ссылке больше не открывается —

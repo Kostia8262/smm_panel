@@ -14,6 +14,7 @@
 import { api } from '../api.js';
 import { icon, iconMarkup } from '../icons.js';
 import { el, button, iconButton, panel, note, empty, toast, skeleton, projectTabs } from '../ui.js';
+import { trackLine } from '../audio.js';
 
 export function trendsView(ctx) {
   const root = el('div', 'view');
@@ -26,6 +27,7 @@ export function trendsView(ctx) {
     subtitle: 'Сигналы, из которых делаем план',
     actions: isOwner
       ? [
+          button('Звуки в тренде', { iconName: 'music', onClick: collectSounds }),
           button('Собрать сейчас', { iconName: 'refresh', onClick: collectNow }),
           button('Добавить тренд', { variant: 'primary', iconName: 'plus', onClick: () => openForm() }),
         ]
@@ -81,7 +83,7 @@ export function trendsView(ctx) {
       note(
         'info',
         'Откуда берутся сигналы',
-        'Автоматически собираются Google Trends, «в тренде» у YouTube и наша статистика по вышедшим постам. У Instagram, Facebook и TikTok публичного API трендов нет — туда сигнал заносится разбором.'
+        'Автоматически собираются Google Trends, «в тренде» у YouTube, наша статистика по вышедшим постам и звуки в тренде Reels Instagram. Остального у Instagram, у Facebook и TikTok публичного API трендов нет — туда сигнал заносится разбором.'
       )
     );
 
@@ -301,6 +303,22 @@ export function trendsView(ctx) {
     return { VIDEO: 'Видео', IMAGE: 'Картинка', TEXT: 'Только текст', CAROUSEL: 'Карусель' }[key] || key;
   }
 
+  async function collectSounds() {
+    if (scope === 'all') {
+      toast('Выберите школу: звуки берутся из её Instagram', 'danger');
+      return;
+    }
+    toast('Спрашиваю у Instagram, что в тренде…');
+    try {
+      const r = await api.collectSounds();
+      const failed = r.failed?.length ? ` · не ответило: ${r.failed.length}` : '';
+      toast(`Новых звуков ${r.added}, освежено ${r.refreshed}${failed}`, r.failed?.length ? 'danger' : 'ok');
+      load();
+    } catch (err) {
+      toast(err.message, 'danger');
+    }
+  }
+
   async function collectNow() {
     toast('Считаю объём по фразам…');
     try {
@@ -357,6 +375,8 @@ export function trendsView(ctx) {
     }
 
     if (trend.summary) box.append(el('p', 'idea__text', trend.summary));
+    // Звук надо услышать, а не прочитать о нём: решают по ушам.
+    if (trend.audio?.id) box.append(trackLine(trend.audio, trend.projectId || ctx.state.projectId));
 
     const foot = el('div', 'idea__foot');
     foot.append(
@@ -370,6 +390,8 @@ export function trendsView(ctx) {
               idea: trend.summary,
               platforms: [trend.platform],
               trendId: trend.id,
+              // Звук уже выбран — СММщику остаётся понять, что снимать под него.
+              needMedia: trend.audio?.id ? 'Вертикальный ролик или 3–10 фото под этот звук: Reels из фото панель соберёт сама' : '',
             });
             toast('Идея добавлена в план', 'ok');
             location.hash = '#/plan';

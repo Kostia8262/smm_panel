@@ -27,6 +27,7 @@ import { getSetting } from '../staff.js';
 import { UPLOAD_DIR } from '../media.js';
 import { fileExists } from '../retention.js';
 import { mediaFor } from '../validate.js';
+import { parseAudio, audioLabel } from '../audio.js';
 
 const MAX_ATTEMPTS = 3;
 
@@ -166,9 +167,17 @@ async function sendTarget({ post, project, publicUrl }, target) {
     // была, и не повторим её вслепую.
     markSending(target);
 
-    const out = await adapter.publish({ text, media, formatId: target.format_id, publicUrl, creds });
+    // Звук есть только у Instagram; остальным адаптерам поле ни к чему.
+    const audio = target.platform === 'instagram' ? parseAudio(target.audio) : null;
+    const out = await adapter.publish({ text, media, formatId: target.format_id, publicUrl, creds, audio });
     markPublished(target, out.externalId, out.url);
     log('info', `опубликовано: ${target.platform}`, { postId, platform: target.platform, payload: out });
+    if (audio?.id && out.audioType === null) {
+      log('warn', `пост #${postId}: Instagram выпустил Reels, но звука ${audioLabel(audio)} в нём не видит — проверьте пост`, {
+        postId,
+        platform: target.platform,
+      });
+    }
     return { platform: target.platform, ok: true, ...out };
   } catch (err) {
     markFailed(target, err.message);

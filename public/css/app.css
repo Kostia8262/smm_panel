@@ -939,6 +939,85 @@
 
 .issues { display: flex; flex-direction: column; gap: 6px; }
 
+/* --------------------------- звук Reels --------------------------- */
+
+.sound { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-3) 0 0; }
+.sound__head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); flex-wrap: wrap; }
+.sound__search { max-width: none; }
+.sound__actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+
+.sound__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 360px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sound__status { padding: var(--sp-4) var(--sp-2); text-align: center; color: var(--ink-3); font-size: var(--fs-xs); }
+.sound__more { display: flex; justify-content: center; padding-top: var(--sp-1); }
+
+.sound__track {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 6px var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+}
+.sound__cover {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--surface-3);
+  color: var(--ink-3);
+}
+.sound__cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sound__text { min-width: 0; }
+.sound__title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sound__meta { font-size: var(--fs-xs); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sound__play[aria-pressed="true"] { --btn-bg: var(--gold-dim); color: var(--gold-bright); }
+
+.sound__levels { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--sp-3) var(--sp-5); }
+.sound__level { display: flex; flex-direction: column; gap: 6px; }
+.sound__level-head { display: flex; justify-content: space-between; align-items: baseline; }
+.sound__level-value { font-size: var(--fs-xs); color: var(--ink-2); }
+.sound__range { width: 100%; accent-color: var(--gold); cursor: pointer; }
+.sound__own { padding-top: var(--sp-1); }
+
+/* Фотопост в Instagram: подсказка, как получить звук */
+.sound__offer { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
+.sound__offer .field__hint { flex: 1 1 260px; }
+
+/* Reels из фото: сборка ролика прямо в композере */
+.reel { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) 0 0; }
+.reel__row { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.reel__pace { display: flex; align-items: center; gap: var(--sp-2); }
+.reel__pace .select { width: auto; height: 30px; padding-block: 0; font-size: var(--fs-xs); }
+.reel__meter { margin-top: var(--sp-1); }
+
+/* Трек в превью — как строка звука под роликом в самом Instagram */
+.frame__sound {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--sp-3) 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.frame__sound--missing { color: var(--danger); }
+
 /* ------------------------------- превью ------------------------------- */
 
 .preview { position: sticky; top: 92px; display: flex; flex-direction: column; gap: var(--sp-4); }

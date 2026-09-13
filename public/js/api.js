@@ -138,6 +138,7 @@ export const api = {
   addKeyword: (phrase) => request(withProject('/api/trends/keywords'), { method: 'POST', body: { phrase } }),
   removeKeyword: (id) => request(withProject(`/api/trends/keywords/${id}`), { method: 'DELETE' }),
   collectTrends: () => request(withProject('/api/trends/collect'), { method: 'POST' }),
+  collectSounds: () => request(withProject('/api/trends/sounds'), { method: 'POST' }),
   digest: (days) => request(withProject(`/api/observed/digest?days=${days || 7}`)),
   ingestKey: () => request('/api/ingest/key'),
   newIngestKey: () => request('/api/ingest/key', { method: 'POST' }),
@@ -205,6 +206,24 @@ export const api = {
   setFocus: (mediaId, x, y) =>
     request(`/api/media/${mediaId}/focus`, { method: 'PUT', body: { focus_x: x, focus_y: y } }),
   deleteMedia: (mediaId) => request(`/api/media/${mediaId}`, { method: 'DELETE' }),
+
+  // Звук Instagram — проект поста, а не открытый в панели: пост академии
+  // ищет звуки токеном академии, даже если сверху выбран другой проект.
+  audioSearch: ({ type = 'music', q = '', after = '', projectId: pid }) =>
+    request(
+      `/api/audio?${new URLSearchParams({ type, q, after, project: String(pid || projectId || '') }).toString()}`
+    ),
+  audioInfo: (id, pid) => request(`/api/audio/${encodeURIComponent(id)}?project=${pid || projectId || ''}`),
+  /** Ролик, собранный браузером из фото поста, — кадром цели Instagram · Reels. */
+  uploadReel: (postId, { file, thumb, sources, secondsPerSlide }) => {
+    const form = new FormData();
+    // Поля до файлов: так они точно разобраны, когда сервер дочитает файл.
+    form.append('sources', JSON.stringify(sources));
+    form.append('secondsPerSlide', String(secondsPerSlide));
+    form.append('files', file);
+    if (thumb) form.append('thumbs', thumb, 'thumb-0.jpg');
+    return request(`/api/posts/${postId}/reel`, { method: 'POST', raw: form });
+  },
 
   /** @param {{kind?: string, problems?: boolean, platform?: string, q?: string, before?: number}} filters */
   journal: (filters = {}) => {

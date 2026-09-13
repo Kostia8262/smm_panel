@@ -10,6 +10,8 @@
  *      контейнера станет FINISHED — отсюда опрос ниже.
  */
 
+import { reelAudioParams, assertAudioAvailable, publishedAudioType } from './instagram-audio.js';
+
 const API = 'https://graph.facebook.com/v21.0';
 
 export const id = 'instagram';
@@ -126,7 +128,13 @@ export async function publishStory({ item, publicUrl, creds, wait }) {
   return { externalId: published.id, url: null };
 }
 
-export async function publish({ text, media = [], formatId = 'feed-portrait', publicUrl, creds, wait }) {
+/**
+ * @param {object} opts
+ * @param {object|null} [opts.audio]  звук цели (src/audio.js): трек из
+ *   библиотеки Instagram или название собственного звука. Прикрепляется
+ *   только к Reels — к фото и карусели API звука не даёт.
+ */
+export async function publish({ text, media = [], formatId = 'feed-portrait', publicUrl, creds, wait, audio = null }) {
   const user = creds.userId;
   if (!media.length) throw new Error('Instagram не публикует посты без медиа');
 
@@ -143,6 +151,12 @@ export async function publish({ text, media = [], formatId = 'feed-portrait', pu
   if (isReel && (media.length !== 1 || media[0].kind !== 'video')) {
     throw new Error('Instagram Reels: нужен ровно один видеофайл');
   }
+  const goesAsReel = media.length === 1 && media[0].kind === 'video';
+  // Звук, выбранный к посту, который выйдет фото или каруселью, молча
+  // потерялся бы: человек думает, что пост с музыкой. Лучше отказ.
+  if (audio?.id && !goesAsReel) {
+    throw new Error('Instagram: звук из библиотеки прикрепляется только к Reels — одному ролику');
+  }
 
   if (media.length === 1) {
     const m = media[0];
@@ -150,6 +164,10 @@ export async function publish({ text, media = [], formatId = 'feed-portrait', pu
     if (m.kind === 'video') {
       params.video_url = publicUrl(m);
       params.media_type = 'REELS';
+      // Пропавший трек контейнер отвергает безымянным «Invalid parameter» —
+      // проверяем заранее, чтобы в панели было написано, что чинить.
+      await assertAudioAvailable(audio, creds);
+      Object.assign(params, reelAudioParams(audio));
     } else {
       params.image_url = publicUrl(m);
     }
@@ -179,7 +197,11 @@ export async function publish({ text, media = [], formatId = 'feed-portrait', pu
   await waitReady(containerId, creds, wait || (heavy ? {} : { tries: 15, pauseMs: 2000 }));
 
   const published = await call(`${user}/media_publish`, { creation_id: containerId }, creds);
-  return { externalId: published.id, url: null };
+  if (!audio?.id) return { externalId: published.id, url: null };
+  // Что площадка сама говорит о звуке вышедшего поста — след в журнале на
+  // случай, если трек не прикрепился, хотя пост и вышел.
+  const audioType = await publishedAudioType(published.id, creds);
+  return { externalId: published.id, url: null, audioType: audioType ?? null };
 }
 
 function clean(obj) {

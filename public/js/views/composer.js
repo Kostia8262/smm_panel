@@ -16,6 +16,8 @@ import { makeThumb } from '../thumbs.js';
 import { dateTimeField } from '../datetime.js';
 import { withSignature } from '../signature.js';
 import { emojiButton } from '../emoji.js';
+import { audioField } from '../audio.js';
+import { reelBuilder, reelPhotos } from '../reel-builder.js';
 
 /** Как называется состояние поста и каким цветом его показывать. */
 const STATE = {
@@ -80,6 +82,23 @@ export function composerView(ctx, postId) {
     saveTimer = setTimeout(() => save({ quiet: true }), 900);
   }
 
+  /**
+   * Принять пост от сервера, сохранив объекты целей.
+   *
+   * Автосохранение не перерисовывает экран, а поля и кнопки держат ссылку на
+   * объект своей цели. Подмена `post` целиком оставляла их с устаревшими
+   * объектами: текст «Свой текст», дописанный после первого автосохранения,
+   * терялся (найдено 13.09.2026) — следующее сохранение уходило со старым.
+   */
+  function adopt(next) {
+    const old = new Map((post?.targets || []).map((t) => [keyOf(t), t]));
+    next.targets = (next.targets || []).map((t) => {
+      const mine = old.get(keyOf(t));
+      return mine ? Object.assign(mine, t) : t;
+    });
+    post = next;
+  }
+
   async function save({ quiet = false } = {}) {
     clearTimeout(saveTimer);
     ctx.setSaveState('сохраняю…');
@@ -93,7 +112,7 @@ export function composerView(ctx, postId) {
         skip_signature: post.skip_signature ? 1 : 0,
         targets: post.targets,
       });
-      post = data.post;
+      adopt(data.post);
       ctx.setSaveState('сохранено');
       if (!quiet) toast('Сохранено', 'ok');
       renderIssues();
@@ -412,7 +431,7 @@ export function composerView(ctx, postId) {
   function sectionTargets() {
     const p = panel('Куда публикуем');
     const list = el('div', 'targets');
-    const total = (post.media || []).length;
+    const total = (post.media || []).filter((m) => !m.derived).length;
 
     for (const spec of specs) {
       const mine = post.targets.filter((t) => t.platform === spec.id);
@@ -486,14 +505,115 @@ export function composerView(ctx, postId) {
       for (const t of mine) {
         const ids = t.media_ids;
         const cut = Array.isArray(ids) && ids.length !== total;
-        if (total > 1 || cut) row.append(framesRow(spec, t));
+        // У Reels из фото выбор кадров — это сам собранный ролик; полоса кадров
+        // там только запутала бы.
+        const builtReel = isReels(t) && mediaOf(t).some((m) => m.derived);
+        const noOwnVideo = isReels(t) && !(post.media || []).some((m) => m.kind === 'video' && !m.derived);
+        if ((total > 1 || cut) && !builtReel && !noOwnVideo) row.append(framesRow(spec, t));
       }
+
+      if (spec.id === 'instagram' && on) row.append(...soundBlocks(mine));
 
       list.append(row);
     }
 
     p.append(list);
     return p;
+  }
+
+  function isReels(target) {
+    return target?.platform === 'instagram' && target.format_id === 'reels';
+  }
+
+  /**
+   * Звук у Instagram. Прикрепить его площадка даёт только к Reels, поэтому:
+   * у Reels — сборка ролика из фото (если своего ролика нет) и выбор звука;
+   * у ленты с одним роликом — выбор звука (он и так уходит Reels); у фотопоста —
+   * подсказка, как получить звук, одной кнопкой.
+   */
+  function soundBlocks(mine) {
+    const blocks = [];
+    const live = (key) => post.targets.find((x) => keyOf(x) === key);
+
+    for (const t of mine) {
+      const format = formatOf(specs.find((s) => s.id === 'instagram'), t.format_id);
+      if (format?.role === 'story') continue;
+      const key = keyOf(t);
+      const media = mediaOf(t);
+      const video = media.length === 1 && media[0].kind === 'video' ? media[0] : null;
+      const locked = t.status === 'published';
+
+      if (isReels(t) && !locked && (media.some((m) => m.derived) || (!video && reelPhotos(post).length))) {
+        const wrap = el('div', 'target__extra');
+        wrap.append(
+          reelBuilder({
+            post,
+            target: t,
+            onBuilt: (next) => {
+              post = next;
+              previewKey = key;
+              renderAll();
+            },
+          })
+        );
+        blocks.push(wrap);
+      }
+
+      // Звук показываем там, где он возможен, и там, где он уже выбран (иначе
+      // его нечем было бы убрать с поста, ставшего каруселью).
+      if (!video && !isReels(t) && !t.audio) continue;
+      if (locked && !t.audio) continue;
+
+      const wrap = el('div', 'target__extra');
+      wrap.append(el('span', 'field__label', isReels(t) ? 'Звук Reels' : 'Звук ролика'));
+      wrap.append(
+        audioField({
+          projectId: post.project_id,
+          audio: t.audio,
+          reel: video
+            ? { kind: video.derived ? 'render' : 'video' }
+            : {
+                kind: null,
+                why: isReels(t)
+                  ? 'Сначала нужен ролик: загрузите видео или соберите его из фото выше.'
+                  : 'Пост уйдёт фото или каруселью — к ним Instagram звук не прикрепляет. Нужен один ролик.',
+              },
+          onChange: async (next, { commit }) => {
+            const target = live(key);
+            if (!target) return;
+            target.audio = next;
+            if (!commit) return autosave();
+            await save({ quiet: true });
+            renderAll();
+          },
+        })
+      );
+      blocks.push(wrap);
+    }
+
+    // Фотопост без Reels: звук возможен, но человек об этом не догадается.
+    const hasReels = mine.some(isReels);
+    if (!hasReels && reelPhotos(post).length && !mine.some((t) => mediaOf(t).some((m) => m.kind === 'video'))) {
+      const hint = el('div', 'target__extra sound__offer');
+      hint.append(
+        el('span', 'field__hint', 'К фото и каруселям Instagram музыку через API не прикрепляет. Добавьте Reels — панель соберёт ролик из этих фото.')
+      );
+      hint.append(
+        button('Reels со звуком', {
+          variant: 'quiet',
+          iconName: 'music',
+          onClick: async () => {
+            const fresh = { platform: 'instagram', format_id: 'reels', media_ids: null, text_override: null };
+            post.targets.push(fresh);
+            previewKey = keyOf(fresh);
+            await save({ quiet: true });
+            renderAll();
+          },
+        })
+      );
+      blocks.push(hint);
+    }
+    return blocks;
   }
 
   function formatChips(spec, mine) {
@@ -581,7 +701,8 @@ export function composerView(ctx, postId) {
    */
   function framesRow(spec, target) {
     const format = formatOf(spec, target.format_id);
-    const all = post.media || [];
+    // Ролик, собранный из фото, выбирается только у Reels Instagram.
+    const all = (post.media || []).filter((m) => !m.derived || isReels(target));
     const ids = Array.isArray(target.media_ids) ? target.media_ids.map(Number) : null;
     const chosen = ids ? all.filter((m) => ids.includes(Number(m.id))).length : all.length;
     const locked = target.status === 'published';
@@ -669,7 +790,8 @@ export function composerView(ctx, postId) {
   function mediaOf(target) {
     const all = post.media || [];
     const ids = target?.media_ids;
-    if (!Array.isArray(ids)) return all;
+    // Ролик, собранный из фото, — кадр только той цели, что выбрала его явно.
+    if (!Array.isArray(ids)) return all.filter((m) => !m.derived);
     const wanted = new Set(ids.map(Number));
     return all.filter((m) => wanted.has(Number(m.id)));
   }
@@ -1178,6 +1300,10 @@ export function composerView(ctx, postId) {
       }
       node.style.objectPosition = `${(media.focus_x ?? 0.5) * 100}% ${(media.focus_y ?? 0.5) * 100}%`;
       crop.append(node);
+    }
+    // Ролик из фото уже кадрирован при сборке — фокус задаётся у самих фото.
+    if (media && !media.purged && !media.derived) {
+      const node = crop.querySelector('.frame__media');
 
       // Точка фокуса: клик назначает, что обязано остаться в кадре при обрезке.
       const dot = el('span', 'focus-pick__dot');
@@ -1200,7 +1326,8 @@ export function composerView(ctx, postId) {
           toast(err.message, 'danger');
         }
       });
-    } else {
+    }
+    if (!media) {
       const holder = el('div', 'frame__empty');
       holder.append(icon('image', { size: 26 }));
       holder.append(el('span', null, 'Загрузите мастер-файл — здесь появится кадр'));
@@ -1229,6 +1356,15 @@ export function composerView(ctx, postId) {
     }
 
     frame.append(crop);
+    // Звук — строкой под роликом, как в самом Instagram: видно, с чем выйдет пост.
+    if (activeTarget?.audio?.id && platformId === 'instagram') {
+      const a = activeTarget.audio;
+      const line = el('div', `frame__sound${a.missing ? ' frame__sound--missing' : ''}`);
+      line.append(icon('music', { size: 13 }));
+      const who = a.artist || (a.username ? `@${a.username}` : '');
+      line.append(el('span', null, `${a.title || 'звук'}${who ? ` · ${who}` : ''}${a.missing ? ' — пропал из библиотеки' : ''}`));
+      frame.append(line);
+    }
     if (text) {
       frame.append(el('div', 'frame__caption', text.slice(0, 240) + (text.length > 240 ? '…' : '')));
     } else if (format.noText && media) {

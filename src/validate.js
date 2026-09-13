@@ -18,6 +18,7 @@
 
 import { PLATFORMS, formatOf, mediaRulesFor } from './platforms/specs.js';
 import { withSignature } from './signature.js';
+import { parseAudio, audioAllowed, audioLabel } from './audio.js';
 
 const mimeToType = {
   'image/jpeg': 'jpeg',
@@ -97,7 +98,9 @@ export function targetMediaIds(target) {
 export function mediaFor(post, target) {
   const all = post?.media || [];
   const ids = targetMediaIds(target);
-  if (!ids) return all;
+  // Ролик, собранный панелью из фото (`derived`), — кадр только той цели, что
+  // выбрала его явно: иначе он ушёл бы в Telegram рядом с теми же фото.
+  if (!ids) return all.filter((m) => !m.derived);
   const wanted = new Set(ids);
   return all.filter((m) => wanted.has(Number(m.id)));
 }
@@ -144,6 +147,7 @@ export function validatePost(post) {
     checkText(post, target, spec, format, hasMedia, issues);
     checkMediaSet(post, target, spec, format, rules, media, issues);
     for (const m of media) checkFile(m, spec, format, rules, issues);
+    checkSound(post, target, spec, format, media, issues);
 
     // --- готовность канала ---
     if (!spec.ready) {
@@ -162,6 +166,66 @@ export function validatePost(post) {
   }
 
   return { blockers, warnings, byTarget, ok: blockers.length === 0 };
+}
+
+/**
+ * Звук цели и ролик из фото.
+ *
+ * Звук из библиотеки Instagram прикрепляется только к Reels; выбранный к посту,
+ * который выйдет фото или каруселью, он потерялся бы молча. Ролик из фото
+ * собран из конкретных фото с конкретным кадрированием — поменяли их после
+ * сборки, и в сеть ушли бы вчерашние кадры.
+ */
+function checkSound(post, target, spec, format, media, issues) {
+  const audio = spec.id === 'instagram' ? parseAudio(target.audio) : null;
+
+  const reel = media.find((m) => m.derived);
+  if (reel) {
+    if (!derivedIsFresh(post, reel)) {
+      issues.blockers.push('Фото поменялись после сборки ролика — соберите Reels из фото заново');
+    }
+    if (!audio?.id) issues.warnings.push('Ролик из фото без звука — выберите трек, иначе Reels выйдет немым');
+  }
+
+  if (!audio?.id) return;
+  if (!audioAllowed(format, media)) {
+    // У раскладки Reels без ролика отказ уже есть — второй, про звук, был бы шумом.
+    if (format.role !== 'reel') {
+      issues.blockers.push('Звук из библиотеки Instagram прикрепляется только к Reels — одному ролику. Уберите звук или выберите Reels');
+    }
+    return;
+  }
+  if (audio.missing) {
+    issues.blockers.push(`Звук ${audioLabel(audio)} пропал из библиотеки Instagram — выберите другой`);
+  }
+  if (audio.audioVolume === 0) {
+    issues.warnings.push('Громкость трека 0 — звука из библиотеки слышно не будет');
+  }
+}
+
+function parseDerived(m) {
+  if (!m?.derived) return null;
+  try {
+    const d = typeof m.derived === 'string' ? JSON.parse(m.derived) : m.derived;
+    return Array.isArray(d?.sources) ? d : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Ролик собран из тех фото и с тем кадрированием, что у поста сейчас. */
+export function derivedIsFresh(post, m) {
+  const d = parseDerived(m);
+  if (!d) return true;
+  const photos = new Map((post.media || []).filter((x) => x.kind === 'image' && !x.derived).map((x) => [Number(x.id), x]));
+  return d.sources.every((s) => {
+    const photo = photos.get(Number(s.id));
+    return (
+      photo &&
+      Math.abs((photo.focus_x ?? 0.5) - (s.focus_x ?? 0.5)) < 0.002 &&
+      Math.abs((photo.focus_y ?? 0.5) - (s.focus_y ?? 0.5)) < 0.002
+    );
+  });
 }
 
 function checkText(post, target, spec, format, hasMedia, issues) {
