@@ -27,7 +27,14 @@ export function sendersView(ctx) {
   let editingApp = false;
 
   const connectButton = button('Подключить Gmail', { variant: 'primary', iconName: 'mail', onClick: () => connect() });
-  ctx.setTopbar({ title: 'Рассылка', subtitle: 'Ящики-отправители', actions: [connectButton] });
+  // Образец вёрстки — ссылкой в новую вкладку: у письма своя политика
+  // безопасности, и в рамке внутри панели его встроенные стили не заработают.
+  const sampleLink = el('a', 'btn btn--quiet');
+  sampleLink.href = api.mailSampleUrl();
+  sampleLink.target = '_blank';
+  sampleLink.rel = 'noopener';
+  sampleLink.append(el('span', null, 'Образец письма'));
+  ctx.setTopbar({ title: 'Рассылка', subtitle: 'Ящики-отправители', actions: [sampleLink, connectButton] });
 
   const returnHost = el('div', 'mail-slot');
   const appHost = el('div');

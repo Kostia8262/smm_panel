@@ -292,6 +292,8 @@ export const api = {
   checkMailSender: (id) => request(`/api/mail/senders/${id}/check`, { method: 'POST' }),
   testMailSender: (id, to = []) => request(withProject(`/api/mail/senders/${id}/test`), { method: 'POST', body: { to } }),
   disconnectMailSender: (id) => request(`/api/mail/senders/${id}`, { method: 'DELETE' }),
+  /** Образец фирменной вёрстки письма открытой школы — ссылкой, в новой вкладке. */
+  mailSampleUrl: () => withProject('/api/mail/sample.html'),
 };
 
 export { ApiError };

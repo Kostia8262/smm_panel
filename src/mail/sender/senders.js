@@ -15,6 +15,8 @@ import { SENDING } from '../specs.js';
 import { MailError } from '../store.js';
 import { checkAddress } from '../import/address.js';
 import { buildMessage, toBase64Url } from '../compose/mime.js';
+import { renderLetter, sampleBlocks } from '../compose/render.js';
+import { brandFor } from '../compose/brand.js';
 import { tokenFor, unsubscribeUrl, unsubscribeHeaders } from '../unsubscribe.js';
 import * as googleOauth from './google-oauth.js';
 import { sendRaw, GmailError } from './gmail.js';
@@ -288,29 +290,24 @@ export function senderAlerts() {
 
 /* ------------------------------ пробное письмо ------------------------------ */
 
-const escapeHtml = (s) =>
-  String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-
-function testLetter({ school, fromName, unsubscribe }) {
-  const subject = `Пробний лист — ${school}`;
-  const text = [
-    'Вітаємо!',
-    '',
-    `Це пробний лист із панелі розсилки «${school}». Якщо ви бачите його у «Вхідних», а не у «Спамі», — ящик підключено правильно.`,
-    '',
-    'Відкрийте посилання для відписки нижче: для пробного листа воно нічого не змінює, лише перевіряє, що сторінка працює.',
-    unsubscribe,
-    '',
-    `— ${fromName}`,
-  ].join('\n');
-  const html = `<!doctype html><html lang="uk"><body style="margin:0;padding:24px;background:#f6f4f1;font-family:Arial,Helvetica,sans-serif;color:#1f1a16">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px">
-<tr><td style="padding:28px 28px 8px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#b07d2a">${escapeHtml(school)}</td></tr>
-<tr><td style="padding:0 28px;font-size:22px;font-weight:bold">Пробний лист</td></tr>
-<tr><td style="padding:16px 28px;font-size:15px;line-height:1.55">Якщо ви бачите цей лист у «Вхідних», а не у «Спамі», — ящик підключено правильно.</td></tr>
-<tr><td style="padding:0 28px 24px;font-size:13px;line-height:1.55;color:#6b625a">Перевірте й посилання для відписки: для пробного листа воно нічого не змінює.<br><a href="${escapeHtml(unsubscribe)}" style="color:#b07d2a">Відписатися</a></td></tr>
-</table></td></tr></table></body></html>`;
+/**
+ * Пробное письмо — образец фирменной вёрстки школы: сразу видно и то, что
+ * ящик работает, и то, как рассылка выглядит в настоящем Gmail.
+ */
+function testLetter({ project, unsubscribe }) {
+  const brand = brandFor(project);
+  const blocks = sampleBlocks(project, brand);
+  blocks.splice(1, 1, { type: 'eyebrow', text: 'Пробний лист · образець оформлення' });
+  const subject = `Пробний лист — ${project.title}`;
+  const { html, text } = renderLetter({
+    brand,
+    subject,
+    preheader: 'Так виглядатиме розсилка: місця під картинки підписані розмірами.',
+    blocks,
+    signature: project.signature,
+    reason: 'це пробний лист із панелі розсилки',
+    unsubscribeUrl: unsubscribe,
+  });
   return { subject, text, html };
 }
 
@@ -339,7 +336,7 @@ export async function sendTest(id, { to = [], projectId, staffId = null, publicB
   const token = await accessTokenFor(row.id, { fetchImpl, now });
   const fromName = row.display_name || project.title;
   const unsubscribe = unsubscribeUrl(publicBase, tokenFor({ projectId: project.id, contactId: 0, campaignId: 0 }));
-  const letter = testLetter({ school: project.title, fromName, unsubscribe });
+  const letter = testLetter({ project, unsubscribe });
 
   const sent = [];
   const failed = [];

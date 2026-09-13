@@ -17,6 +17,8 @@ import * as pipeline from './import/pipeline.js';
 import * as senders from './sender/senders.js';
 import * as googleOauth from './sender/google-oauth.js';
 import * as unsubscribe from './unsubscribe.js';
+import { renderLetter, sampleBlocks } from './compose/render.js';
+import { brandFor } from './compose/brand.js';
 import { makeState, readState } from '../oauth/threads.js';
 import { getProject } from '../projects.js';
 import { tooManyAttempts } from '../ratelimit.js';
@@ -454,6 +456,40 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
     handle(async (req, res) => {
       await senders.disconnect(req.params.id);
       res.json({ ok: true });
+    })
+  );
+
+  /* ------------------------------ образец письма ------------------------------ */
+
+  /**
+   * Образец фирменной вёрстки школы — открывается в отдельной вкладке.
+   *
+   * Своя политика безопасности: вёрстка письма живёт на встроенных стилях, а
+   * общая CSP панели их запрещает. Скрипты по-прежнему запрещены, картинки —
+   * только по https (логотип лежит на сайте школы).
+   */
+  router.get(
+    '/api/mail/sample.html',
+    view,
+    handle((req, res) => {
+      const project = getProject(projectOf(req));
+      if (!project) throw new MailError('Проект не найден', 404);
+      const brand = brandFor(project);
+      const { html } = renderLetter({
+        brand,
+        subject: `Образець листа — ${project.title}`,
+        preheader: 'Так виглядатиме розсилка: місця під картинки підписані розмірами.',
+        blocks: sampleBlocks(project, brand),
+        signature: project.signature,
+        reason: 'ви підписалися на новини школи',
+        unsubscribeUrl: unsubscribe.unsubscribeUrl(publicBase(), unsubscribe.tokenFor({ projectId: project.id })),
+      });
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+      );
+      res.setHeader('Cache-Control', 'no-store');
+      res.type('html').send(html);
     })
   );
 
