@@ -217,9 +217,6 @@ export const api = {
     const query = qs.toString();
     return request(`/api/log${query ? `?${query}` : ''}`);
   },
-};
-
-export { ApiError };
 
   /* Рассылка: базы адресов (docs/рассылка.md). Всё — в пределах открытой школы. */
   mailSummary: (archived = false) => request(withProject(`/api/mail/summary${archived ? '?archived=1' : ''}`)),
@@ -256,3 +253,6 @@ export { ApiError };
   decideMailImport: (id, body) => request(withProject(`/api/mail/imports/${id}/decisions`), { method: 'PUT', body }),
   commitMailImport: (id, body) => request(withProject(`/api/mail/imports/${id}/commit`), { method: 'POST', body }),
   discardMailImport: (id) => request(withProject(`/api/mail/imports/${id}`), { method: 'DELETE' }),
+};
+
+export { ApiError };
