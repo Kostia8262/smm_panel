@@ -36,6 +36,7 @@ export const icons = {
   menu: S('<path d="M4 7h16M4 12h16M4 17h16"/>'),
   send: S('<path d="M20.5 3.5 10 14"/><path d="M20.5 3.5 14 20.5l-4-6.5-6.5-4z"/>'),
   refresh: S('<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4.5h-4.5"/>'),
+  search: S('<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>'),
   crop: S('<path d="M6.5 2.5v15h15"/><path d="M2.5 6.5h15v15"/>'),
   layers: S('<path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/>'),
   trend: S('<path d="M3.5 16.5 9 11l3.5 3.5L20.5 6.5"/><path d="M15.5 6.5h5v5"/>'),

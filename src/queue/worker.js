@@ -23,6 +23,7 @@ const { recoverStuck, dueQuery } = await import('./recover.js');
 const { sweepOrphans, THUMB_DIR } = await import('../media.js');
 const { sweepTokens } = await import('../tokens.js');
 const { purgePublishedMedia, quotaCheck } = await import('../retention.js');
+const { workerHeartbeat } = await import('../journal.js');
 
 const TICK_MS = Number(process.env.WORKER_TICK_MS || 60000);
 const SWEEP_MS = 3600 * 1000;
@@ -118,6 +119,14 @@ async function watchTokens() {
 }
 
 async function tick() {
+  // Отметка до проверки `busy`: воркер, занятый выгрузкой видео, жив, и
+  // журнал не должен рисовать его молчащим. Упавшая отметка не повод
+  // пропускать публикацию.
+  try {
+    workerHeartbeat(TICK_MS);
+  } catch (err) {
+    console.error(`[worker] отметка не записалась: ${err.message}`);
+  }
   if (busy) return; // публикация может идти дольше минуты — второй заход не нужен
   busy = true;
   try {

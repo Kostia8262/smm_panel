@@ -927,10 +927,25 @@ app.post('/api/posts/:id/publish-now', (req, res) => {
   res.status(202).json({ post: decorate(getPost(id)), queued: true });
 });
 
-app.get('/api/log', (req, res) => {
-  const limit = Math.min(Number(req.query.limit) || 200, 500);
-  const rows = db.prepare('SELECT * FROM publish_log ORDER BY id DESC LIMIT ?').all(limit);
-  res.json({ log: rows });
+// Разбор журнала — отдельным модулем: категории, поиск и сводка к маршрутам
+// отношения не имеют и проверяются тестом без поднятого сервера.
+const journalDb = await import('./journal.js');
+
+app.get('/api/log', requireAccess('journal'), (req, res) => {
+  const role = req.user.role;
+  const page = journalDb.listJournal({
+    kind: String(req.query.kind || ''),
+    problems: req.query.problems === '1',
+    platform: String(req.query.platform || ''),
+    q: String(req.query.q || '').slice(0, 100),
+    before: Number(req.query.before) || 0,
+    limit: Number(req.query.limit) || 100,
+    role,
+  });
+  // Сводка нужна только первой странице: подгрузка её не перерисовывает.
+  const summary = req.query.before ? null : journalDb.journalSummary({ role });
+  const { people, ...shared } = journalDb.KINDS;
+  res.json({ ...page, summary, kinds: role === 'owner' ? journalDb.KINDS : shared });
 });
 
 app.get('/api/posts/:id/log', (req, res) => {

@@ -167,7 +167,17 @@ export const api = {
     request(`/api/media/${mediaId}/focus`, { method: 'PUT', body: { focus_x: x, focus_y: y } }),
   deleteMedia: (mediaId) => request(`/api/media/${mediaId}`, { method: 'DELETE' }),
 
-  journal: (limit = 200) => request(`/api/log?limit=${limit}`),
+  /** @param {{kind?: string, problems?: boolean, platform?: string, q?: string, before?: number}} filters */
+  journal: (filters = {}) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value === true) qs.set(key, '1');
+      else if (value) qs.set(key, String(value));
+    }
+    // Не `qs.size`: его нет в Safari до 17, и фильтр там молча отбрасывался бы.
+    const query = qs.toString();
+    return request(`/api/log${query ? `?${query}` : ''}`);
+  },
 };
 
 export { ApiError };

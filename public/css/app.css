@@ -1012,6 +1012,116 @@
 
 .scroll-x { overflow-x: auto; }
 
+/* ============================== журнал ============================== */
+
+/* Сводка: четыре ответа за неделю до того, как глаз дойдёт до ленты.
+   Штатное молчит — цвет получают только сбой, висящий пост и немой воркер. */
+.jsum { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-3); }
+.jsum__item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--sp-4);
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  min-width: 0;
+}
+.jsum__value {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+.jsum__sub { font-size: var(--fs-xs); color: var(--ink-3); }
+.jsum__item--danger { border-color: rgba(226, 96, 79, 0.3); }
+.jsum__item--danger .jsum__value { color: var(--danger); }
+.jsum__item--warn { border-color: rgba(224, 166, 60, 0.3); }
+.jsum__item--warn .jsum__value { color: var(--warn); }
+.jsum__link,
+.jsum__action {
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color var(--dur) var(--ease);
+}
+.jsum__link:hover,
+.jsum__action:hover { color: var(--ink); }
+.jsum__action {
+  align-self: flex-start;
+  margin-top: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: 600 var(--fs-xs) / 1.4 var(--font);
+  cursor: pointer;
+}
+
+.jtools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.jtools .chips { max-width: 100%; overflow-x: auto; }
+.jtools .chip { white-space: nowrap; }
+.jtools__platform { width: auto; height: 36px; padding-block: 0; }
+.jtools__search { margin-left: auto; }
+.jtools__search .input { height: 36px; }
+
+.jfeed { display: flex; flex-direction: column; transition: opacity var(--dur) var(--ease); }
+.jfeed[aria-busy="true"] { opacity: 0.55; }
+.jfeed__day { padding: var(--sp-5) var(--sp-2) var(--sp-2); border-bottom: 1px solid var(--line-soft); }
+.jfeed__day:first-child { padding-top: var(--sp-2); }
+
+.jrow {
+  display: grid;
+  grid-template-columns: 40px 28px minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: start;
+  padding: var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--line-soft);
+}
+.jrow:last-child { border-bottom: 0; }
+.jrow__time { font-size: var(--fs-xs); line-height: 28px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.jrow__icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--ink-3);
+}
+.jrow--ok .jrow__icon { background: var(--ok-dim); color: var(--ok); }
+.jrow--warn .jrow__icon { background: var(--warn-dim); color: var(--warn); }
+.jrow--danger .jrow__icon { background: var(--danger-dim); color: var(--danger); }
+.jrow__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-top: 4px; }
+.jrow__head { display: flex; align-items: flex-start; gap: var(--sp-2); }
+.jrow__msg { min-width: 0; font-size: var(--fs-sm); line-height: 1.45; color: var(--ink); overflow-wrap: anywhere; }
+.jrow__head .tag { margin-left: auto; flex: none; }
+.jrow__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--sp-3); font-size: var(--fs-xs); color: var(--ink-3); }
+.jrow__post { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.jrow__post a,
+.jrow__ext { color: var(--ink-2); text-decoration: none; transition: color var(--dur) var(--ease); }
+.jrow__post a:hover,
+.jrow__ext:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+.jrow__ext { display: inline-flex; align-items: center; gap: 4px; }
+.jrow__dot { width: 7px; height: 7px; border-radius: 2px; flex: none; }
+.jrow--group .jrow__msg { color: var(--ink-2); }
+.jrow__open { align-self: center; }
+
+.jmore { display: flex; justify-content: center; padding-top: var(--sp-2); }
+.jmore:empty { display: none; }
+
+@media (max-width: 1240px) {
+  .jsum { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 860px) {
+  .jtools__search { flex-basis: 100%; max-width: none; margin-left: 0; }
+  .jrow { grid-template-columns: 40px minmax(0, 1fr) auto; }
+  .jrow__icon { display: none; }
+}
+
 /* ============================== площадки ============================== */
 
 .platforms { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--sp-4); }
