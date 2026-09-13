@@ -54,6 +54,23 @@ if (!project) {
   process.exit(1);
 }
 
+// Только посмотреть: когда вписан токен и чем он кончается. Отвечает на вопрос
+// «сменился ли токен вообще» — 13.09.2026 права на удаление не появились, и
+// первым делом надо было понять, лежит ли в карточке новый токен или старый.
+// Хвост — те же шесть знаков, что карточка показывает в поле; целиком токен
+// не печатается.
+if (args.includes('--show')) {
+  const creds = credentialsFor(projectId, platform);
+  console.log(`${project.title} · ${platform}`);
+  for (const f of ACCOUNT_FIELDS[platform] || []) {
+    const v = creds[f.key];
+    const shown = !v ? '— пусто —' : f.secret ? `…${String(v).slice(-6)} (${String(v).length} знаков)` : v;
+    console.log(`  ${f.title}: ${shown}`);
+  }
+  console.log(`  дата выпуска токена: ${tokenSavedAt(projectId, platform) || '— пусто —'}`);
+  process.exit(0);
+}
+
 if (issued !== null) {
   const before = tokenSavedAt(projectId, platform);
   let after;
