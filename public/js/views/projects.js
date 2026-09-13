@@ -50,8 +50,17 @@ export function projectsView(ctx) {
    */
   function reportOauthReturn() {
     const params = new URLSearchParams(location.search);
-    if (params.get('oauth') !== 'threads') return;
+    const kind = params.get('oauth');
+    if (kind !== 'threads' && kind !== 'facebook') return;
     history.replaceState(null, '', `${location.pathname}${location.hash}`);
+
+    if (kind === 'facebook') {
+      const id = Number(params.get('project'));
+      if (id) openId = id;
+      if (params.get('result') === 'pick') pickFacebookPage(id, params.get('pending'));
+      else toast(`Facebook не подключён, нынешние доступы не тронуты: ${params.get('message') || 'неизвестная ошибка'}`, 'danger');
+      return;
+    }
 
     if (params.get('result') === 'ok') {
       const missing = (params.get('missing') || '').split(',').filter(Boolean);
@@ -64,6 +73,110 @@ export function projectsView(ctx) {
     } else {
       toast(`Threads не подключён: ${params.get('message') || 'неизвестная ошибка'}`, 'danger');
     }
+  }
+
+  /**
+   * Выбор страницы после входа Facebook.
+   *
+   * До нажатия «Применить» карточка проекта не меняется вовсе. Страница, на
+   * которую заменять нельзя (срочный токен, не хватает прав, нет права
+   * публиковать), показывается с причиной и выбрать её нельзя: сервер всё
+   * равно откажет, но человек должен понять почему ещё до нажатия.
+   */
+  async function pickFacebookPage(projectId, pendingId) {
+    let data;
+    try {
+      data = await api.facebookPending(projectId, pendingId);
+    } catch (err) {
+      toast(err.message, 'danger');
+      return;
+    }
+
+    root.querySelector('.fb-pick')?.remove();
+    const box = panel('Какую страницу подключить к проекту');
+    box.classList.add('fb-pick');
+    box.append(
+      note(
+        'info',
+        'Пока вы не нажали «Применить», ничего не меняется',
+        data.current.forever
+          ? 'Сейчас у проекта бессрочный токен. Заменить его можно только таким же бессрочным и с теми же правами; прежние доступы уйдут в резервную копию.'
+          : 'Прежние доступы Facebook и Instagram перед заменой уйдут в резервную копию.'
+      )
+    );
+
+    const list = el('div', 'fb-pick__list');
+    let chosen = null;
+    const confirmWrap = el('label', 'fb-pick__confirm');
+    const confirm = el('input');
+    confirm.type = 'checkbox';
+    confirmWrap.append(confirm, el('span', null, 'Да, сменить страницу проекта'));
+    confirmWrap.hidden = true;
+
+    for (const page of data.pages) {
+      const row = el('label', `fb-pick__row${page.ok ? '' : ' fb-pick__row--blocked'}`);
+      const radio = el('input');
+      radio.type = 'radio';
+      radio.name = 'fb-page';
+      radio.disabled = !page.ok;
+      radio.addEventListener('change', () => {
+        chosen = page;
+        confirmWrap.hidden = !page.needsConfirm;
+        confirm.checked = false;
+        apply.disabled = false;
+      });
+      row.append(radio);
+
+      const body = el('div', 'fb-pick__body');
+      const head = el('div', 'fb-pick__head');
+      head.append(el('span', 'fb-pick__name', page.name));
+      if (page.isCurrent) head.append(el('span', 'tag tag--gold', 'сейчас подключена'));
+      head.append(el('span', `tag ${page.forever ? 'tag--ok' : 'tag--danger'}`, page.forever ? 'бессрочный' : 'срочный'));
+      body.append(head);
+      body.append(el('div', 'dim small', page.instagram ? `Instagram: @${page.instagram.username || page.instagram.id}` : 'Instagram не привязан'));
+      for (const p of page.problems) body.append(el('div', 'fb-pick__problem', p));
+      // У страницы, которую выбрать нельзя, предупреждения — шум поверх причин.
+      if (page.ok) for (const w of page.warnings) body.append(el('div', 'fb-pick__warning', w));
+      row.append(body);
+      list.append(row);
+    }
+    box.append(list, confirmWrap);
+
+    const foot = el('div', 'target__meta');
+    foot.style.justifyContent = 'flex-start';
+    const apply = button('Применить', {
+      variant: 'primary',
+      iconName: 'check',
+      disabled: true,
+      onClick: async () => {
+        if (!chosen) return;
+        if (chosen.needsConfirm && !confirm.checked) {
+          toast('Это другая страница — отметьте подтверждение смены', 'warn');
+          return;
+        }
+        apply.disabled = true;
+        try {
+          const res = await api.applyFacebookPending(projectId, pendingId, { pageId: chosen.pageId, confirmSwitch: confirm.checked });
+          toast(`Подключено: ${res.page}${res.instagram ? `, Instagram @${res.instagram}` : ''}`, 'ok');
+          for (const w of res.warnings || []) toast(w, 'warn');
+          box.remove();
+          load();
+        } catch (err) {
+          toast(err.message, 'danger');
+          apply.disabled = false;
+        }
+      },
+    });
+    const cancel = button('Отмена', {
+      onClick: async () => {
+        await api.cancelFacebookPending(projectId, pendingId).catch(() => {});
+        box.remove();
+        toast('Подключение отменено, доступы не тронуты', 'ok');
+      },
+    });
+    foot.append(apply, cancel);
+    box.append(foot);
+    root.prepend(box);
   }
 
   async function load() {
@@ -331,9 +444,29 @@ export function projectsView(ctx) {
       foot.append(connect);
     }
 
+    // Facebook и Instagram подключаются одним входом: токен у них общий —
+    // токен страницы, а Instagram находится по странице. Поэтому кнопка есть
+    // в обеих карточках и ведёт в одно и то же окно.
+    if (account.platform === 'facebook' || account.platform === 'instagram') {
+      const connect = button('Подключить через Facebook', {
+        iconName: 'facebook',
+        title: 'Откроется окно Facebook. Нынешние токены не заменятся, пока вы не выберете страницу и панель не проверит замену',
+        onClick: async () => {
+          connect.disabled = true;
+          try {
+            const { url } = await api.startFacebookOauth(project.id);
+            location.href = url;
+          } catch (err) {
+            toast(err.message, 'danger');
+            connect.disabled = false;
+          }
+        },
+      });
+      foot.append(connect);
+    }
+
     // Продление руками — только там, где площадка это умеет. У Facebook и
-    // Instagram кнопки нет намеренно: их токен страницы меняется не здесь,
-    // а выпуском от системного пользователя в Business Manager.
+    // Instagram кнопки продления нет намеренно: их токен страницы бессрочный.
     if (account.configured && watch?.renewable) {
       const renew = button('Продлить токен', {
         iconName: 'refresh',

@@ -42,9 +42,12 @@ export const ACCOUNT_FIELDS = {
   ],
   facebook: [
     { key: 'pageId', title: 'ID страницы', secret: false },
-    { key: 'pageToken', title: 'Токен страницы', hint: 'Бессрочный — у system user', secret: true, token: true },
+    { key: 'pageToken', title: 'Токен страницы', hint: 'Проще — кнопкой «Подключить через Facebook». Бессрочный', secret: true, token: true },
     { key: 'appId', title: 'ID приложения', secret: false },
     { key: 'appSecret', title: 'Секрет приложения', secret: true },
+    // Нужна только кнопке подключения. У приложения Business-типа Meta
+    // рекомендует вход через конфигурацию; без неё кнопка просит права списком.
+    { key: 'loginConfigId', title: 'ID конфигурации входа', hint: 'Facebook Login for Business → Конфигурации. Можно пусто', secret: false },
   ],
   tiktok: [
     { key: 'clientKey', title: 'Client key', secret: false },
@@ -214,6 +217,70 @@ export function saveAccount(projectId, platform, values) {
   return accountStatus(projectId, platform);
 }
 
+/** Сколько прежних версий доступов хранить на площадку. */
+const BACKUPS_KEPT = 10;
+
+/**
+ * Сохранить нынешние доступы площадки перед заменой.
+ *
+ * Строка переносится как есть — поля в ней уже зашифрованы, расшифровывать
+ * ради копии незачем. Нечего сохранять — ничего и не пишем.
+ *
+ * @returns {number|null} id резервной копии
+ */
+export function backupAccount(projectId, platform, reason = '') {
+  const row = db
+    .prepare('SELECT config, token_saved_at FROM project_accounts WHERE project_id = ? AND platform = ?')
+    .get(projectId, platform);
+  if (!row) return null;
+
+  const info = db
+    .prepare('INSERT INTO account_backups (project_id, platform, config, token_saved_at, reason) VALUES (?, ?, ?, ?, ?)')
+    .run(projectId, platform, row.config, row.token_saved_at, String(reason).slice(0, 200));
+
+  // Старше десяти версий не держим: откатываются на прошлую, а не на
+  // позапрошлогоднюю, а шифротекст токенов без нужды копить незачем.
+  db.prepare(
+    `DELETE FROM account_backups WHERE project_id = ? AND platform = ? AND id NOT IN (
+       SELECT id FROM account_backups WHERE project_id = ? AND platform = ? ORDER BY id DESC LIMIT ?
+     )`
+  ).run(projectId, platform, projectId, platform, BACKUPS_KEPT);
+
+  return Number(info.lastInsertRowid);
+}
+
+/** Резервные копии площадки, новые первыми — без содержимого. */
+export function listBackups(projectId, platform) {
+  return db
+    .prepare('SELECT id, reason, created_at FROM account_backups WHERE project_id = ? AND platform = ? ORDER BY id DESC')
+    .all(projectId, platform);
+}
+
+/**
+ * Вернуть доступы из резервной копии — последней или указанной.
+ *
+ * Нынешние перед этим тоже уходят в копию: откат отката должен быть возможен,
+ * иначе ошибочный откат сам становится поломкой без обратного хода.
+ */
+export function restoreAccount(projectId, platform, backupId = null) {
+  const backup = backupId
+    ? db.prepare('SELECT * FROM account_backups WHERE id = ? AND project_id = ? AND platform = ?').get(backupId, projectId, platform)
+    : db.prepare('SELECT * FROM account_backups WHERE project_id = ? AND platform = ? ORDER BY id DESC LIMIT 1').get(projectId, platform);
+  if (!backup) throw new Error(`У проекта #${projectId} нет резервных копий ${platform}`);
+
+  backupAccount(projectId, platform, `перед откатом к копии #${backup.id}`);
+  db.prepare(
+    `INSERT INTO project_accounts (project_id, platform, config, updated_at, token_saved_at)
+     VALUES (?, ?, ?, datetime('now'), ?)
+     ON CONFLICT(project_id, platform) DO UPDATE SET
+       config = excluded.config, updated_at = datetime('now'), token_saved_at = excluded.token_saved_at`
+  ).run(projectId, platform, backup.config, backup.token_saved_at);
+  db.prepare('DELETE FROM token_health WHERE project_id = ? AND platform = ?').run(projectId, platform);
+
+  log('warn', `доступы ${platform} у проекта #${projectId} возвращены из копии #${backup.id}`);
+  return accountStatus(projectId, platform);
+}
+
 export function clearAccount(projectId, platform) {
   db.prepare('DELETE FROM project_accounts WHERE project_id = ? AND platform = ?').run(projectId, platform);
   db.prepare('DELETE FROM token_health WHERE project_id = ? AND platform = ?').run(projectId, platform);
@@ -249,6 +316,8 @@ function isOptional(platform, key) {
   // Приложение Threads нужно только для кнопки подключения: токен, вписанный
   // руками, публикует и без него.
   if (platform === 'threads') return key === 'appId' || key === 'appSecret';
+  // Конфигурация входа нужна только кнопке подключения Facebook.
+  if (platform === 'facebook') return key === 'loginConfigId';
   return false;
 }
 

@@ -794,6 +794,46 @@ const MIGRATIONS = [
       }
     },
   },
+  {
+    /*
+     * Подключение Facebook кнопкой — так, чтобы не сломать бессрочные токены.
+     *
+     * На 13.09.2026 у Facebook и Instagram стоят бессрочные токены страницы.
+     * Замена их чем-то худшим — срочным токеном, токеном с меньшими правами,
+     * токеном чужой страницы — останавливает постинг школы. Поэтому:
+     *
+     *   oauth_pending   — результат входа ждёт здесь, пока владелец не
+     *                     выберет страницу и панель не проверит замену. До
+     *                     этого карточка проекта не меняется вовсе. Токены
+     *                     страниц лежат шифротекстом, живут 15 минут.
+     *   account_backups — прежние доступы перед каждой заменой. Строка config
+     *                     в том же виде, что в project_accounts (поля уже
+     *                     зашифрованы), так что откат — перенос строки назад.
+     */
+    name: '021-oauth-pending-backups',
+    sql: `
+      CREATE TABLE oauth_pending (
+        id         TEXT PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        staff_id   INTEGER NOT NULL,
+        platform   TEXT NOT NULL,
+        payload    TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE account_backups (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id     INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        platform       TEXT NOT NULL,
+        config         TEXT NOT NULL,
+        token_saved_at TEXT,
+        reason         TEXT NOT NULL DEFAULT '',
+        created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX idx_account_backups ON account_backups(project_id, platform, id);
+    `,
+  },
 ];
 
 function migrate() {

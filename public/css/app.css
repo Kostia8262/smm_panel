@@ -1377,6 +1377,34 @@
 
 .projects { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--sp-3); }
 
+/* Выбор страницы после входа Facebook: строка на страницу, причина — сразу под ней. */
+.fb-pick { display: flex; flex-direction: column; gap: var(--sp-3); }
+.fb-pick__list { display: flex; flex-direction: column; gap: var(--sp-2); }
+
+.fb-pick__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-soft);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.fb-pick__row:has(input:checked) { border-color: var(--gold-line); }
+.fb-pick__row input { margin-top: 3px; accent-color: var(--gold); }
+/* Недоступная страница видна, но не выбирается — причина важнее вида. */
+.fb-pick__row--blocked { cursor: not-allowed; opacity: 0.72; }
+
+.fb-pick__body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fb-pick__head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); }
+.fb-pick__name { font-weight: 650; font-size: var(--fs-sm); }
+.fb-pick__problem { font-size: var(--fs-xs); color: var(--danger); }
+.fb-pick__warning { font-size: var(--fs-xs); color: var(--warn); }
+
+.fb-pick__confirm { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--warn); }
+.fb-pick__confirm input { accent-color: var(--warn); }
+
 .project-tile {
   display: flex;
   align-items: center;

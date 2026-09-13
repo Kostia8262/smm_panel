@@ -51,12 +51,17 @@ const STATE_TTL_MS = 15 * 60 * 1000;
  * целостности (AES-GCM) — подделать или переписать его нельзя. Хранить его на
  * сервере не нужно, и перезапуск панели посреди подключения его не ломает.
  */
-export function makeState({ projectId, staffId }, now = Date.now()) {
-  return encrypt(JSON.stringify({ p: projectId, s: staffId, t: now }));
+export function makeState({ projectId, staffId, platform = null }, now = Date.now()) {
+  return encrypt(JSON.stringify({ p: projectId, s: staffId, t: now, f: platform }));
 }
 
-/** @returns {{projectId: number}} или бросает с объяснением */
-export function readState(state, { staffId }, now = Date.now()) {
+/**
+ * @param {{staffId: number, platform?: string}} expected — площадка сверяется,
+ *   чтобы ссылку возврата от подключения Threads нельзя было подсунуть
+ *   подключению Facebook и наоборот
+ * @returns {{projectId: number}} или бросает с объяснением
+ */
+export function readState(state, { staffId, platform = null }, now = Date.now()) {
   let data;
   try {
     data = JSON.parse(decrypt(state));
@@ -67,6 +72,9 @@ export function readState(state, { staffId }, now = Date.now()) {
   if (now - data.t > STATE_TTL_MS) throw new Error('ссылка устарела — начните подключение заново');
   if (String(data.s) !== String(staffId)) {
     throw new Error('подключение начато другим сотрудником — начните его под своим входом');
+  }
+  if (platform && data.f !== platform) {
+    throw new Error('ссылка возврата от подключения другой площадки — начните подключение заново');
   }
   return { projectId: Number(data.p) };
 }

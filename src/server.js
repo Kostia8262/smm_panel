@@ -36,6 +36,8 @@ const observed = await import('./trends/observed.js');
 const { signatureFor, withSignature } = await import('./signature.js');
 const tokensDb = await import('./tokens.js');
 const threadsOauth = await import('./oauth/threads.js');
+const facebookOauth = await import('./oauth/facebook.js');
+const { randomBytes } = await import('node:crypto');
 const { writeFileSync } = await import('node:fs');
 const { encrypt: encryptSecret, decrypt: decryptSecret } = await import('./secrets.js');
 
@@ -360,7 +362,7 @@ app.post('/api/projects/:id/oauth/threads/start', requireAccess('platforms'), (r
     });
   }
 
-  const state = threadsOauth.makeState({ projectId, staffId: req.user.id });
+  const state = threadsOauth.makeState({ projectId, staffId: req.user.id, platform: 'threads' });
   res.json({ url: threadsOauth.authorizeUrl({ appId: creds.appId, redirectUri: threadsRedirectUri(), state }) });
 });
 
@@ -382,7 +384,7 @@ app.get('/oauth/threads', async (req, res) => {
 
   let projectId;
   try {
-    ({ projectId } = threadsOauth.readState(String(req.query.state || ''), { staffId: req.user.id }));
+    ({ projectId } = threadsOauth.readState(String(req.query.state || ''), { staffId: req.user.id, platform: 'threads' }));
   } catch (err) {
     log('warn', `подключение Threads отклонено: ${err.message}`);
     return back({ result: 'error', message: err.message });
@@ -410,6 +412,187 @@ app.get('/oauth/threads', async (req, res) => {
     log('error', `подключение Threads не удалось: ${err.message}`, { platform: 'threads' });
     return back({ result: 'error', message: err.message });
   }
+});
+
+/* ------------------------ подключение Facebook и Instagram ------------------------ */
+
+function facebookRedirectUri() {
+  return `${publicBase()}/oauth/facebook`;
+}
+
+/** Сколько живёт результат входа, ждущий выбора страницы. */
+const PENDING_TTL_MINUTES = 15;
+
+function dropStalePending() {
+  db.prepare(`DELETE FROM oauth_pending WHERE datetime(created_at) < datetime('now', '-${PENDING_TTL_MINUTES} minutes')`).run();
+}
+
+/** Результат входа — только тому, кто входил, и только своего проекта. */
+function readPending(req) {
+  dropStalePending();
+  const row = db
+    .prepare("SELECT * FROM oauth_pending WHERE id = ? AND project_id = ? AND platform = 'facebook'")
+    .get(String(req.params.pid), Number(req.params.id));
+  if (!row || String(row.staff_id) !== String(req.user.id)) return null;
+  return { row, pages: JSON.parse(decryptSecret(row.payload)).pages };
+}
+
+/**
+ * Что сейчас стоит в карточке Facebook проекта — для сравнения с новой
+ * страницей. Токен проверяется у Meta: «бессрочный» ли он, решает площадка.
+ */
+async function currentFacebook(projectId) {
+  const creds = projectsDb.credentialsFor(projectId, 'facebook');
+  if (!creds.pageToken) return { pageId: creds.pageId || null, token: null };
+  try {
+    const token = await facebookOauth.inspectToken(creds.pageToken, { appId: creds.appId, appSecret: creds.appSecret });
+    return { pageId: creds.pageId || null, token };
+  } catch {
+    // Не проверился — сравнивать не с чем, но и считать его рабочим нельзя.
+    return { pageId: creds.pageId || null, token: null };
+  }
+}
+
+app.post('/api/projects/:id/oauth/facebook/start', requireAccess('platforms'), (req, res) => {
+  const projectId = Number(req.params.id);
+  if (!projectsDb.getProject(projectId)) return res.status(404).json({ error: 'Проект не найден' });
+
+  const creds = projectsDb.credentialsFor(projectId, 'facebook');
+  if (!creds.appId || !creds.appSecret) {
+    return res.status(422).json({
+      error: 'Сначала впишите в карточку Facebook ID и секрет приложения — кабинет Meta → Настройки → Основное',
+    });
+  }
+
+  const state = threadsOauth.makeState({ projectId, staffId: req.user.id, platform: 'facebook' });
+  res.json({
+    url: facebookOauth.authorizeUrl({
+      appId: creds.appId,
+      redirectUri: facebookRedirectUri(),
+      state,
+      configId: creds.loginConfigId || null,
+    }),
+  });
+});
+
+/**
+ * Возврат из окна входа Facebook.
+ *
+ * Здесь НИЧЕГО не записывается в карточку проекта: только результат входа
+ * откладывается до выбора страницы. Отмена, ошибка, закрытая вкладка —
+ * нынешние бессрочные токены остаются как были.
+ */
+app.get('/oauth/facebook', async (req, res) => {
+  const back = (params) => res.redirect(`/?${new URLSearchParams({ oauth: 'facebook', ...params })}#/projects`);
+
+  if (req.user?.role !== 'owner') return back({ result: 'error', message: 'подключать площадки может только владелец' });
+  if (req.query.error) {
+    const reason = req.query.error_reason === 'user_denied' ? 'в окне Facebook нажали «Отмена»' : String(req.query.error_description || req.query.error);
+    return back({ result: 'error', message: reason });
+  }
+
+  let projectId;
+  try {
+    ({ projectId } = threadsOauth.readState(String(req.query.state || ''), { staffId: req.user.id, platform: 'facebook' }));
+  } catch (err) {
+    log('warn', `подключение Facebook отклонено: ${err.message}`);
+    return back({ result: 'error', message: err.message });
+  }
+
+  const creds = projectsDb.credentialsFor(projectId, 'facebook');
+  try {
+    const appKeys = { appId: creds.appId, appSecret: creds.appSecret };
+    const userToken = await facebookOauth.exchangeCode({ ...appKeys, redirectUri: facebookRedirectUri(), code: req.query.code });
+    const pages = await facebookOauth.listPages(userToken, appKeys);
+    if (!pages.length) return back({ result: 'error', message: 'у этого аккаунта Facebook нет страниц, которыми он управляет' });
+
+    dropStalePending();
+    const id = randomBytes(16).toString('hex');
+    db.prepare("INSERT INTO oauth_pending (id, project_id, staff_id, platform, payload) VALUES (?, ?, ?, 'facebook', ?)").run(
+      id,
+      projectId,
+      req.user.id,
+      encryptSecret(JSON.stringify({ pages }))
+    );
+    log('info', `вход Facebook: найдено страниц ${pages.length}, ждём выбора`, { platform: 'facebook' });
+    return back({ result: 'pick', project: String(projectId), pending: id });
+  } catch (err) {
+    log('error', `вход Facebook не удался: ${err.message}`, { platform: 'facebook' });
+    return back({ result: 'error', message: err.message });
+  }
+});
+
+/** Страницы из входа — без токенов, с разбором, можно ли на них заменить. */
+app.get('/api/projects/:id/oauth/facebook/pending/:pid', requireAccess('platforms'), async (req, res) => {
+  const pending = readPending(req);
+  if (!pending) return res.status(404).json({ error: 'Вход устарел или не найден — подключите заново' });
+
+  const current = await currentFacebook(Number(req.params.id));
+  res.json({
+    current: {
+      pageId: current.pageId,
+      forever: current.token?.valid && current.token.expiresAt === 0,
+      valid: Boolean(current.token?.valid),
+    },
+    pages: pending.pages.map((p) => ({
+      pageId: p.pageId,
+      name: p.name,
+      instagram: p.instagram,
+      forever: p.expiresAt === 0,
+      isCurrent: current.pageId === p.pageId,
+      ...facebookOauth.checkReplacement(current, p),
+    })),
+  });
+});
+
+/**
+ * Применить выбранную страницу.
+ *
+ * Проверка повторяется здесь, на сервере, по свежему состоянию карточки:
+ * решение интерфейса не в счёт. Прежние доступы Facebook и Instagram уходят в
+ * резервную копию до записи новых.
+ */
+app.post('/api/projects/:id/oauth/facebook/pending/:pid/apply', requireAccess('platforms'), async (req, res) => {
+  const projectId = Number(req.params.id);
+  const pending = readPending(req);
+  if (!pending) return res.status(404).json({ error: 'Вход устарел или не найден — подключите заново' });
+
+  const page = pending.pages.find((p) => p.pageId === String(req.body?.pageId || ''));
+  if (!page) return res.status(422).json({ error: 'Такой страницы нет в результатах входа' });
+
+  const current = await currentFacebook(projectId);
+  const verdict = facebookOauth.checkReplacement(current, page);
+  if (!verdict.ok) {
+    log('warn', `замена токена Facebook отклонена: ${verdict.problems.join('; ')}`, { platform: 'facebook' });
+    return res.status(422).json({ error: `Не заменяем — нынешние доступы остались как были: ${verdict.problems.join('; ')}` });
+  }
+  if (verdict.needsConfirm && !req.body?.confirmSwitch) {
+    return res.status(409).json({ error: 'Это другая страница. Подтвердите смену страницы проекта.' });
+  }
+
+  const backups = {
+    facebook: projectsDb.backupAccount(projectId, 'facebook', `перед подключением кнопкой: ${page.name}`),
+    instagram: page.instagram ? projectsDb.backupAccount(projectId, 'instagram', `перед подключением кнопкой: ${page.name}`) : null,
+  };
+
+  projectsDb.saveAccount(projectId, 'facebook', { pageId: page.pageId, pageToken: page.pageToken });
+  let instagram = null;
+  if (page.instagram) {
+    projectsDb.saveAccount(projectId, 'instagram', { userId: page.instagram.id, pageToken: page.pageToken });
+    instagram = page.instagram.username || page.instagram.id;
+  }
+  db.prepare('DELETE FROM oauth_pending WHERE id = ?').run(pending.row.id);
+
+  log('info', `Facebook подключён кнопкой: ${page.name}${instagram ? `, Instagram @${instagram}` : ''}; копии #${backups.facebook ?? '—'}/#${backups.instagram ?? '—'}`, {
+    platform: 'facebook',
+  });
+  res.json({ ok: true, page: page.name, instagram, warnings: verdict.warnings });
+});
+
+app.delete('/api/projects/:id/oauth/facebook/pending/:pid', requireAccess('platforms'), (req, res) => {
+  const pending = readPending(req);
+  if (pending) db.prepare('DELETE FROM oauth_pending WHERE id = ?').run(pending.row.id);
+  res.json({ ok: true });
 });
 
 /* --------------------------- сроки жизни токенов --------------------------- */

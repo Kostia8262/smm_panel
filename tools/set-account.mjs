@@ -32,7 +32,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const envFile = resolve(here, '../.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
-const { listProjects, credentialsFor, saveAccount, ACCOUNT_FIELDS, tokenSavedAt, setTokenSavedAt } =
+const { listProjects, credentialsFor, saveAccount, ACCOUNT_FIELDS, tokenSavedAt, setTokenSavedAt, listBackups, restoreAccount } =
   await import('../src/projects.js');
 const { DAY_MS, TOKEN_POLICY } = await import('../src/tokens.js');
 
@@ -59,6 +59,30 @@ if (!project) {
 // первым делом надо было понять, лежит ли в карточке новый токен или старый.
 // Хвост — те же шесть знаков, что карточка показывает в поле; целиком токен
 // не печатается.
+// Резервные копии доступов. Подключение Facebook кнопкой сохраняет прежние
+// доступы перед заменой — отсюда их видно и отсюда их возвращают:
+//   --backups                 список копий
+//   --restore [--backup N]    вернуть последнюю или указанную
+if (args.includes('--backups')) {
+  const rows = listBackups(projectId, platform);
+  console.log(`${project.title} · ${platform} · резервных копий: ${rows.length}`);
+  for (const r of rows) console.log(`  #${r.id} · ${r.created_at} · ${r.reason || '—'}`);
+  process.exit(0);
+}
+if (args.includes('--restore')) {
+  try {
+    restoreAccount(projectId, platform, Number(flag('backup')) || null);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+  const creds = credentialsFor(projectId, platform);
+  console.log(`${project.title} · ${platform}: доступы возвращены из копии`);
+  console.log(`  ID: ${creds.pageId || creds.userId || '—'}, токен …${String(creds.pageToken || creds.accessToken || '').slice(-6)}`);
+  console.log('  Нынешние перед откатом тоже сохранены — откат можно откатить.');
+  process.exit(0);
+}
+
 if (args.includes('--show')) {
   const creds = credentialsFor(projectId, platform);
   console.log(`${project.title} · ${platform}`);

@@ -124,6 +124,11 @@ export const api = {
   checkAccount: (id, platform) =>
     request(`/api/projects/${id}/accounts/${platform}/check`, { method: 'POST' }),
   startThreadsOauth: (id) => request(`/api/projects/${id}/oauth/threads/start`, { method: 'POST' }),
+  startFacebookOauth: (id) => request(`/api/projects/${id}/oauth/facebook/start`, { method: 'POST' }),
+  facebookPending: (id, pid) => request(`/api/projects/${id}/oauth/facebook/pending/${pid}`),
+  applyFacebookPending: (id, pid, body) =>
+    request(`/api/projects/${id}/oauth/facebook/pending/${pid}/apply`, { method: 'POST', body }),
+  cancelFacebookPending: (id, pid) => request(`/api/projects/${id}/oauth/facebook/pending/${pid}`, { method: 'DELETE' }),
 
   // Сроки жизни токенов: их пишет сторож в воркере, панель только читает.
   tokens: (id) => request(`/api/tokens?project=${id}`),
