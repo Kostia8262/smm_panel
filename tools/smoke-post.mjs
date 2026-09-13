@@ -26,10 +26,10 @@
  *
  * Что бы ни случилось, идентификаторы опубликованного пишутся в
  * `data/smoke-<время>.json`: если удаление не прошло, по этому файлу видно,
- * что именно снимать руками.
+ * что именно снимать руками. Снялось всё — файл стирается сам.
  */
 
-import { existsSync, writeFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { existsSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { resolve, dirname, join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -179,7 +179,8 @@ writeFileSync(logPath, JSON.stringify({ project: project.title, text, published 
 console.log(`\nЧто ушло — записано в ${logPath}`);
 
 if (!published.length) {
-  console.log('\nПубликовать было нечего — удалять тоже.');
+  rmSync(logPath, { force: true });
+  console.log('\nПубликовать было нечего — удалять тоже, след стёрт.');
   printSummary();
   process.exit(1);
 }
@@ -221,8 +222,14 @@ printSummary();
 if (stuck.length) {
   console.log('\nОСТАЛОСЬ ВИСЕТЬ В ЖИВЫХ АККАУНТАХ — снять руками:');
   for (const s of stuck) console.log(`  ${s.platform}: ${s.externalId}${s.url ? ` · ${s.url}` : ''}`);
+  console.log(`След оставлен: ${logPath}`);
   process.exit(2);
 }
+
+// Всё снято — след больше ни о чём не говорит, а на общем с сайтами диске
+// пробы копили бы его годами.
+rmSync(logPath, { force: true });
+console.log('Всё снято, след стёрт.');
 
 function printSummary() {
   console.log('\n=== Итог ===');
