@@ -106,6 +106,17 @@ export async function publish({ text, media = [], creds }) {
   return { externalId: String(first.message_id), url: messageUrl(chatId, first.message_id) };
 }
 
+/**
+ * Снять сообщение. У альбома и длинной подписи в externalId только первое
+ * сообщение — остальные части останутся. Боту нужно право удалять сообщения.
+ */
+export async function remove(externalId, creds) {
+  const form = new FormData();
+  form.set('chat_id', creds.chatId);
+  form.set('message_id', String(externalId));
+  await call('deleteMessage', form, creds);
+}
+
 async function sendTail(chatId, tail, creds) {
   const form = new FormData();
   form.set('chat_id', chatId);
