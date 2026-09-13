@@ -997,12 +997,44 @@ app.post('/api/posts/:id/publish-now', (req, res) => {
     `UPDATE posts SET status = 'scheduled', scheduled_at = datetime('now', 'localtime'),
      updated_at = datetime('now') WHERE id = ?`
   ).run(id);
-  db.prepare(
-    "UPDATE post_targets SET status = 'pending', error = NULL WHERE post_id = ? AND status IN ('failed', 'pending')"
-  ).run(id);
+  // Счётчик попыток — тоже заново: без этого после трёх неудач кнопка
+  // «Повторить неудачные» молча ничего не делала.
+  manual.resetForRetry(id);
   log('info', `пост #${id} отправлен в очередь немедленно`, { postId: id });
 
   res.status(202).json({ post: decorate(getPost(id)), queued: true });
+});
+
+const manual = await import('./queue/manual.js');
+
+/** Ответ ручного действия: ошибка с кодом — как есть, прочее — 500. */
+function manualError(res, err) {
+  res.status(err.status || 500).json({ error: err.message });
+}
+
+/**
+ * Разобрать «неизвестно, ушёл ли»: человек посмотрел в канал и решил.
+ * Только владелец: «отправить заново» при вышедшем посте — это дубль.
+ */
+app.post('/api/posts/:id/targets/:targetId/resolve', requireAccess('platforms'), (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    manual.resolveUnknown(id, Number(req.params.targetId), String(req.body?.outcome || ''));
+    res.json({ post: decorate(getPost(id)) });
+  } catch (err) {
+    manualError(res, err);
+  }
+});
+
+/** Снять вышедший пост из одной сети. Только владелец — это не отменить. */
+app.post('/api/posts/:id/targets/:targetId/unpublish', requireAccess('platforms'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await manual.unpublishTarget(id, Number(req.params.targetId));
+    res.json({ post: decorate(getPost(id)) });
+  } catch (err) {
+    manualError(res, err);
+  }
 });
 
 // Разбор журнала — отдельным модулем: категории, поиск и сводка к маршрутам
@@ -1652,7 +1684,8 @@ function saveTargets(postId, targets) {
   const dropStmt = db.prepare('DELETE FROM post_targets WHERE id = ?');
   for (const row of existing) {
     const key = `${row.platform}:${row.format_id}`;
-    if (!wantedKeys.has(key) && row.status !== 'published') dropStmt.run(row.id);
+    // Снятая из сети цель — тоже история: пост там был.
+    if (!wantedKeys.has(key) && row.status !== 'published' && row.status !== 'removed') dropStmt.run(row.id);
   }
 
   const insert = db.prepare(

@@ -97,7 +97,22 @@ export function findByCode(code) {
   return db.prepare('SELECT * FROM links WHERE code = ?').get(code);
 }
 
+/**
+ * Робот, а не человек: сети сами открывают ссылку, чтобы нарисовать превью.
+ * Telegram делает это сразу после публикации — до 13.09.2026 каждый пост с
+ * ссылкой получал «переход» ещё до первого читателя. Встроенные браузеры
+ * Instagram и Facebook роботами не считаются: там переходит живой человек.
+ */
+const BOT_RE =
+  /bot\b|bot\/|crawler|spider|preview|facebookexternalhit|facebookcatalog|meta-externalagent|meta-externalfetcher|whatsapp|skypeuripreview|embedly|vkshare|curl\/|wget\/|python-requests|node-fetch|axios\/|go-http-client|headlesschrome/i;
+
+export function isBot(userAgent) {
+  const ua = String(userAgent || '').trim();
+  return !ua || BOT_RE.test(ua);
+}
+
 export function registerClick(linkId, { userAgent = '', referer = '' } = {}) {
+  if (isBot(userAgent)) return false;
   db.prepare('INSERT INTO link_clicks (link_id, user_agent, referer) VALUES (?, ?, ?)').run(
     linkId,
     String(userAgent).slice(0, 200),

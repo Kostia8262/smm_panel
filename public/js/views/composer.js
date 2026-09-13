@@ -262,7 +262,13 @@ export function composerView(ctx, postId) {
       title: 'Удалить пост',
       variant: 'danger',
       onClick: async () => {
-        if (!confirm('Удалить пост? Отменить это нельзя.')) return;
+        // Панель прячет пост у себя, но в сетях он остаётся — об этом надо
+        // сказать до удаления, а не после.
+        const live = (post.targets || []).filter((t) => t.status === 'published').map(labelOf);
+        const question = live.length
+          ? `Пост остаётся в сетях: ${live.join(', ')}. Удаление в панели его оттуда не снимет — для этого «Снять из сети» в блоке «Где вышел». Всё равно убрать из панели?`
+          : 'Удалить пост? Отменить это нельзя.';
+        if (!confirm(question)) return;
         try {
           await api.deletePost(post.id);
           toast('Пост удалён', 'ok');
@@ -288,6 +294,7 @@ export function composerView(ctx, postId) {
     const blocks = [
       reviewNote(),
       sectionFailures(),
+      sectionLive(),
       sectionProject(),
       sectionText(),
       sectionTargets(),
@@ -453,7 +460,7 @@ export function composerView(ctx, postId) {
           previewKey = keyOf(target);
         } else {
           // Вышедшие цели сервер всё равно сохранит — след публикации не стирается.
-          post.targets = post.targets.filter((t) => t.platform !== spec.id || t.status === 'published');
+          post.targets = post.targets.filter((t) => t.platform !== spec.id || t.status === 'published' || t.status === 'removed');
         }
         await save({ quiet: true });
         renderAll();
@@ -772,8 +779,98 @@ export function composerView(ctx, postId) {
     const failed = (post.targets || []).filter((t) => (t.status === 'failed' || t.status === 'needs_check') && t.error);
     if (!failed.length) return null;
     const p = panel('Не ушло');
+    const isOwner = ctx.state.user.role === 'owner';
     for (const t of failed) {
-      p.append(note(t.status === 'needs_check' ? 'warn' : 'danger', labelOf(t), `${t.error} · попыток: ${t.attempts}`));
+      const unknown = t.status === 'needs_check';
+      const n = note(unknown ? 'warn' : 'danger', labelOf(t), unknown ? t.error : `${t.error} · попыток: ${t.attempts}`);
+      // Судьбу знает только тот, кто посмотрел в канал: панель сама не повторит,
+      // иначе при вышедшем посте подписчики получат дубль.
+      if (unknown && isOwner) {
+        const row = el('div', 'counters');
+        row.append(
+          button('Пост там есть', {
+            variant: 'quiet',
+            iconName: 'check',
+            onClick: () => resolveTarget(t, 'published', 'Отмечен вышедшим'),
+          }),
+          button('Поста нет — отправить заново', {
+            variant: 'quiet',
+            iconName: 'refresh',
+            onClick: () => {
+              if (!confirm(`Точно проверили ${labelOf(t)}? Если пост там всё-таки есть, выйдет дубль.`)) return;
+              resolveTarget(t, 'retry', 'Поставлен на повтор — уйдёт в ближайшую минуту');
+            },
+          })
+        );
+        n.querySelector('.note__body').append(row);
+      }
+      p.append(n);
+    }
+    return p;
+  }
+
+  async function resolveTarget(target, outcome, done) {
+    try {
+      post = (await api.resolveTarget(post.id, target.id, outcome)).post;
+      toast(done, 'ok');
+      renderTopbar();
+      renderAll();
+    } catch (err) {
+      toast(err.message, 'danger');
+    }
+  }
+
+  /**
+   * Где пост вышел и как его оттуда снять. Удаление поста в панели сети не
+   * трогает — снимать приходится отсюда, по одной площадке.
+   */
+  function sectionLive() {
+    const live = (post.targets || []).filter((t) => t.status === 'published' || t.status === 'removed');
+    if (!live.length) return null;
+    const isOwner = ctx.state.user.role === 'owner';
+    const p = panel('Где вышел');
+    for (const t of live) {
+      const row = el('div', 'counters');
+      const name = el('span', 'target__name');
+      name.innerHTML = iconMarkup(t.platform, 14);
+      name.append(el('span', null, labelOf(t)));
+      row.append(name);
+
+      if (t.status === 'removed') {
+        row.append(el('span', 'counter', 'снят из сети'));
+      } else {
+        if (t.external_url) {
+          const link = el('a', 'btn btn--quiet btn--sm', 'открыть');
+          link.href = t.external_url;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          row.append(link);
+        }
+        // Отмеченный вышедшим вручную пост без id площадки: снимать нечем.
+        const removable = Boolean(t.external_id) || (t.parts || []).length > 0;
+        if (isOwner && !removable) {
+          row.append(el('span', 'field__hint', 'id поста у панели нет — снять только руками'));
+        } else if (isOwner) {
+          row.append(
+            button('Снять из сети', {
+              variant: 'quiet',
+              iconName: 'trash',
+              onClick: async () => {
+                if (!confirm(`Снять пост из ${labelOf(t)}? Вернуть его не получится — только опубликовать заново.`)) return;
+                try {
+                  post = (await api.unpublishTarget(post.id, t.id)).post;
+                  toast(`Снят из ${labelOf(t)}`, 'ok');
+                  renderTopbar();
+                  renderAll();
+                } catch (err) {
+                  toast(err.message, 'danger');
+                }
+              },
+            })
+          );
+        }
+      }
+      p.append(row);
     }
     return p;
   }

@@ -185,6 +185,10 @@ export const api = {
   enqueue: (id) => request(`/api/posts/${id}/schedule`, { method: 'POST' }),
   unschedule: (id) => request(`/api/posts/${id}/unschedule`, { method: 'POST' }),
   publishNow: (id) => request(`/api/posts/${id}/publish-now`, { method: 'POST' }),
+  // Ручные действия с одной площадкой поста: снять из сети, разобрать «неизвестно, ушёл ли».
+  unpublishTarget: (id, targetId) => request(`/api/posts/${id}/targets/${targetId}/unpublish`, { method: 'POST' }),
+  resolveTarget: (id, targetId, outcome) =>
+    request(`/api/posts/${id}/targets/${targetId}/resolve`, { method: 'POST', body: { outcome } }),
 
   /**
    * @param {File[]} files

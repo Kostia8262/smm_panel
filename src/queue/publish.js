@@ -36,6 +36,14 @@ function publicUrlFactory() {
   return (m) => `${base}/media/${m.stored_name}`;
 }
 
+/**
+ * Цель отработала: вышла или уже снята из сети (`removed`, с 13.09.2026).
+ * Снятая не должна считаться «не ушедшей» — иначе повтор выпустил бы её снова.
+ */
+export function isDone(target) {
+  return target?.status === 'published' || target?.status === 'removed';
+}
+
 /** Что из серии уже вышло: `[{media_id, external_id, url}]`. */
 export function partsOf(target) {
   try {
@@ -59,7 +67,7 @@ export async function publishPost(postId) {
     return { status: 'failed', results: [{ error: 'не указан проект' }] };
   }
 
-  const pending = post.targets.filter((t) => t.status !== 'published' && t.status !== 'needs_check');
+  const pending = post.targets.filter((t) => !isDone(t) && t.status !== 'needs_check');
 
   // Файлы на месте? Площадки скачивают кадр по ссылке сами, и пропавший файл
   // они вернули бы невнятным «не удалось загрузить медиа» — а причина у нас.
@@ -75,7 +83,7 @@ export async function publishPost(postId) {
     const message = `нет файла на сервере: ${names} — загрузите кадр заново`;
     for (const target of pending) markFailed(target, message);
     log('error', `пост #${postId} не отправлен: ${message}`, { postId });
-    const anyDone = post.targets.some((t) => t.status === 'published');
+    const anyDone = post.targets.some(isDone);
     db.prepare('UPDATE posts SET status = ? WHERE id = ?').run(anyDone ? 'partial' : 'failed', postId);
     return { status: anyDone ? 'partial' : 'failed', results: [{ error: message }] };
   }
@@ -97,8 +105,8 @@ export async function publishPost(postId) {
   );
 
   const after = getPost(postId);
-  const allDone = after.targets.every((t) => t.status === 'published');
-  const anyDone = after.targets.some((t) => t.status === 'published');
+  const allDone = after.targets.every(isDone);
+  const anyDone = after.targets.some(isDone);
   const needsCheck = after.targets.some((t) => t.status === 'needs_check');
   const status = needsCheck ? 'partial' : allDone ? 'published' : anyDone ? 'partial' : 'failed';
   db.prepare(
@@ -121,6 +129,8 @@ export async function publishPost(postId) {
 async function sendTarget({ post, project, publicUrl }, target) {
   const postId = post.id;
   if (target.status === 'published') return { platform: target.platform, skipped: 'уже опубликовано' }; // повтор не дублирует ушедшее
+  // Снятый из сети пост обратно сам не выходит: снимали его намеренно.
+  if (target.status === 'removed') return { platform: target.platform, skipped: 'снят из сети' };
   // Неизвестную судьбу повторять нельзя: см. queue/recover.js. Такую цель
   // разблокирует только человек, посмотрев в канал.
   if (target.status === 'needs_check') {
@@ -172,6 +182,12 @@ async function sendTarget({ post, project, publicUrl }, target) {
     const out = await adapter.publish({ text, media, formatId: target.format_id, publicUrl, creds, audio });
     markPublished(target, out.externalId, out.url);
     log('info', `опубликовано: ${target.platform}`, { postId, platform: target.platform, payload: out });
+    // Главное ушло, а хвост — нет (Telegram: продолжение длинной подписи).
+    // Цель остаётся вышедшей — повтор выпустил бы пост дублем, — но человек
+    // должен узнать, что дослать руками.
+    if (out.warning) {
+      log('warn', `не ушло в ${target.platform} продолжение поста: ${out.warning}`, { postId, platform: target.platform });
+    }
     if (audio?.id && out.audioType === null) {
       log('warn', `пост #${postId}: Instagram выпустил Reels, но звука ${audioLabel(audio)} в нём не видит — проверьте пост`, {
         postId,

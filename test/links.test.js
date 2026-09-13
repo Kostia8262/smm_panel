@@ -84,6 +84,26 @@ test('переходы считаются по площадкам', () => {
   assert.ok(stats.byPlatform[fresh.platform] >= 2);
 });
 
+test('робот превью переходом не считается, человек из приложения — считается', () => {
+  const fresh = db.prepare('SELECT * FROM links WHERE post_id = ? LIMIT 1').get(post.id);
+  const before = links.clicksForPost(post.id).total;
+  for (const ua of [
+    'TelegramBot (like TwitterBot)',
+    'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+    'meta-externalagent/1.1',
+    'WhatsApp/2.23.20.0',
+    '',
+  ]) {
+    assert.equal(links.registerClick(fresh.id, { userAgent: ua }), false, ua || 'пустой агент');
+  }
+  assert.equal(links.clicksForPost(post.id).total, before);
+
+  const instagramApp =
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Instagram 300.0.0.0';
+  assert.equal(links.isBot(instagramApp), false);
+  assert.equal(links.isBot('Mozilla/5.0 (Linux; Android 14) Chrome/126.0 Mobile Safari/537.36 [FBAN/FB4A;FBAV/470.0]'), false);
+});
+
 test('несколько ссылок в одном посте делят одну кампанию', () => {
   const out = shorten('Раз https://mycomputer.education/a и два https://mycomputer.school/b');
   const codes = [...out.matchAll(/\/r\/([\w-]+)/g)].map((m) => m[1]);

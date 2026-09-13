@@ -79,7 +79,7 @@ export function recoverStuck(db, log, { staleMinutes = STALE_MINUTES, busyPostId
 
   const restore = db.prepare(
     `UPDATE posts SET status = CASE
-        WHEN (SELECT COUNT(*) FROM post_targets WHERE post_id = posts.id AND status = 'published') > 0
+        WHEN (SELECT COUNT(*) FROM post_targets WHERE post_id = posts.id AND status IN ('published', 'removed')) > 0
           THEN 'partial'
         ELSE 'scheduled'
       END,
