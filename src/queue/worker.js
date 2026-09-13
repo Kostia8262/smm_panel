@@ -27,6 +27,7 @@ const { workerHeartbeat } = await import('../journal.js');
 const { checkUpcomingAudio } = await import('../audio.js');
 const { audioInfo } = await import('../platforms/instagram-audio.js');
 const { collectTrendingSounds } = await import('../trends/sounds.js');
+const { collectAccounts } = await import('../trends/accounts.js');
 const { credentialsFor, listProjects } = await import('../projects.js');
 const { getSetting, setSetting } = await import('../staff.js');
 
@@ -148,7 +149,8 @@ async function watchTokens() {
 
 /**
  * Звук Instagram: раз в час — не пропал ли трек у постов ближайших двух суток
- * (src/audio.js), раз в сутки — трендовые звуки на доску трендов.
+ * (src/audio.js), раз в сутки — трендовые звуки и аккаунты, за которыми
+ * следим (src/trends/accounts.js), на доску трендов.
  *
  * Трек выбирают за дни до выхода, а библиотека меняется: без проверки пост
  * упал бы в момент публикации, когда выбрать другой звук уже некогда. Отметка
@@ -176,6 +178,14 @@ async function watchAudio() {
           await collectTrendingSounds(project.id);
         } catch (err) {
           log('warn', `сбор трендов, звуки Instagram «${project.title}»: ${err.message}`);
+        }
+        // Аккаунты, за которыми следим, — тем же суточным обходом: у чужих
+        // аккаунтов цифры за час не меняются, а запросы Business Discovery
+        // идут в тот же лимит, что и публикация.
+        try {
+          await collectAccounts(project.id);
+        } catch (err) {
+          log('warn', `сбор трендов, аккаунты «${project.title}»: ${err.message}`);
         }
       }
     }

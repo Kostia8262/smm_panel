@@ -45,6 +45,8 @@ export const TREND_SOURCES = {
   youtube: { id: 'youtube', title: 'YouTube в тренде', auto: true },
   // С июня 2026 — первый машинный сигнал от Instagram: трендовые звуки Reels.
   ig_audio: { id: 'ig_audio', title: 'Звуки Instagram', auto: true },
+  // Пост аккаунта из списка наблюдения, набравший в разы больше обычного.
+  watched: { id: 'watched', title: 'Аккаунты под наблюдением', auto: true },
 };
 
 /* -------------------------------- тренды -------------------------------- */

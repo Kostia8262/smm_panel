@@ -88,6 +88,7 @@ export function trendsView(ctx) {
     );
 
     if (isOwner && scope !== 'all') host.append(watchPanel());
+    if (scope !== 'all') host.append(accountsPanel());
     host.append(digestPanel());
 
     if (!trends.length) {
@@ -196,6 +197,254 @@ export function trendsView(ctx) {
       });
 
     return p;
+  }
+
+  /**
+   * Аккаунты, за которыми следим: конкуренты, образцы подачи, партнёры.
+   *
+   * Список нужен и там, где цифр нет: четыре школы следят за разными
+   * соседями, и держать ссылки в заметках телефона — значит однажды не найти.
+   * Цифры есть у Instagram (Business Discovery) и у Threads — из того, что
+   * увидело расширение.
+   */
+  function accountsPanel() {
+    const p = panel('Аккаунты, за которыми следим');
+    const body = el('div', 'stack');
+    p.append(body);
+    body.append(el('span', 'field__hint', 'загружаю…'));
+    api
+      .watchedAccounts()
+      .then((data) => renderAccounts(body, data))
+      .catch((err) => {
+        body.textContent = '';
+        body.append(note('danger', 'Аккаунты не прочитались', err.message));
+      });
+    return p;
+  }
+
+  function renderAccounts(body, data) {
+    body.textContent = '';
+    body.append(
+      el(
+        'span',
+        'field__hint',
+        'Instagram — подписчики и последние посты раз в сутки, только у бизнес- и авторских аккаунтов; пост, набравший в разы больше обычного для этого аккаунта, сам встаёт сигналом ниже. Threads — посты из того, что увидело расширение. TikTok, Facebook, Telegram, YouTube чужих цифр не отдают — там аккаунт хранится ссылкой.'
+      )
+    );
+
+    if (isOwner) body.append(accountForm(body, data));
+
+    if (!data.accounts.length) {
+      body.append(
+        note('info', 'Пока ни за кем не следим', isOwner ? 'Вставьте ссылку на аккаунт соседней школы или блогера, у которого стоит учиться подаче.' : 'Список ведёт владелец.')
+      );
+      return;
+    }
+
+    const hasInstagram = data.accounts.some((a) => a.platform === 'instagram');
+    if (isOwner && hasInstagram) {
+      const refresh = button('Проверить Instagram сейчас', {
+        iconName: 'refresh',
+        onClick: async () => {
+          refresh.disabled = true;
+          toast('Спрашиваю Instagram…');
+          try {
+            const res = await api.collectWatchedAccounts();
+            const r = res.report;
+            toast(
+              `Проверено ${r.checked}${r.signals ? `, новых сигналов ${r.signals}` : ''}${r.failed.length ? `, не ответили ${r.failed.length}` : ''}`,
+              r.failed.length ? 'danger' : 'ok'
+            );
+            renderAccounts(body, res);
+            if (r.signals) load();
+          } catch (err) {
+            toast(err.message, 'danger');
+            refresh.disabled = false;
+          }
+        },
+      });
+      const row = el('div', 'watch-tools');
+      row.append(refresh);
+      body.append(row);
+    }
+
+    const list = el('div', 'watch-list');
+    for (const account of data.accounts) list.append(accountCard(body, data, account));
+    body.append(list);
+  }
+
+  function accountForm(body, data) {
+    const form = el('form', 'watch-form');
+
+    const platform = el('select', 'select');
+    platform.setAttribute('aria-label', 'Площадка');
+    for (const pl of data.platforms) platform.append(new Option(pl.title, pl.id));
+
+    const account = el('input', 'input');
+    account.placeholder = '@аккаунт или ссылка на профиль';
+    account.setAttribute('aria-label', 'Аккаунт');
+    account.required = true;
+    // Вставили ссылку — площадка выбирается сама: человек копирует адрес из
+    // браузера и не должен помнить, что переключил список на TikTok.
+    account.addEventListener('input', () => {
+      const host = /^(?:https?:\/\/)?(?:www\.|m\.)?([^/]+)/i.exec(account.value.trim())?.[1]?.toLowerCase() || '';
+      const byHost = { 'instagram.com': 'instagram', 'threads.net': 'threads', 'threads.com': 'threads', 'tiktok.com': 'tiktok', 'facebook.com': 'facebook', 'fb.com': 'facebook', 't.me': 'telegram', 'youtube.com': 'youtube' };
+      if (byHost[host]) platform.value = byHost[host];
+    });
+
+    const kind = el('select', 'select');
+    kind.setAttribute('aria-label', 'Кто это');
+    for (const k of data.kinds) kind.append(new Option(k.title, k.id));
+
+    const noteInput = el('input', 'input');
+    noteInput.placeholder = 'Зачем следим — необязательно';
+    noteInput.maxLength = 300;
+    noteInput.setAttribute('aria-label', 'Заметка');
+
+    const add = button('Следить', { variant: 'primary', iconName: 'plus' });
+    add.type = 'submit';
+
+    form.append(platform, account, kind, noteInput, add);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      add.disabled = true;
+      try {
+        const res = await api.addWatchedAccount({
+          platform: platform.value,
+          username: account.value,
+          kind: kind.value,
+          note: noteInput.value,
+        });
+        toast(res.warning ? `Добавлен, но: ${res.warning}` : 'Аккаунт добавлен', res.warning ? 'danger' : 'ok');
+        renderAccounts(body, res);
+        if (res.accounts.some((a) => a.topPosts.some((p) => p.ratio >= 3))) load();
+      } catch (err) {
+        toast(err.message, 'danger');
+        add.disabled = false;
+      }
+    });
+    return form;
+  }
+
+  function accountCard(body, data, a) {
+    const card = el('article', 'watch');
+
+    const head = el('div', 'watch__head');
+    const mark = el('span', 'mark');
+    mark.innerHTML = iconMarkup(a.platform, 12);
+    head.append(mark);
+
+    const name = el('div', 'watch__name');
+    const link = el('a', 'watch__link', `@${a.username}`);
+    link.href = a.profileUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    name.append(link);
+    if (a.displayName) name.append(el('span', 'watch__display', a.displayName));
+    head.append(name);
+    card.append(head);
+
+    // Кто это и когда смотрели — отдельной строкой: в шапке список «кто это»
+    // отъедал место у имени, и длинные аккаунты обрезались до «@someone.pr…».
+    const meta = el('div', 'watch__meta');
+    if (isOwner) {
+      const kind = el('select', 'select watch__kind');
+      kind.setAttribute('aria-label', `Кто такой @${a.username}`);
+      for (const k of data.kinds) {
+        const opt = new Option(k.title, k.id);
+        if (k.id === a.kind) opt.selected = true;
+        kind.append(opt);
+      }
+      kind.addEventListener('change', async () => {
+        try {
+          await api.updateWatchedAccount(a.id, { kind: kind.value });
+        } catch (err) {
+          toast(err.message, 'danger');
+        }
+      });
+      meta.append(kind);
+      head.append(
+        iconButton('x', {
+          title: `Перестать следить за @${a.username}`,
+          onClick: async () => {
+            if (!confirm(`Перестать следить за @${a.username}? История его цифр удалится.`)) return;
+            try {
+              renderAccounts(body, await api.removeWatchedAccount(a.id));
+            } catch (err) {
+              toast(err.message, 'danger');
+            }
+          },
+        })
+      );
+    } else {
+      meta.append(el('span', 'tag', a.kindTitle));
+    }
+    if (a.checkedAt) meta.append(el('span', 'watch__checked tnum', `проверено ${shortTime(a.checkedAt)}`));
+    card.append(meta);
+
+    if (a.note) card.append(el('p', 'watch__note', a.note));
+
+    if (a.mode === 'api') {
+      const stats = el('div', 'counters');
+      if (a.followers !== null && a.followers !== undefined) {
+        stats.append(el('span', 'counter', `подписчиков ${formatCount(a.followers)}`));
+        if (a.growth) {
+          stats.append(el('span', `counter ${a.growth > 0 ? 'counter--up' : 'counter--warn'}`, `${a.growth > 0 ? '+' : '−'}${formatCount(Math.abs(a.growth))} за неделю`));
+        }
+      }
+      if (a.mediaCount) stats.append(el('span', 'counter', `постов ${formatCount(a.mediaCount)}`));
+      if (stats.childElementCount) card.append(stats);
+      if (a.lastError) card.append(note('warn', 'Цифры не собрались', a.lastError));
+      else if (!a.checkedAt) card.append(el('span', 'field__hint', 'Цифры появятся после первой проверки.'));
+    } else if (a.mode === 'extension') {
+      card.append(
+        el(
+          'span',
+          'field__hint',
+          a.seen ? `Расширение видело постов за месяц: ${a.seen}.` : 'Расширение ещё не встречало его постов — полистайте Threads с включённым расширением.'
+        )
+      );
+    } else {
+      card.append(el('span', 'field__hint', 'Площадка не отдаёт чужих цифр — здесь только ссылка.'));
+    }
+
+    if (a.topPosts.length) {
+      const posts = el('ul', 'watch__posts');
+      for (const post of a.topPosts) posts.append(postRow(post));
+      card.append(posts);
+    }
+    return card;
+  }
+
+  function postRow(post) {
+    const li = el('li', 'watch__post');
+    const top = el('div', 'watch__post-top');
+    const kinds = { REELS: 'Reels', FEED: 'Лента', STORY: 'Сторис', THREADS: 'Threads', CAROUSEL_ALBUM: 'Карусель', IMAGE: 'Фото', VIDEO: 'Видео' };
+    top.append(el('span', 'watch__post-kind', kinds[post.kind] || 'Пост'));
+    if (post.ratio >= 2) {
+      const tag = el('span', 'tag tag--gold', `×${post.ratio}`);
+      tag.title = 'Во сколько раз больше обычного для этого аккаунта';
+      top.append(tag);
+    } else if (post.label === 'hot') {
+      top.append(el('span', 'tag tag--gold', 'зашёл'));
+    }
+    const numbers = [
+      post.views ? `${formatCount(post.views)} просм.` : null,
+      post.likes !== null && post.likes !== undefined ? `${formatCount(post.likes)} лайк.` : null,
+      post.comments !== null && post.comments !== undefined ? `${formatCount(post.comments)} комм.` : null,
+    ].filter(Boolean);
+    top.append(el('span', 'watch__post-numbers tnum', numbers.join(' · ')));
+    if (post.permalink) {
+      const open = el('a', 'watch__post-open', 'открыть');
+      open.href = post.permalink;
+      open.target = '_blank';
+      open.rel = 'noopener noreferrer';
+      top.append(open);
+    }
+    li.append(top);
+    const caption = String(post.caption || '').replace(/\s+/g, ' ').trim();
+    if (caption) li.append(el('p', 'watch__caption', caption));
+    return li;
   }
 
   /**
@@ -490,6 +739,24 @@ export function trendsView(ctx) {
     root.prepend(box);
     title.input.focus();
   }
+}
+
+function formatCount(n) {
+  const v = Number(n) || 0;
+  // Дробь — через запятую: «1,3 тыс.», а не «1.3 тыс.».
+  const short = (x) => x.toFixed(1).replace(/\.0$/, '').replace('.', ',');
+  if (v >= 1e6) return `${short(v / 1e6)} млн`;
+  if (v >= 1e4) return `${Math.round(v / 1e3)} тыс.`;
+  if (v >= 1e3) return `${short(v / 1e3)} тыс.`;
+  return String(v);
+}
+
+/** «14.09, 10:05» в местном времени — метка проверки хранится в UTC. */
+function shortTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (x) => String(x).padStart(2, '0');
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function field(label, tag, placeholder) {

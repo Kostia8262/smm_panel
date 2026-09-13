@@ -1483,6 +1483,88 @@ app.post('/api/trends/collect', requireAccess('platforms'), async (req, res) => 
   }
 });
 
+/* -------------------- аккаунты, за которыми следим -------------------- */
+
+const watchDb = await import('./trends/accounts.js');
+
+function watchedPayload(projectId) {
+  return {
+    accounts: watchDb.listAccounts(projectId),
+    kinds: Object.values(watchDb.ACCOUNT_KINDS),
+    platforms: Object.values(watchDb.WATCH_PLATFORMS).map(({ id, title, mode }) => ({ id, title, mode })),
+  };
+}
+
+/** Аккаунт этой школы — чужой по id не правится и не удаляется. */
+function watchedOwn(req, res) {
+  const row = db.prepare('SELECT * FROM watched_accounts WHERE id = ?').get(Number(req.params.id));
+  if (!row || row.project_id !== currentProjectId(req)) {
+    res.status(404).json({ error: 'Аккаунт не найден' });
+    return null;
+  }
+  return row;
+}
+
+app.get('/api/trends/accounts', (req, res) => {
+  res.json(watchedPayload(currentProjectId(req)));
+});
+
+/**
+ * Добавить аккаунт. Instagram проверяется сразу, в ответе запроса: человек
+ * вставил ссылку и хочет увидеть, нашёлся ли аккаунт и что у него с цифрами,
+ * а не ждать утреннего обхода. Не нашёлся — аккаунт остаётся с причиной.
+ */
+app.post('/api/trends/accounts', requireAccess('platforms'), async (req, res) => {
+  const projectId = currentProjectId(req);
+  let id;
+  try {
+    id = watchDb.addAccount(projectId, req.body || {});
+  } catch (err) {
+    return res.status(422).json({ error: err.message });
+  }
+  let warning = null;
+  const row = db.prepare('SELECT * FROM watched_accounts WHERE id = ?').get(id);
+  if (row.platform === 'instagram') {
+    const creds = projectsDb.credentialsFor(projectId, 'instagram');
+    if (!creds.userId || !creds.pageToken) {
+      warning = 'У школы не подключён Instagram — цифры аккаунта собирать нечем';
+    } else {
+      try {
+        await watchDb.collectInstagram(row, creds);
+      } catch (err) {
+        warning = err.message;
+      }
+    }
+  }
+  res.status(201).json({ ...watchedPayload(projectId), warning });
+});
+
+app.put('/api/trends/accounts/:id', requireAccess('platforms'), (req, res) => {
+  const row = watchedOwn(req, res);
+  if (!row) return;
+  watchDb.updateAccount(row.id, req.body || {});
+  res.json(watchedPayload(row.project_id));
+});
+
+app.delete('/api/trends/accounts/:id', requireAccess('platforms'), (req, res) => {
+  const row = watchedOwn(req, res);
+  if (!row) return;
+  watchDb.removeAccount(row.id);
+  log('info', `убран тренд-аккаунт (${row.platform}): @${row.username}`);
+  res.json(watchedPayload(row.project_id));
+});
+
+/** Проверить аккаунты Instagram школы сейчас, не дожидаясь суточного обхода. */
+app.post('/api/trends/accounts/collect', requireAccess('platforms'), async (req, res) => {
+  const projectId = currentProjectId(req);
+  try {
+    const report = await watchDb.collectAccounts(projectId);
+    res.json({ ...watchedPayload(projectId), report });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
 app.post('/api/trends/:id/archive', requireAccess('platforms'), (req, res) => {
   res.json({ trend: planDb.archiveTrend(Number(req.params.id), req.body?.archived !== false) });
 });

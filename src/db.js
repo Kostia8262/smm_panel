@@ -1105,6 +1105,66 @@ const MIGRATIONS = [
       CREATE INDEX idx_mail_events_contact ON mail_events(contact_id, at);
     `,
   },
+  {
+    /*
+     * Аккаунты, за которыми следим (14.09.2026, src/trends/accounts.js).
+     *
+     * Конкуренты и образцы подачи — на экране трендов рядом с фразами.
+     * Instagram собирается машиной (Business Discovery): суточный снимок
+     * подписчиков — ради прироста за неделю, последние посты — ради сравнения
+     * «этот пост против обычного у того же аккаунта». Остальные площадки
+     * хранятся ссылкой: чужих цифр их API не отдаёт.
+     *
+     * `signaled` — пост уже ушёл сигналом на доску трендов: без отметки каждый
+     * суточный обход клал бы туда тот же пост заново.
+     */
+    name: '026-watched-accounts',
+    sql: `
+      CREATE TABLE watched_accounts (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        platform     TEXT NOT NULL,
+        username     TEXT NOT NULL,
+        kind         TEXT NOT NULL DEFAULT 'competitor',
+        note         TEXT NOT NULL DEFAULT '',
+        display_name TEXT,
+        followers    INTEGER,
+        media_count  INTEGER,
+        checked_at   TEXT,
+        last_error   TEXT,
+        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE (project_id, platform, username)
+      );
+
+      CREATE TABLE watched_snapshots (
+        account_id  INTEGER NOT NULL REFERENCES watched_accounts(id) ON DELETE CASCADE,
+        observed_on TEXT NOT NULL,
+        followers   INTEGER,
+        media_count INTEGER,
+        PRIMARY KEY (account_id, observed_on)
+      );
+
+      CREATE TABLE watched_posts (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id  INTEGER NOT NULL REFERENCES watched_accounts(id) ON DELETE CASCADE,
+        external_id TEXT NOT NULL,
+        kind        TEXT,
+        caption     TEXT NOT NULL DEFAULT '',
+        permalink   TEXT,
+        posted_at   TEXT,
+        likes       INTEGER,
+        comments    INTEGER,
+        views       INTEGER,
+        signaled    INTEGER NOT NULL DEFAULT 0,
+        first_seen  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        last_seen   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE (account_id, external_id)
+      );
+
+      CREATE INDEX idx_watched_project ON watched_accounts(project_id, platform);
+      CREATE INDEX idx_watched_posts ON watched_posts(account_id, posted_at);
+    `,
+  },
 ];
 
 function migrate() {
