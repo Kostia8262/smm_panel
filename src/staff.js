@@ -53,6 +53,10 @@ export const ACCESS = {
   journal: ['owner', 'smm'],
   staff: ['owner'],
   settings: ['owner', 'smm'], // СММщик видит только свой токен
+  // Рассылка: СММщик видит базы названиями и размерами, чтобы выбрать базу
+  // для письма, а сами адреса, загрузку и выгрузку — только владелец.
+  mail: ['owner', 'smm'],
+  mail_contacts: ['owner'],
 };
 
 export function can(role, area) {

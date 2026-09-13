@@ -860,6 +860,117 @@ const MIGRATIONS = [
       CREATE INDEX idx_account_backups ON account_backups(project_id, platform, id);
     `,
   },
+  {
+    /*
+     * Рассылка, фаза 1: базы адресов (docs/рассылка.md, §4).
+     *
+     * Базы принадлежат школе. Человек — одна строка на школу, в скольких бы
+     * базах он ни был; свои колонки файла живут в членстве, а не в контакте,
+     * чтобы «курс» из одной базы не затирал «курс» из другой.
+     *
+     * Стоп-лист отдельно от контактов и по хешу адреса. Иначе повторная
+     * загрузка той же базы воскрешала бы отписанных, а стёртый по просьбе
+     * человек возвращался бы со следующим файлом.
+     *
+     * Время — ISO UTC с «Z»: урок миграции 017.
+     */
+    name: '022-mail-lists',
+    sql: `
+      CREATE TABLE mail_lists (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name          TEXT NOT NULL,
+        description   TEXT NOT NULL DEFAULT '',
+        consent_basis TEXT NOT NULL,
+        consent_note  TEXT NOT NULL DEFAULT '',
+        columns       TEXT NOT NULL DEFAULT '[]',
+        created_by    INTEGER REFERENCES staff(id) ON DELETE SET NULL,
+        created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        archived_at   TEXT,
+        UNIQUE (project_id, name)
+      );
+
+      CREATE TABLE mail_contacts (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        email       TEXT NOT NULL,
+        name        TEXT NOT NULL DEFAULT '',
+        status      TEXT NOT NULL DEFAULT 'active',
+        status_note TEXT,
+        status_at   TEXT,
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE (project_id, email)
+      );
+
+      -- Исходный файл (source) лежит только до подтверждения или отказа:
+      -- без него не сменить кодировку и лист, не загружая файл заново.
+      CREATE TABLE mail_imports (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        list_id     INTEGER REFERENCES mail_lists(id),
+        source_name TEXT NOT NULL,
+        source      BLOB,
+        format      TEXT NOT NULL,
+        encoding    TEXT,
+        delimiter   TEXT,
+        sheet       INTEGER,
+        sheets      TEXT NOT NULL DEFAULT '[]',
+        has_header  INTEGER NOT NULL DEFAULT 0,
+        header      TEXT NOT NULL DEFAULT '[]',
+        roles       TEXT NOT NULL DEFAULT '{}',
+        stats       TEXT NOT NULL DEFAULT '{}',
+        progress    TEXT NOT NULL DEFAULT '{}',
+        status      TEXT NOT NULL,
+        error       TEXT,
+        created_by  INTEGER REFERENCES staff(id) ON DELETE SET NULL,
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        finished_at TEXT
+      );
+
+      CREATE TABLE mail_list_members (
+        list_id    INTEGER NOT NULL REFERENCES mail_lists(id) ON DELETE CASCADE,
+        contact_id INTEGER NOT NULL REFERENCES mail_contacts(id) ON DELETE CASCADE,
+        attrs      TEXT NOT NULL DEFAULT '{}',
+        import_id  INTEGER REFERENCES mail_imports(id),
+        added_by   INTEGER REFERENCES staff(id) ON DELETE SET NULL,
+        added_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        removed_at TEXT,
+        PRIMARY KEY (list_id, contact_id)
+      );
+
+      CREATE TABLE mail_suppressions (
+        project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        email_hash  TEXT NOT NULL,
+        reason      TEXT NOT NULL,
+        campaign_id INTEGER,
+        note        TEXT,
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY (project_id, email_hash)
+      );
+
+      -- Разобранные строки до подтверждения — черновик, а не данные школы.
+      CREATE TABLE mail_import_rows (
+        import_id  INTEGER NOT NULL REFERENCES mail_imports(id) ON DELETE CASCADE,
+        row_no     INTEGER NOT NULL,
+        seq        INTEGER NOT NULL,
+        email      TEXT,
+        name       TEXT NOT NULL DEFAULT '',
+        attrs      TEXT NOT NULL DEFAULT '{}',
+        verdict    TEXT NOT NULL,
+        issues     TEXT NOT NULL DEFAULT '[]',
+        suggestion TEXT,
+        decision   TEXT,
+        PRIMARY KEY (import_id, seq)
+      );
+
+      CREATE INDEX idx_mail_lists_project ON mail_lists(project_id, archived_at);
+      CREATE INDEX idx_mail_contacts_status ON mail_contacts(project_id, status);
+      CREATE INDEX idx_mail_members_contact ON mail_list_members(contact_id);
+      CREATE INDEX idx_mail_imports_status ON mail_imports(status, created_at);
+      CREATE INDEX idx_mail_import_rows_verdict ON mail_import_rows(import_id, verdict);
+    `,
+  },
 ];
 
 function migrate() {

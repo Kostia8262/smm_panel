@@ -1358,6 +1358,12 @@ app.put('/api/settings', requireAccess('platforms'), (req, res) => {
   res.json({ requireApproval: staffDb.requireApproval(), canEdit: true });
 });
 
+/* --------------------------------- рассылка --------------------------------- */
+
+// Базы адресов, загрузка с распознаванием (docs/рассылка.md, фаза 1).
+const { mountMailRoutes } = await import('./mail/routes.js');
+mountMailRoutes(app, { requireAccess, currentProjectId, can: staffDb.can });
+
 /* --------------------------------- служебное --------------------------------- */
 
 /**
