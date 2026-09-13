@@ -27,8 +27,10 @@ export const ACCOUNT_FIELDS = {
     { key: 'chatId', title: 'Канал', hint: '@имя_канала или числовой id', secret: false },
   ],
   threads: [
-    { key: 'userId', title: 'ID аккаунта', secret: false },
-    { key: 'accessToken', title: 'Токен доступа', hint: 'Живёт 60 дней', secret: true, token: true },
+    // Подсказка про ID приложения — не лишняя: генератор токена показывает его
+    // рядом с токеном, и в это поле он попадал дважды.
+    { key: 'userId', title: 'ID аккаунта', hint: 'Можно оставить пустым — подставится по токену. Не ID приложения', secret: false },
+    { key: 'accessToken', title: 'Токен доступа', hint: 'Живёт 60 дней, продлевается сам', secret: true, token: true },
   ],
   instagram: [
     { key: 'userId', title: 'ID аккаунта', hint: 'Business или Creator', secret: false },

@@ -42,6 +42,20 @@ export function idMismatch(creds = {}, checkResult = {}) {
 }
 
 /**
+ * Какой ID аккаунта вписать вместо сохранённого — или null, если менять нечего.
+ *
+ * Ручное поле «ID аккаунта» у Threads дважды заполняли ID приложения: генератор
+ * токена показывает его рядом с самим токеном. Предупреждения не хватило —
+ * площадка сама знает, чей это токен, и спрашивать человека незачем.
+ */
+export function accountIdFix(creds = {}, checkResult = {}) {
+  const said = checkResult.id;
+  if (!said) return null;
+  if (creds.userId && String(creds.userId) === String(said)) return null;
+  return String(said);
+}
+
+/**
  * Что настроено у проекта, а чего не хватает.
  * @param {(platform: string) => object} credentialsFor
  */

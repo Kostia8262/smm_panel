@@ -324,8 +324,11 @@ export function projectsView(ctx) {
       for (const [key, input] of Object.entries(inputs)) payload[key] = input.value;
       save.disabled = true;
       try {
-        await api.saveAccount(project.id, account.platform, payload);
-        toast(`${account.title}: сохранено`, 'ok');
+        const res = await api.saveAccount(project.id, account.platform, payload);
+        // Сервер мог сам поправить ID аккаунта по ответу площадки — сказать
+        // об этом отдельно, иначе человек не поймёт, откуда в поле другое число.
+        if (res.notice) toast(`${account.title}: ${res.notice}`, res.notice.startsWith('сохранено, но') ? 'warn' : 'ok');
+        else toast(`${account.title}: сохранено`, 'ok');
         load();
       } catch (err) {
         toast(err.message, 'danger');

@@ -18,7 +18,7 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const { db, getPost, listPosts, touchPost, log } = await import('./db.js');
 const { PLATFORMS, PLATFORM_LIST, safeZonesFor } = await import('./platforms/specs.js');
-const { connectionStatus, getAdapter, idMismatch } = await import('./platforms/index.js');
+const { connectionStatus, getAdapter, idMismatch, accountIdFix } = await import('./platforms/index.js');
 const { validatePost } = await import('./validate.js');
 const { UPLOAD_DIR, THUMB_DIR, storedName, kindOf, imageSize, cropFor, isAllowedMedia, checkThumb, removeStored } =
   await import('./media.js');
@@ -275,13 +275,40 @@ app.get('/api/projects/:id/accounts', requireAccess('platforms'), (req, res) => 
   res.json({ project, accounts: projectsDb.projectAccounts(project.id) });
 });
 
-app.put('/api/projects/:id/accounts/:platform', requireAccess('platforms'), (req, res) => {
+app.put('/api/projects/:id/accounts/:platform', requireAccess('platforms'), async (req, res) => {
+  const projectId = Number(req.params.id);
+  const platform = req.params.platform;
+  let status;
   try {
-    const status = projectsDb.saveAccount(Number(req.params.id), req.params.platform, req.body || {});
-    res.json({ account: status });
+    status = projectsDb.saveAccount(projectId, platform, req.body || {});
   } catch (err) {
-    res.status(422).json({ error: err.message });
+    return res.status(422).json({ error: err.message });
   }
+
+  // ID аккаунта — у площадки, а не у человека. Там, где проверка связи отдаёт
+  // настоящий ID (Threads), вписываем его сами: руками туда дважды попадал ID
+  // приложения, и публикация падала при зелёной проверке связи.
+  // Сохранение от этого не зависит — площадка не ответила, значит не ответила.
+  let notice = null;
+  const adapter = getAdapter(platform);
+  const creds = projectsDb.credentialsFor(projectId, platform);
+  if (adapter.isConfigured(creds) || (creds.accessToken && platform === 'threads')) {
+    try {
+      const result = await adapter.check({ ...creds, userId: creds.userId || 'me' });
+      const fixed = accountIdFix(creds, result);
+      if (fixed) {
+        status = projectsDb.saveAccount(projectId, platform, { userId: fixed });
+        notice = creds.userId
+          ? `ID аккаунта исправлен: вписан был ${creds.userId}, площадка говорит — ${fixed}`
+          : `ID аккаунта взят у площадки: ${fixed}`;
+        log('warn', `${platform}: ${notice}`, { platform });
+      }
+    } catch (err) {
+      notice = `сохранено, но площадка не ответила на проверку: ${err.message}`;
+    }
+  }
+
+  res.json({ account: status, notice });
 });
 
 app.delete('/api/projects/:id/accounts/:platform', requireAccess('platforms'), (req, res) => {
