@@ -168,11 +168,14 @@
   color: var(--gold-bright);
   text-decoration: underline;
   text-underline-offset: 3px;
+  white-space: nowrap;
   cursor: pointer;
 }
 .staff-name:hover { color: var(--ink); }
-.staff-token { display: flex; align-items: center; gap: var(--sp-1); }
+.staff-token { display: flex; align-items: center; gap: 2px; }
+.staff-token .btn--icon { width: 28px; height: 28px; }
 .staff-token__value {
+  margin-right: var(--sp-1);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: var(--fs-micro);
   color: var(--ink);
@@ -184,7 +187,11 @@
   user-select: all;
 }
 .staff-token__value--lost { color: var(--ink-3); user-select: none; }
-.table td.table__middle { vertical-align: middle; }
+/* Двойной класс: общие правила `.table td` стоят в файле ниже и иначе
+   перебивают выравнивание и отступы. */
+.table.table--staff td { vertical-align: middle; }
+.table.table--staff td,
+.table.table--staff th { padding-inline: var(--sp-2); }
 
 /* Статус поста в шапке композера */
 .state {

@@ -57,7 +57,7 @@ export function staffView(ctx) {
     }
 
     const wrap = el('div', 'scroll-x');
-    const table = el('table', 'table');
+    const table = el('table', 'table table--staff');
     const thead = el('thead');
     const hr = el('tr');
     for (const h of ['Имя', 'Роль', 'Токен', 'Статус', 'Был в панели', '']) hr.append(el('th', null, h));
@@ -72,7 +72,7 @@ export function staffView(ctx) {
   }
 
   function cell(tr) {
-    const td = el('td', 'table__middle');
+    const td = el('td');
     tr.append(td);
     return td;
   }
@@ -88,9 +88,11 @@ export function staffView(ctx) {
     name.title = 'Изменить имя, роль и заметку';
     name.addEventListener('click', () => openForm(person));
     nameLine.append(name);
-    if (mine) nameLine.append(el('span', 'tag', 'это вы'));
     tdName.append(nameLine);
-    if (person.note) tdName.append(el('div', 'dim small', person.note));
+    // «это вы» — строкой под именем, а не тегом рядом: тег растягивал колонку,
+    // и таблица уезжала в горизонтальную прокрутку.
+    const sub = [mine ? 'это вы' : '', person.note].filter(Boolean).join(' · ');
+    if (sub) tdName.append(el('div', 'dim small', sub));
 
     const roleTag = el('span', `tag ${person.role === 'owner' ? 'tag--gold' : ''}`);
     roleTag.append(el('span', `dot ${person.role === 'owner' ? 'dot--warn' : 'dot--ok'}`));
@@ -104,11 +106,12 @@ export function staffView(ctx) {
     cell(tr).append(status);
 
     const tdSeen = cell(tr);
-    tdSeen.className = 'table__time table__middle';
+    tdSeen.className = 'table__time';
     tdSeen.textContent = person.lastSeenAt ? stamp(person.lastSeenAt) : 'ни разу';
 
     const actions = el('div', 'target__meta');
     actions.style.flexWrap = 'nowrap';
+    actions.style.gap = 'var(--sp-1)';
     actions.append(
       button(person.active ? 'Отозвать' : 'Вернуть', {
         iconName: person.active ? 'lock' : 'unlock',
