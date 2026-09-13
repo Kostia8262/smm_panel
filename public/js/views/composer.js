@@ -15,6 +15,7 @@ import { el, button, iconButton, note, toast, panel, humanBytes } from '../ui.js
 import { makeThumb } from '../thumbs.js';
 import { dateTimeField } from '../datetime.js';
 import { withSignature } from '../signature.js';
+import { emojiButton } from '../emoji.js';
 
 /** Как называется состояние поста и каким цветом его показывать. */
 const STATE = {
@@ -308,8 +309,11 @@ export function composerView(ctx, postId) {
 
     const counters = el('div', 'counters');
     counters.id = 'counters';
+    // Кнопка вне #counters: тот пересобирается на каждый символ и унёс бы пикер
+    const tools = el('div', 'text-tools');
+    tools.append(counters, emojiButton(body));
 
-    p.append(title, body, counters, signatureBlock());
+    p.append(title, body, tools, signatureBlock());
     queueMicrotask(renderCounters);
     return p;
   }
@@ -495,6 +499,7 @@ export function composerView(ctx, postId) {
       refresh();
       autosave();
     });
+    head.append(emojiButton(area));
     box.append(area);
     return box;
   }
