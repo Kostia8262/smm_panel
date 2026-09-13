@@ -104,12 +104,20 @@ if (publishUrl) {
 // Поиск. Версия API проверяется двумя: адаптеры сидят на v21.0, а Audio API
 // вышел в июне 2026 — не исключено, что старой версии он не отвечает вовсе.
 const q = flag('q');
+const raw = args.includes('--raw');
 for (const v of [...new Set([version, 'v25.0'])]) {
   for (const type of ['music', 'original_sound']) {
     const title = `${v} · ${type}${q ? ` · «${q}»` : ' · тренды'}`;
     try {
-      const data = await get('ig_audio', { audio_type: type, user_id: creds.userId, ...(q ? { search_query: q } : {}) }, v);
-      const rows = data.data || [];
+      const params = { audio_type: type, user_id: creds.userId, ...(q ? { search_query: q } : {}) };
+      let data = await get('ig_audio', params, v);
+      let rows = data.data || [];
+      // Первая страница бывает пустой при живом курсоре — пройти ещё пару.
+      for (let page = 0; !rows.length && data.paging?.cursors?.after && page < 3; page++) {
+        data = await get('ig_audio', { ...params, after: data.paging.cursors.after }, v);
+        rows = data.data || [];
+      }
+      if (raw) console.log(JSON.stringify({ ...data, data: rows.slice(0, 2) }, null, 2));
       console.log(`=== ${title}: ${rows.length} шт.${data.paging?.cursors?.after ? ', есть следующая страница' : ''}`);
       rows.slice(0, 8).forEach(printAudio);
       if (rows[0]) console.log('  поля:', Object.keys(rows[0]).join(', '));
