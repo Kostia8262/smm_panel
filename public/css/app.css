@@ -2316,3 +2316,147 @@ a.btn { text-decoration: none; }
 .mail-sender__settings { padding-top: var(--sp-3); border-top: 1px solid var(--line-soft); }
 /* Client ID длинный: в четырёх узких колонках общей сетки он обрезался. */
 .mail-app-form { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+
+/* ------------------------- рассылка: письма (фаза 3) ------------------------- */
+
+.mail-state { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.mail-sub--ok { color: var(--ok); }
+.field__hint--warn { color: var(--warn); }
+
+/* Шаги пути письма: сделанное — зелёной галочкой, остальное — номером. */
+.mail-status { display: flex; flex-direction: column; gap: var(--sp-4); }
+.mail-status__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2) var(--sp-3); }
+.mail-status__text { color: var(--ink-2); }
+.mail-status .mail-ask { margin-top: 0; }
+.mail-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); margin: 0; padding: 0; list-style: none; counter-reset: mail-step; }
+.mail-step { display: flex; align-items: flex-start; gap: var(--sp-3); min-width: 0; counter-increment: mail-step; }
+.mail-step__mark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.mail-step__mark:empty::before { content: counter(mail-step); }
+.mail-step--done .mail-step__mark { background: var(--ok-dim); border-color: transparent; color: var(--ok); }
+.mail-step__text { min-width: 0; }
+.mail-step__title { font-weight: 600; color: var(--ink); }
+.mail-step:not(.mail-step--done) .mail-step__title { color: var(--ink-2); }
+.mail-step__sub { font-size: var(--fs-xs); color: var(--ink-3); }
+
+/* Редактор и предпросмотр рядом: письмо видно, пока его пишут. */
+.mail-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(380px, 42%); gap: var(--sp-6); align-items: start; }
+.mail-editor__main { display: flex; flex-direction: column; gap: var(--sp-6); min-width: 0; margin: 0; padding: 0; border: 0; }
+.mail-editor__side { position: sticky; top: 92px; min-width: 0; }
+
+.mail-recipients { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--sp-4); }
+.mail-picks { display: flex; flex-direction: column; gap: 2px; }
+.mail-pick { display: flex; align-items: center; gap: var(--sp-2); padding: 6px var(--sp-2); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink); }
+.mail-pick:hover { background: var(--surface-2); }
+.mail-pick:has(input:disabled) { color: var(--ink-3); cursor: default; }
+.mail-pick__name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.mail-pick__count { color: var(--ink-3); font-size: var(--fs-xs); }
+.mail-audience { display: flex; flex-direction: column; gap: 2px; padding-top: var(--sp-3); border-top: 1px solid var(--line-soft); }
+.mail-audience__value b { color: var(--ink); font-size: var(--fs-lg); }
+
+.mail-blocks { display: flex; flex-direction: column; gap: var(--sp-3); }
+.mail-blocks__empty { padding: var(--sp-5); border: 1px dashed var(--line); border-radius: var(--r); color: var(--ink-3); text-align: center; }
+.mail-block { background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: var(--r); }
+.mail-block__head { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--line-soft); }
+.mail-block__head .spacer { flex: 1; }
+.mail-block__num { min-width: 18px; color: var(--ink-3); font-size: var(--fs-xs); font-weight: 700; }
+.mail-block__title { font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); }
+.mail-block__move--up svg { transform: rotate(90deg); }
+.mail-block__move--down svg { transform: rotate(-90deg); }
+.mail-block__body { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); }
+.mail-textarea { min-height: 0; line-height: 1.55; }
+.mail-textbar { display: flex; flex-wrap: wrap; gap: 4px; }
+.mail-textbar__btn { min-width: 32px; justify-content: center; }
+.mail-textbar__btn:first-child span { font-weight: 800; }
+.mail-textbar__btn:nth-child(2) span { font-style: italic; }
+
+.mail-add { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--line-soft); }
+.mail-add__label { font-size: var(--fs-xs); font-weight: 600; color: var(--ink-3); }
+.mail-add__chips { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* Картинка блока: превью и размеры — видно, та ли картинка и того ли размера. */
+.mail-image { position: relative; display: flex; align-items: flex-start; gap: var(--sp-3); border-radius: var(--r-sm); transition: opacity var(--dur) var(--ease); }
+.mail-image--busy { opacity: 0.55; pointer-events: none; }
+.mail-image--over { box-shadow: var(--ring); }
+.mail-image__thumb { flex: none; width: 180px; max-width: 45%; height: auto; border-radius: var(--r-sm); border: 1px solid var(--line-soft); background: var(--surface-3); }
+.mail-image__meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mail-image__meta .mail-actions { margin-top: var(--sp-1); }
+.mail-image__empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: var(--sp-5) var(--sp-4);
+  background: var(--surface);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  color: var(--gold);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease);
+}
+.mail-image__empty:hover { border-color: var(--gold-line); }
+.mail-image__empty:focus-visible { outline: none; box-shadow: var(--ring); }
+
+.mail-checks { display: flex; flex-direction: column; gap: var(--sp-3); }
+.mail-issues__title { font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.mail-issues--danger .mail-issues__title { color: var(--danger); }
+.mail-issues--warn .mail-issues__title { color: var(--warn); }
+.mail-issues__list { display: flex; flex-direction: column; gap: 4px; margin: var(--sp-1) 0 0; padding-left: var(--sp-5); color: var(--ink); font-size: var(--fs-sm); }
+.mail-weight { padding-top: var(--sp-2); border-top: 1px solid var(--line-soft); }
+
+/* Предпросмотр: строка «Входящих» и письмо в рамке с одной прокруткой. */
+.mail-preview { display: flex; flex-direction: column; gap: var(--sp-3); }
+.mail-preview .panel__head { flex-wrap: wrap; }
+.mail-preview .panel__head .chips,
+.mail-preview .panel__head .btn { flex: none; }
+.mail-inbox { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-3); background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: var(--r-sm); min-width: 0; }
+.mail-inbox__top { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
+.mail-inbox__from { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: var(--ink); }
+.mail-inbox__addr,
+.mail-inbox__subject,
+.mail-inbox__pre { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-inbox__addr { color: var(--ink-3); font-size: var(--fs-xs); }
+.mail-inbox__subject { color: var(--ink); font-weight: 600; font-size: var(--fs-sm); }
+.mail-inbox__subject--empty { color: var(--danger); }
+.mail-inbox__pre { color: var(--ink-3); font-size: var(--fs-sm); }
+.mail-preview__viewport {
+  /* Вся колонка — шапка, строка «Входящих», рамка и имя — помещается под прилипшей шапкой панели. */
+  height: calc(100vh - 400px);
+  min-height: 320px;
+  overflow: auto;
+  background: var(--surface-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  transition: opacity var(--dur) var(--ease);
+}
+.mail-preview__viewport[aria-busy="true"] { opacity: 0.7; }
+.mail-preview__sizer { position: relative; overflow: hidden; }
+.mail-preview__frame { position: absolute; top: 0; left: 0; border: 0; transform-origin: 0 0; background: var(--surface-3); }
+.mail-preview__name .input { height: 32px; padding-block: 0; }
+
+@media (max-width: 1240px) {
+  .mail-editor { grid-template-columns: minmax(0, 1fr); }
+  .mail-editor__side { position: static; }
+  .mail-preview__viewport { height: 75vh; }
+}
+
+@media (max-width: 640px) {
+  .mail-steps { grid-template-columns: minmax(0, 1fr); }
+  .mail-image { flex-direction: column; }
+  .mail-image__thumb { width: 100%; max-width: 100%; }
+}

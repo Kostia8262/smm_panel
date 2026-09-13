@@ -294,6 +294,26 @@ export const api = {
   disconnectMailSender: (id) => request(`/api/mail/senders/${id}`, { method: 'DELETE' }),
   /** Образец фирменной вёрстки письма открытой школы — ссылкой, в новой вкладке. */
   mailSampleUrl: () => withProject('/api/mail/sample.html'),
+
+  /* Рассылка: письма (фаза 3). Ответ правки — письмо целиком с проверками, чтобы экран не расходился с сервером. */
+  mailCampaigns: () => request(withProject('/api/mail/campaigns')),
+  createMailCampaign: (fromId = null) => request(withProject('/api/mail/campaigns'), { method: 'POST', body: fromId ? { fromId } : {} }),
+  mailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}`)),
+  updateMailCampaign: (id, body) => request(withProject(`/api/mail/campaigns/${id}`), { method: 'PUT', body }),
+  deleteMailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}`), { method: 'DELETE' }),
+  uploadMailCampaignImage: (id, blob, name) => {
+    const form = new FormData();
+    form.append('file', blob, name);
+    return request(withProject(`/api/mail/campaigns/${id}/media`), { method: 'POST', raw: form });
+  },
+  /** Страница предпросмотра — для рамки; `v` сбивает кэш после каждой правки. */
+  mailCampaignPreviewUrl: (id, { v = '', name = '' } = {}) =>
+    withProject(`/api/mail/campaigns/${id}/preview.html?${new URLSearchParams({ v, name })}`),
+  mailMediaUrl: (name) => `/api/mail/media/${encodeURIComponent(name)}`,
+  testMailCampaign: (id, to = []) => request(withProject(`/api/mail/campaigns/${id}/test`), { method: 'POST', body: { to } }),
+  submitMailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}/submit`), { method: 'POST' }),
+  approveMailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}/approve`), { method: 'POST' }),
+  rejectMailCampaign: (id, note) => request(withProject(`/api/mail/campaigns/${id}/reject`), { method: 'POST', body: { note } }),
 };
 
 export { ApiError };

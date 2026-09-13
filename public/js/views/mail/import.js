@@ -190,7 +190,7 @@ function previewStep(ctx, id) {
       });
     } catch (err) {
       toast(err.message, 'danger');
-      if (err.status === 404) location.hash = '#/mail';
+      if (err.status === 404) location.hash = '#/mail/lists';
       return;
     }
     if (mine !== requestNo || !root.isConnected) return;
@@ -644,7 +644,7 @@ function previewStep(ctx, id) {
     try {
       await api.discardMailImport(id);
       toast('Загрузка отменена', 'ok');
-      location.hash = '#/mail';
+      location.hash = '#/mail/lists';
     } catch (err) {
       toast(err.message, 'danger');
     }

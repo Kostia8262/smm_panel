@@ -24,6 +24,18 @@ export const VERDICT_TAG = {
   suppressed: { cls: 'tag--danger', text: 'стоп-лист', tile: 'danger', title: 'В стоп-листе' },
 };
 
+/** Цвет состояния письма; само состояние всегда подписано словом с сервера. */
+export const CAMPAIGN_TAG = {
+  draft: '',
+  review: 'tag--gold',
+  approved: 'tag--ok',
+  scheduled: 'tag--gold',
+  sending: 'tag--warn',
+  paused: 'tag--warn',
+  done: 'tag--ok',
+  cancelled: '',
+};
+
 export function tag({ cls, text }) {
   return el('span', `tag ${cls || ''}`.trim(), text);
 }
@@ -58,8 +70,8 @@ export function tile(label, value, sub, tone = '') {
   return box;
 }
 
-/** Возврат к списку баз: вложенные экраны рассылки живут внутри раздела. */
-export function backLink(text = 'Базы', hash = '#/mail') {
+/** Возврат к списку: вложенные экраны рассылки живут внутри раздела. */
+export function backLink(text = 'Базы', hash = '#/mail/lists') {
   const a = el('a', 'mail-back');
   a.href = hash;
   a.append(icon('chevronLeft', { size: 15 }), el('span', null, text));
@@ -150,17 +162,18 @@ export function setHashParams(path, params) {
 }
 
 /**
- * Вкладки раздела: «Базы» и «Ящики». Ящики видит только владелец — у
- * СММщика вкладка одна, и полосу из одной вкладки не рисуем.
+ * Вкладки раздела: «Письма», «Базы», «Ящики». Ящики видит только владелец.
+ * Письма первыми: ради них раздел и открывают.
  */
 export function mailTabs(ctx, active) {
-  if (!ctx.can('mail_senders')) return null;
   const nav = el('nav', 'mail-tabs');
   nav.setAttribute('aria-label', 'Разделы рассылки');
-  for (const [id, title, hash] of [
-    ['lists', 'Базы', '#/mail'],
-    ['senders', 'Ящики', '#/mail/senders'],
-  ]) {
+  const tabs = [
+    ['letters', 'Письма', '#/mail'],
+    ['lists', 'Базы', '#/mail/lists'],
+  ];
+  if (ctx.can('mail_senders')) tabs.push(['senders', 'Ящики', '#/mail/senders']);
+  for (const [id, title, hash] of tabs) {
     const a = el('a', 'mail-tab', title);
     a.href = hash;
     if (id === active) a.setAttribute('aria-current', 'page');

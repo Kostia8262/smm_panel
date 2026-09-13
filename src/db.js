@@ -1165,6 +1165,75 @@ const MIGRATIONS = [
       CREATE INDEX idx_watched_posts ON watched_posts(account_id, posted_at);
     `,
   },
+  {
+    /*
+     * Рассылка, фаза 3: письма (docs/рассылка.md, §4 и §9–10).
+     *
+     * Содержимое письма — блоки JSON, из них собирается и предпросмотр, и
+     * пробное, и боевое письмо: что видели, то и уходит. `content_hash` —
+     * отпечаток содержимого; утверждение запоминает свой отпечаток, и правка
+     * после утверждения возвращает письмо в черновик, а воркер не отправит
+     * письмо, отпечаток которого разошёлся с утверждённым.
+     *
+     * Картинки писем — отдельно от кадров постов: свой каталог без публичной
+     * раздачи (получателю картинка приходит внутри письма) и свой срок жизни —
+     * пока письмо не разослано до последнего адресата.
+     */
+    name: '027-mail-campaigns',
+    sql: `
+      CREATE TABLE mail_campaigns (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        sender_id     INTEGER REFERENCES mail_senders(id),
+        title         TEXT NOT NULL DEFAULT '',
+        subject       TEXT NOT NULL DEFAULT '',
+        preheader     TEXT NOT NULL DEFAULT '',
+        from_name     TEXT NOT NULL DEFAULT '',
+        reply_to      TEXT,
+        blocks        TEXT NOT NULL DEFAULT '[]',
+        content_hash  TEXT,
+        status        TEXT NOT NULL DEFAULT 'draft',
+        review_note   TEXT,
+        approved_by   INTEGER REFERENCES staff(id) ON DELETE SET NULL,
+        approved_at   TEXT,
+        approved_hash TEXT,
+        scheduled_at  TEXT,
+        started_at    TEXT,
+        finished_at   TEXT,
+        pause_reason  TEXT,
+        copied_from   INTEGER REFERENCES mail_campaigns(id) ON DELETE SET NULL,
+        created_by    INTEGER REFERENCES staff(id) ON DELETE SET NULL,
+        created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        deleted_at    TEXT
+      );
+
+      CREATE TABLE mail_campaign_lists (
+        campaign_id INTEGER NOT NULL REFERENCES mail_campaigns(id) ON DELETE CASCADE,
+        list_id     INTEGER NOT NULL REFERENCES mail_lists(id),
+        mode        TEXT NOT NULL DEFAULT 'include',
+        PRIMARY KEY (campaign_id, list_id)
+      );
+
+      CREATE TABLE mail_media (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id   INTEGER NOT NULL REFERENCES mail_campaigns(id) ON DELETE CASCADE,
+        stored_name   TEXT NOT NULL,
+        original_name TEXT NOT NULL DEFAULT '',
+        mime          TEXT NOT NULL,
+        bytes         INTEGER NOT NULL,
+        width         INTEGER,
+        height        INTEGER,
+        created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        purged_at     TEXT
+      );
+
+      CREATE INDEX idx_mail_campaigns_project ON mail_campaigns(project_id, deleted_at, updated_at);
+      CREATE INDEX idx_mail_campaigns_due ON mail_campaigns(status, scheduled_at);
+      CREATE INDEX idx_mail_media_campaign ON mail_media(campaign_id);
+      CREATE INDEX idx_mail_media_stored ON mail_media(stored_name);
+    `,
+  },
 ];
 
 function migrate() {

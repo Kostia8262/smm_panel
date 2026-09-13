@@ -76,7 +76,7 @@ export function listView(ctx, listKey) {
     } catch (err) {
       tableHost.removeAttribute('aria-busy');
       toast(err.message, 'danger');
-      if (err.status === 404) location.hash = '#/mail';
+      if (err.status === 404) location.hash = '#/mail/lists';
       return;
     }
     if (mine !== requestNo) return;
@@ -535,7 +535,7 @@ export function listView(ctx, listKey) {
           try {
             await api.updateMailList(list.id, { archived: !list.archivedAt });
             toast(list.archivedAt ? 'База возвращена' : 'База в архиве', 'ok');
-            location.hash = '#/mail';
+            location.hash = '#/mail/lists';
           } catch (err) {
             toast(err.message, 'danger');
           }

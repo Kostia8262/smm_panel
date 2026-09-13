@@ -19,6 +19,8 @@ import * as googleOauth from './sender/google-oauth.js';
 import * as unsubscribe from './unsubscribe.js';
 import { renderLetter, sampleBlocks } from './compose/render.js';
 import { brandFor } from './compose/brand.js';
+import * as campaigns from './campaigns.js';
+import * as mailMedia from './compose/media.js';
 import { makeState, readState } from '../oauth/threads.js';
 import { getProject } from '../projects.js';
 import { tooManyAttempts } from '../ratelimit.js';
@@ -491,6 +493,164 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
       res.setHeader('Cache-Control', 'no-store');
       res.type('html').send(html);
     })
+  );
+
+  /* --------------------------------- письма (фаза 3) --------------------------------- */
+
+  const campaignOf = (req) => campaigns.getCampaign(req.params.id, projectOf(req));
+
+  /** Письмо целиком для редактора: сам текст, проверки, аудитория и то, из чего выбирать. */
+  const editorPayload = (campaign) => ({
+    campaign,
+    check: campaigns.checkCampaign(campaign),
+    options: {
+      lists: store.listLists(campaign.projectId).map((l) => ({ id: l.id, name: l.name, active: l.counts.active })),
+      senders: senders.listSenders().map((s) => ({ id: s.id, email: s.email, state: s.state, cap: s.cap.effective, sent24h: s.sent24h })),
+      statuses: campaigns.CAMPAIGN_STATUS,
+    },
+  });
+
+  router.get(
+    '/api/mail/campaigns',
+    view,
+    handle((req, res) => res.json({ campaigns: campaigns.listCampaigns(projectOf(req)), statuses: campaigns.CAMPAIGN_STATUS }))
+  );
+
+  router.post(
+    '/api/mail/campaigns',
+    view,
+    handle((req, res) => {
+      const projectId = projectOf(req);
+      const fromId = Number(req.body?.fromId) || null;
+      if (fromId) campaigns.getCampaign(fromId, projectId);
+      const campaign = fromId ? campaigns.copyCampaign(fromId, { staffId: req.user.id }) : campaigns.createCampaign(projectId, { staffId: req.user.id });
+      res.status(201).json(editorPayload(campaign));
+    })
+  );
+
+  router.get(
+    '/api/mail/campaigns/:id',
+    view,
+    handle((req, res) => res.json(editorPayload(campaignOf(req))))
+  );
+
+  router.put(
+    '/api/mail/campaigns/:id',
+    view,
+    handle((req, res) => {
+      const current = campaignOf(req);
+      res.json(editorPayload(campaigns.updateCampaign(current.id, req.body || {})));
+    })
+  );
+
+  router.delete(
+    '/api/mail/campaigns/:id',
+    view,
+    handle((req, res) => {
+      campaigns.removeCampaign(campaignOf(req).id);
+      res.json({ ok: true });
+    })
+  );
+
+  const imageUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: mailMedia.MAIL_IMAGE_LIMITS.maxBytes, files: 1 },
+    defParamCharset: 'utf8',
+  }).single('file');
+
+  router.post(
+    '/api/mail/campaigns/:id/media',
+    view,
+    (req, res, next) =>
+      imageUpload(req, res, (err) => {
+        if (!err) return next();
+        if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Картинка больше 2 МБ — для письма это слишком тяжело' });
+        res.status(400).json({ error: `Файл не принят: ${err.message}` });
+      }),
+    handle((req, res) => {
+      const campaign = campaignOf(req);
+      if (!campaign.editable) throw new MailError('Письмо уже отправляется — картинки не меняются', 409);
+      if (!req.file?.buffer?.length) throw new MailError('Выберите картинку');
+      const row = mailMedia.saveImage(campaign.id, { buffer: req.file.buffer, originalName: req.file.originalname });
+      res.status(201).json({ media: { id: row.id, name: row.stored_name, width: row.width, height: row.height, bytes: row.bytes, originalName: row.original_name } });
+    })
+  );
+
+  /** Картинка письма для редактора — только вошедшим; получателю она уходит внутри письма. */
+  router.get(
+    '/api/mail/media/:name',
+    view,
+    handle((req, res) => {
+      const found = mailMedia.mediaPath(req.params.name);
+      if (!found) return res.status(404).type('text/plain').send('Картинки нет');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      res.type(found.row.mime).sendFile(found.path);
+    })
+  );
+
+  /**
+   * Предпросмотр письма в рамке редактора. Своя политика безопасности:
+   * встроенные стили письма и картинки data:, без скриптов; рамка — только
+   * из самой панели (`frame-ancestors 'self'` и SAMEORIGIN вместо общего DENY).
+   * Документ `srcdoc` унаследовал бы CSP панели и остался бы без стилей.
+   */
+  router.get(
+    '/api/mail/campaigns/:id/preview.html',
+    view,
+    handle((req, res) => {
+      const campaign = campaignOf(req);
+      const { html } = campaigns.buildLetter(campaign, {
+        mode: 'preview',
+        vars: { name: String(req.query.name || '') },
+        unsubscribeUrl: unsubscribe.unsubscribeUrl(publicBase(), unsubscribe.tokenFor({ projectId: campaign.projectId })),
+      });
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+      );
+      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      res.setHeader('Cache-Control', 'no-store');
+      res.type('html').send(html);
+    })
+  );
+
+  router.post(
+    '/api/mail/campaigns/:id/test',
+    view,
+    handle(async (req, res) => {
+      const campaign = campaignOf(req);
+      try {
+        const result = await campaigns.sendCampaignTest(campaign.id, {
+          to: Array.isArray(req.body?.to) ? req.body.to : [],
+          staffId: req.user.id,
+          publicBase: publicBase(),
+          projectId: campaign.projectId,
+        });
+        res.json({ ...result, ...editorPayload(campaigns.getCampaign(campaign.id)) });
+      } catch (err) {
+        if (err instanceof MailError) throw err;
+        res.status(502).json({ error: err.message });
+      }
+    })
+  );
+
+  router.post(
+    '/api/mail/campaigns/:id/submit',
+    view,
+    handle((req, res) => res.json(editorPayload(campaigns.submitCampaign(campaignOf(req).id, req.user))))
+  );
+
+  router.post(
+    '/api/mail/campaigns/:id/approve',
+    mailboxes,
+    handle((req, res) => res.json(editorPayload(campaigns.approveCampaign(campaignOf(req).id, req.user))))
+  );
+
+  router.post(
+    '/api/mail/campaigns/:id/reject',
+    mailboxes,
+    handle((req, res) => res.json(editorPayload(campaigns.rejectCampaign(campaignOf(req).id, req.user, req.body?.note))))
   );
 
   /* ------------------------------ отписка: наружу ------------------------------ */

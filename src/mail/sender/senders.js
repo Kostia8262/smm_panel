@@ -321,6 +321,31 @@ export async function sendTest(id, { to = [], projectId, staffId = null, publicB
   const row = rowOf(id);
   const project = getProject(projectId);
   if (!project) throw new MailError('Не выбран проект', 400);
+  const unsubscribe = unsubscribeUrl(publicBase, tokenFor({ projectId: project.id, contactId: 0, campaignId: 0 }));
+  const letter = testLetter({ project, unsubscribe });
+  return sendTestMessage(row.id, {
+    to,
+    fromName: row.display_name || project.title,
+    subject: letter.subject,
+    html: letter.html,
+    text: letter.text,
+    unsubscribe,
+    staffId,
+    fetchImpl,
+    now,
+  });
+}
+
+/**
+ * Пробное письмо с готовым содержимым: и образец ящика, и версия письма из
+ * редактора уходят одним путём — с теми же проверками адресов и потолка.
+ *
+ * @param {{to?: string[], fromName: string, subject: string, html: string, text: string, inline?: object[],
+ *   unsubscribe: string, campaignId?: number|null, contentHash?: string|null, staffId?: number|null}} message
+ */
+export async function sendTestMessage(id, { to = [], fromName, subject, html, text, inline = [], unsubscribe, replyTo = '', campaignId = null, contentHash = null, staffId = null, fetchImpl = globalThis.fetch, now = Date.now() }) {
+  const row = rowOf(id);
+  if (row.disconnected_at) throw new MailError('Ящик отключён — выберите другой или подключите заново');
 
   const recipients = [...new Set((to.length ? to : [row.email]).map((e) => String(e).trim().toLowerCase()).filter(Boolean))];
   if (recipients.length > SENDING.testRecipientsMax) throw new MailError(`Пробное письмо — не больше чем на ${SENDING.testRecipientsMax} адресов`);
@@ -334,9 +359,9 @@ export async function sendTest(id, { to = [], projectId, staffId = null, publicB
   }
 
   const token = await accessTokenFor(row.id, { fetchImpl, now });
-  const fromName = row.display_name || project.title;
-  const unsubscribe = unsubscribeUrl(publicBase, tokenFor({ projectId: project.id, contactId: 0, campaignId: 0 }));
-  const letter = testLetter({ project, unsubscribe });
+  const record = db.prepare(
+    'INSERT INTO mail_test_sends (sender_id, campaign_id, content_hash, to_email, gmail_id, sent_by, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
 
   const sent = [];
   const failed = [];
@@ -345,29 +370,32 @@ export async function sendTest(id, { to = [], projectId, staffId = null, publicB
       buildMessage({
         from: { name: fromName, email: row.email },
         to: { email },
-        subject: letter.subject,
-        text: letter.text,
-        html: letter.html,
+        subject,
+        text,
+        html,
+        inline,
+        replyTo,
         headers: unsubscribeHeaders(unsubscribe),
         date: new Date(now),
       })
     );
     try {
       const out = await sendRaw({ accessToken: token, raw, fetchImpl });
-      db.prepare('INSERT INTO mail_test_sends (sender_id, to_email, gmail_id, sent_by, sent_at) VALUES (?, ?, ?, ?, ?)').run(row.id, email, out.id, staffId, nowIso(now));
+      record.run(row.id, campaignId, contentHash, email, out.id, staffId, nowIso(now));
       sent.push({ email, gmailId: out.id });
     } catch (err) {
       if (err instanceof GmailError && err.kind === 'auth') cache.delete(row.id);
       if (err instanceof GmailError && err.kind === 'unknown') {
-        // Не знаем, ушло ли: считаем в потолок, чтобы не перебрать лимит Google.
-        db.prepare('INSERT INTO mail_test_sends (sender_id, to_email, gmail_id, sent_by, sent_at) VALUES (?, ?, NULL, ?, ?)').run(row.id, email, staffId, nowIso(now));
+        // Не знаем, ушло ли: считаем в потолок, чтобы не перебрать лимит Google,
+        // но версию письма «проверенной» не отмечаем — её никто не видел.
+        record.run(row.id, campaignId, null, email, null, staffId, nowIso(now));
       }
       failed.push({ email, error: err.message });
     }
   }
   log(
     failed.length ? 'warn' : 'info',
-    `рассылка: пробное письмо с ${row.email} — ушло ${sent.length}${failed.length ? `, не ушло ${failed.length}: ${failed[0].error}` : ''}`
+    `рассылка: пробное письмо${campaignId ? ` #${campaignId}` : ''} с ${row.email} — ушло ${sent.length}${failed.length ? `, не ушло ${failed.length}: ${failed[0].error}` : ''}`
   );
   return { sent, failed };
 }
