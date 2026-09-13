@@ -1031,6 +1031,9 @@ app.get('/api/schedule', (req, res) => {
     categories: scheduleDb.listCategories(projectId),
     slots: scheduleDb.listSlots(projectId),
     nextFree: scheduleDb.nextFreeSlot(projectId),
+    week: scheduleDb.weekAhead(projectId),
+    stats: scheduleDb.categoryStats(projectId),
+    palette: scheduleDb.CATEGORY_COLORS,
   });
 });
 

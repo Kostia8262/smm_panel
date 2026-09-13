@@ -772,6 +772,28 @@ const MIGRATIONS = [
       CREATE INDEX idx_media_thumb ON media(thumb_name);
     `,
   },
+  {
+    /*
+     * Цвета рубрик.
+     *
+     * Затравка красила все рубрики одним золотом, и в сетке расписания их
+     * было не отличить. Одинаковый цвет у всех рубрик проекта — след
+     * затравки, а не выбор, поэтому разводим его по палитре. Один раз:
+     * дальше цвет выбирает человек, и повторять это при чтении нельзя.
+     * Палитра переписана сюда, а не взята из schedule.js: миграция должна
+     * делать то же самое, даже если палитра потом сменится.
+     */
+    name: '020-category-colors',
+    run(db) {
+      const palette = ['#e0a94b', '#7aa7e0', '#6fc39a', '#e08a5a', '#d47fa6', '#a58be0', '#5fbcbc', '#b5b85a'];
+      const paint = db.prepare('UPDATE categories SET color = ? WHERE id = ?');
+      for (const { project_id } of db.prepare('SELECT DISTINCT project_id FROM categories').all()) {
+        const rows = db.prepare('SELECT id, color FROM categories WHERE project_id = ? ORDER BY position, id').all(project_id);
+        if (rows.length < 2 || !rows.every((r) => r.color === palette[0])) continue;
+        rows.forEach((r, i) => paint.run(palette[i % palette.length], r.id));
+      }
+    },
+  },
 ];
 
 function migrate() {

@@ -66,21 +66,38 @@ export function createCategory(projectId, { title, color = '#e0a94b', evergreen 
 export function updateCategory(id, { title, color, evergreen, recycleDays }) {
   const row = db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
   if (!row) throw new Error('Рубрика не найдена');
-  db.prepare(
-    'UPDATE categories SET title = ?, color = ?, evergreen = ?, recycle_days = ? WHERE id = ?'
-  ).run(
-    title !== undefined ? String(title).trim() : row.title,
-    color || row.color,
-    evergreen === undefined ? row.evergreen : evergreen ? 1 : 0,
-    recycleDays === undefined ? row.recycle_days : Number(recycleDays) || 60,
-    id
-  );
+  const cleanTitle = title !== undefined ? String(title).trim() : row.title;
+  if (!cleanTitle) throw new Error('Название рубрики не может быть пустым');
+  if (color && !/^#[0-9a-f]{6}$/i.test(color)) throw new Error('Цвет рубрики указан неверно');
+  const days = recycleDays === undefined ? row.recycle_days : Math.round(Number(recycleDays));
+  if (!(days >= 1 && days <= 730)) throw new Error('Повтор — от 1 до 730 дней');
+  try {
+    db.prepare(
+      'UPDATE categories SET title = ?, color = ?, evergreen = ?, recycle_days = ? WHERE id = ?'
+    ).run(
+      cleanTitle,
+      color || row.color,
+      evergreen === undefined ? row.evergreen : evergreen ? 1 : 0,
+      days,
+      id
+    );
+  } catch (err) {
+    if (String(err.message).includes('UNIQUE')) throw new Error(`Рубрика «${cleanTitle}» уже есть`);
+    throw err;
+  }
   return listCategories(row.project_id).find((c) => c.id === id);
 }
 
 export function removeCategory(id) {
   db.prepare('DELETE FROM categories WHERE id = ?').run(id);
 }
+
+/**
+ * Палитра рубрик. Живёт здесь, а не в tokens.css: цвет рубрики — данные,
+ * он хранится в базе строкой, и панель получает палитру вместе с сеткой.
+ * Тона подобраны под тёмную основу и не спорят с золотом акцента.
+ */
+export const CATEGORY_COLORS = ['#e0a94b', '#7aa7e0', '#6fc39a', '#e08a5a', '#d47fa6', '#a58be0', '#5fbcbc', '#b5b85a'];
 
 /** Первый запуск проекта: сетка из ходовых рубрик, дальше правит жизнь. */
 export function seedCategories(projectId) {
@@ -93,7 +110,36 @@ export function seedCategories(projectId) {
     { title: 'Отзыв', evergreen: true },
     { title: 'Закулисье', evergreen: false },
   ];
-  for (const c of seed) createCategory(projectId, c);
+  seed.forEach((c, i) => createCategory(projectId, { ...c, color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] }));
+}
+
+/**
+ * Сколько у рубрики слотов, постов в очереди и уже вышедших — без этого
+ * список рубрик был просто перечнем названий.
+ *
+ * @returns {Record<number, {slots: number, queued: number, published: number}>}
+ */
+export function categoryStats(projectId) {
+  const stats = {};
+  for (const c of listCategories(projectId)) stats[c.id] = { slots: 0, queued: 0, published: 0 };
+  for (const row of db
+    .prepare('SELECT category_id id, COUNT(*) n FROM slots WHERE project_id = ? AND category_id IS NOT NULL GROUP BY category_id')
+    .all(projectId)) {
+    if (stats[row.id]) stats[row.id].slots = row.n;
+  }
+  for (const row of db
+    .prepare(
+      `SELECT category_id id,
+              SUM(status IN ('scheduled', 'review')) queued,
+              SUM(status IN ('published', 'partial')) published
+       FROM posts
+       WHERE project_id = ? AND deleted_at IS NULL AND category_id IS NOT NULL
+       GROUP BY category_id`
+    )
+    .all(projectId)) {
+    if (stats[row.id]) Object.assign(stats[row.id], { queued: row.queued || 0, published: row.published || 0 });
+  }
+  return stats;
 }
 
 /* --------------------------------- слоты --------------------------------- */
@@ -143,6 +189,48 @@ export function removeSlot(id) {
 
 export function toggleSlot(id, active) {
   db.prepare('UPDATE slots SET active = ? WHERE id = ?').run(active ? 1 : 0, id);
+}
+
+/**
+ * Каждый слот на ближайшие семь дней: когда он наступит и чем занят.
+ *
+ * Сетка без занятости отвечала только на «когда мы вообще постим», а
+ * вопрос владельца другой — «что уже стоит на этой неделе и где дыра».
+ * Прошедший сегодня слот показывается следующей неделей.
+ *
+ * @returns {Record<number, {at: string, post: {id: number, title: string, status: string}|null}>}
+ */
+export function weekAhead(projectId, now = new Date()) {
+  const slots = listSlots(projectId).filter((s) => s.active);
+  if (!slots.length) return {};
+
+  const until = new Date(now);
+  until.setDate(until.getDate() + 8);
+  const posts = new Map();
+  for (const p of db
+    .prepare(
+      `SELECT id, title, body, status, scheduled_at FROM posts
+       WHERE project_id = ? AND deleted_at IS NULL AND scheduled_at BETWEEN ? AND ?
+         AND status IN ('scheduled', 'review', 'publishing', 'published', 'partial')
+       ORDER BY id`
+    )
+    .all(projectId, stamp(now), stamp(until))) {
+    if (posts.has(p.scheduled_at)) continue;
+    const title = String(p.title || '').trim() || String(p.body || '').trim().split('\n')[0].slice(0, 80);
+    posts.set(p.scheduled_at, { id: p.id, title: title || `пост #${p.id}`, status: p.status });
+  }
+
+  const week = {};
+  for (const slot of slots) {
+    const [h, m] = slot.time.split(':').map(Number);
+    const when = new Date(now);
+    when.setDate(when.getDate() + ((slot.weekday - isoWeekday(now) + 7) % 7));
+    when.setHours(h, m, 0, 0);
+    if (when <= now) when.setDate(when.getDate() + 7);
+    const at = stamp(when);
+    week[slot.id] = { at, post: posts.get(at) || null };
+  }
+  return week;
 }
 
 /* --------------------------- ближайший свободный --------------------------- */

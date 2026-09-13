@@ -120,6 +120,57 @@ test('вечнозелёный повтор создаёт копию, не тр
   assert.equal(targets[0].status, 'pending', 'у копии публикация ещё не совершалась');
 });
 
+test('неделя вперёд: у каждого слота дата в будущем и пост, который его занял', () => {
+  const week = schedule.weekAhead(projectId);
+  const slots = schedule.listSlots(projectId);
+  assert.equal(Object.keys(week).length, slots.length, 'по записи на каждый активный слот');
+
+  const now = new Date();
+  const limit = new Date(now);
+  limit.setDate(limit.getDate() + 7);
+  for (const slot of slots) {
+    const at = new Date(week[slot.id].at.replace(' ', 'T'));
+    assert.ok(at > now && at <= limit, `слот ${slot.weekdayTitle} ${slot.time} — в ближайшие 7 дней`);
+    assert.ok(week[slot.id].at.endsWith(`${slot.time}:00`));
+  }
+
+  const target = slots.find((s) => !week[s.id].post);
+  const id = addPost(week[target.id].at);
+  const after = schedule.weekAhead(projectId);
+  assert.equal(after[target.id].post?.id, id, 'пост виден в своём слоте');
+});
+
+test('счётчики рубрики: свои слоты, очередь и вышедшее', () => {
+  const own = projects.createProject({ slug: 'stats', title: 'Счётчики' }).id;
+  const cat = schedule.createCategory(own, { title: 'Отзывы' });
+  schedule.addSlot(own, { weekday: 3, time: '12:00', categoryId: cat.id });
+  const insert = db.prepare(
+    `INSERT INTO posts (title, body, status, scheduled_at, project_id, category_id) VALUES ('', '', ?, NULL, ?, ?)`
+  );
+  insert.run('scheduled', own, cat.id);
+  insert.run('review', own, cat.id);
+  insert.run('published', own, cat.id);
+  insert.run('draft', own, cat.id);
+
+  assert.deepEqual(schedule.categoryStats(own)[cat.id], { slots: 1, queued: 2, published: 1 });
+});
+
+test('затравка раздаёт рубрикам разные цвета', () => {
+  const fresh = projects.createProject({ slug: 'fresh', title: 'Новый' }).id;
+  schedule.seedCategories(fresh);
+  const colors = schedule.listCategories(fresh).map((c) => c.color);
+  assert.equal(new Set(colors).size, colors.length, 'рубрики в сетке должны различаться цветом');
+});
+
+test('правка рубрики проверяет название, цвет и срок повтора', () => {
+  const cat = schedule.createCategory(projectId, { title: 'Правка' });
+  assert.throws(() => schedule.updateCategory(cat.id, { title: '  ' }), /пустым/);
+  assert.throws(() => schedule.updateCategory(cat.id, { color: 'red' }), /Цвет/);
+  assert.throws(() => schedule.updateCategory(cat.id, { recycleDays: 0 }), /от 1 до 730/);
+  assert.throws(() => schedule.updateCategory(cat.id, { title: 'Вечное' }), /уже есть/);
+  assert.equal(schedule.updateCategory(cat.id, { recycleDays: 30, color: '#7aa7e0' }).recycleDays, 30);
+});
+
 test('невечнозелёная рубрика повтор не создаёт', () => {
   const once = schedule.createCategory(projectId, { title: 'Разово', evergreen: false });
   const id = addPost(schedule.nextFreeSlot(projectId, { categoryId: once.id }), {
