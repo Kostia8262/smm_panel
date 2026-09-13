@@ -153,11 +153,41 @@ export async function remove(externalId, creds) {
   return { ok: Boolean(data.success ?? true), deletedId: data.deleted_id || externalId };
 }
 
-export async function publish({ text, media = [], publicUrl, creds }) {
+/**
+ * Дождаться, пока контейнер станет FINISHED.
+ *
+ * Картинку Threads скачивает с нашего сервера в фоне, как и Instagram, и
+ * `threads_publish` по неготовому контейнеру отвечает «The requested resource
+ * does not exist» — на этом 13.09.2026 упала первая проба картинки. До этого
+ * ожидание стояло только у видео, и то слепым сном на 30 секунд: короткий
+ * ролик ждал зря, длинный не успевал.
+ *
+ * Шаг опроса разный: картинка готова за секунды, видео — за минуты.
+ */
+export async function waitReady(containerId, creds, { tries = 15, pauseMs = 2000 } = {}) {
+  for (let i = 0; i < tries; i++) {
+    const res = await fetch(`${API}/${containerId}?fields=status,error_message&access_token=${creds.accessToken}`);
+    const data = await res.json().catch(() => ({}));
+    if (data.status === 'FINISHED') return;
+    // Причина — в error_message, текстом: чаще всего площадка не смогла
+    // скачать файл или не приняла его формат.
+    if (data.status === 'ERROR' || data.status === 'EXPIRED') {
+      throw new Error(`Threads: контейнер не собрался — ${data.error_message || data.status}`);
+    }
+    await new Promise((r) => setTimeout(r, pauseMs));
+  }
+  throw new Error('Threads: контейнер не дошёл до готовности за отведённое время');
+}
+
+export async function publish({ text, media = [], publicUrl, creds, pauseMs }) {
   const user = creds.userId;
   let containerId;
+  const heavy = media.some((m) => m.kind === 'video');
+  // Опрос у видео редкий и долгий, у картинки частый и короткий.
+  const wait = heavy ? { tries: 36, pauseMs: pauseMs ?? 10000 } : { tries: 15, pauseMs: pauseMs ?? 2000 };
 
   if (!media.length) {
+    // Текст ничего не скачивает — ждать нечего, и проба 13.09 это подтвердила.
     ({ id: containerId } = await call(`${user}/threads`, { media_type: 'TEXT', text }, creds));
   } else if (media.length === 1) {
     const m = media[0];
@@ -167,8 +197,11 @@ export async function publish({ text, media = [], publicUrl, creds }) {
       [isVideo ? 'video_url' : 'image_url']: publicUrl(m),
       text,
     }, creds));
+    await waitReady(containerId, creds, wait);
   } else {
-    // Карусель: контейнер на каждый файл, затем общий.
+    // Карусель: контейнер на каждый файл, затем общий. Каждый кадр должен
+    // собраться до того, как из них собирают карусель, — иначе площадка
+    // отбивает общий контейнер.
     const children = [];
     for (const m of media.slice(0, 20)) {
       const isVideo = m.kind === 'video';
@@ -177,6 +210,7 @@ export async function publish({ text, media = [], publicUrl, creds }) {
         [isVideo ? 'video_url' : 'image_url']: publicUrl(m),
         is_carousel_item: 'true',
       }, creds);
+      await waitReady(child.id, creds, wait);
       children.push(child.id);
     }
     ({ id: containerId } = await call(`${user}/threads`, {
@@ -184,10 +218,8 @@ export async function publish({ text, media = [], publicUrl, creds }) {
       children: children.join(','),
       text,
     }, creds));
+    await waitReady(containerId, creds, wait);
   }
-
-  // Видео обрабатывается не мгновенно; публикацию делаем с паузой.
-  if (media.some((m) => m.kind === 'video')) await new Promise((r) => setTimeout(r, 30000));
 
   const published = await call(`${user}/threads_publish`, { creation_id: containerId }, creds);
   return { externalId: published.id, url: null };
