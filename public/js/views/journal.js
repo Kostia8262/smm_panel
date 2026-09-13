@@ -18,9 +18,10 @@ const KIND_CHIP = {
   access: 'Доступы',
   people: 'Люди',
   system: 'Служебное',
+  mail: 'Рассылка',
 };
 
-const KIND_ICON = { publish: 'send', post: 'image', access: 'key', people: 'staff', system: 'settings' };
+const KIND_ICON = { publish: 'send', post: 'image', access: 'key', people: 'staff', system: 'settings', mail: 'mail' };
 
 const LEVEL_TAG = {
   error: { cls: 'tag--danger', text: 'ошибка' },

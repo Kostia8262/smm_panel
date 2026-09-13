@@ -1919,3 +1919,173 @@
 /* Единственное, что видно без JavaScript. Жило атрибутом style, пока тот не
    попал под запрет CSP. */
 .noscript-note { padding: 24px; color: var(--ink-2); }
+
+/* ============================== рассылка ============================== */
+
+/* Возврат к базам: вложенные экраны живут внутри раздела, а кнопка «назад»
+   в шапке ведёт к календарю. */
+.mail-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: calc(var(--sp-3) * -1);
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-decoration: none;
+  transition: color var(--dur) var(--ease);
+}
+.mail-back:hover { color: var(--ink); }
+
+.mail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.mail-actions .spacer { flex: 1; }
+/* Кнопка формы в сетке встаёт вровень с полями, а не с подсказкой под ними. */
+.mail-actions--end { align-self: start; margin-top: var(--sp-6); }
+
+.mail-table td { vertical-align: middle; }
+.mail-table .mail-num { text-align: right; white-space: nowrap; }
+.mail-table th.mail-num { text-align: right; }
+.mail-table-host { transition: opacity var(--dur) var(--ease); }
+.mail-table-host[aria-busy="true"] { opacity: 0.55; }
+
+.mail-name { color: var(--ink); font-weight: 600; text-decoration: none; transition: color var(--dur) var(--ease); }
+a.mail-name:hover { color: var(--gold-bright); }
+.mail-sub { margin-top: 2px; font-size: var(--fs-xs); color: var(--ink-3); }
+.mail-sub-cell { color: var(--ink-2); }
+.mail-row--archived td { color: var(--ink-3); }
+/* Фон на строке, а не на ячейках: у ячеек на стыках просвечивали полосы. */
+.mail-table tbody tr.mail-row--selected { background: var(--gold-dim); }
+.mail-row-actions { display: flex; justify-content: flex-end; gap: var(--sp-1); }
+
+.mail-email {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: 600 var(--fs-xs) / 1.4 var(--font);
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease);
+}
+.mail-email:hover { color: var(--gold-bright); }
+.mail-attr { color: var(--ink-2); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.mail-check { width: 16px; height: 16px; margin: 0; accent-color: var(--gold); cursor: pointer; flex: none; }
+.mail-check-cell { width: 28px; }
+
+/* Действия над отмеченными строками: появляются только с отметкой. */
+.mail-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--gold-dim);
+  border: 1px solid var(--gold-line);
+  border-radius: var(--r-sm);
+}
+.mail-bulk__count { margin-right: var(--sp-2); font-weight: 600; font-variant-numeric: tabular-nums; }
+.mail-bulk .select { width: auto; height: 28px; padding-block: 0; font-size: var(--fs-xs); }
+
+.mail-pager { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-2); color: var(--ink-3); font-size: var(--fs-xs); }
+.mail-pager:empty { display: none; }
+
+/* Вопрос с причиной на месте кнопки */
+.mail-ask { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+.mail-ask .input { flex: 1; min-width: 220px; height: 34px; padding-block: 0; }
+
+/* Карточка контакта и формы */
+.mail-card__title { font-size: var(--fs-base); overflow-wrap: anywhere; }
+.mail-card__grid,
+.mail-form__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-3);
+  align-items: start;
+}
+.mail-form__grid > .mail-actions { grid-column: 1 / -1; }
+.mail-members { display: flex; flex-direction: column; gap: 6px; }
+.mail-member {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+}
+.mail-member--removed { opacity: 0.6; }
+.mail-attrs { flex-basis: 100%; font-size: var(--fs-xs); color: var(--ink-3); }
+
+/* Загрузка */
+.mail-drop { position: relative; display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); cursor: pointer; }
+.mail-drop:hover { border-color: var(--gold-line); }
+.mail-drop:focus-within { box-shadow: var(--ring); }
+.mail-drop__icon { color: var(--gold); }
+.mail-drop__input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.mail-drop--busy { pointer-events: none; opacity: 0.7; }
+.mail-paste { min-height: 150px; font-variant-numeric: tabular-nums; }
+
+.mail-settings { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-3); }
+.mail-settings .field { min-width: 200px; }
+.mail-header-check { height: 36px; }
+
+.mail-map td { vertical-align: middle; }
+.mail-map .select { width: auto; min-width: 180px; height: 32px; padding-block: 0; font-size: var(--fs-xs); }
+.mail-samples { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); }
+
+.mail-progress { display: flex; flex-direction: column; gap: 6px; max-width: 520px; color: var(--ink-2); }
+
+/* Вердикты распознавания: плитки и фильтр одновременно */
+.mail-verdicts { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--sp-2); }
+.mail-verdicts:empty { display: none; }
+.mail-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-3);
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  color: var(--ink-2);
+  font: 600 var(--fs-xs) / 1.3 var(--font);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.mail-verdict:hover { border-color: var(--line); }
+.mail-verdict:disabled { cursor: default; opacity: 0.55; }
+.mail-verdict[aria-pressed="true"] { background: var(--gold-dim); border-color: var(--gold-line); }
+.mail-verdict__value { color: var(--ink); font-size: var(--fs-xl); font-weight: 650; line-height: 1.15; }
+.mail-verdict--ok .mail-verdict__value { color: var(--ok); }
+.mail-verdict--warn .mail-verdict__value { color: var(--warn); }
+.mail-verdict--gold .mail-verdict__value { color: var(--gold-bright); }
+.mail-verdict--danger .mail-verdict__value { color: var(--danger); }
+
+.mail-addr { font-weight: 600; overflow-wrap: anywhere; }
+.mail-suggest { display: inline-flex; align-items: center; gap: 2px; margin-top: 2px; color: var(--ok); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.mail-issues { color: var(--ink-2); }
+.mail-decision { width: auto; max-width: 260px; height: 30px; margin-top: 6px; padding-block: 0; font-size: var(--fs-xs); }
+
+.mail-modes { display: flex; flex-wrap: wrap; gap: var(--sp-5); }
+.mail-mode { font-size: var(--fs-sm); color: var(--ink); }
+.mail-forecast { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2) var(--sp-5); color: var(--ink-2); }
+.mail-forecast b { color: var(--ink); font-size: var(--fs-lg); }
+
+@media (max-width: 1100px) {
+  .mail-verdicts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 640px) {
+  .mail-verdicts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mail-settings .field { min-width: 100%; }
+  .mail-samples { max-width: 180px; }
+}
+.mail-glyph { padding: 0 1px; border-radius: 3px; background: var(--danger-dim); color: var(--danger); box-shadow: inset 0 -1px 0 var(--danger); }
+/* Ссылка в виде кнопки («Выгрузить CSV» — это скачивание, а не действие). */
+a.btn { text-decoration: none; }
+/* На узком экране таблица уезжает в прокрутку, а не ломает название базы по слову в строке. */
+.mail-name-cell { min-width: 200px; }
+/* Место под карточку, форму или предупреждение: пустое не должно давать отступ в ритме .view. */
+.mail-slot:empty { display: none; }

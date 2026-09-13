@@ -17,6 +17,7 @@ import { staffView } from './views/staff.js';
 import { planView } from './views/plan.js';
 import { trendsView } from './views/trends.js';
 import { projectsView } from './views/projects.js';
+import { mailView } from './views/mail/index.js';
 
 // Карта прав — зеркало ACCESS из src/staff.js. Держать в согласии: в школьной
 // панели такая же карта разъехалась, когда жила в трёх местах сразу.
@@ -24,6 +25,7 @@ const NAV = [
   { id: 'calendar', hash: '#/', title: 'Календарь', icon: 'calendar', group: 'Работа', area: 'calendar' },
   { id: 'plan', hash: '#/plan', title: 'Контент-план', icon: 'layers', group: 'Работа', area: 'plan' },
   { id: 'trends', hash: '#/trends', title: 'Тренды', icon: 'trend', group: 'Работа', area: 'trends' },
+  { id: 'mail', hash: '#/mail', title: 'Рассылка', icon: 'mail', group: 'Работа', area: 'mail' },
   { id: 'projects', hash: '#/projects', title: 'Проекты', icon: 'plug', group: 'Доступ', area: 'platforms' },
   { id: 'staff', hash: '#/staff', title: 'Сотрудники', icon: 'staff', group: 'Доступ', area: 'staff' },
   { id: 'journal', hash: '#/journal', title: 'Журнал', icon: 'journal', group: 'Служебное', area: 'journal' },
@@ -39,6 +41,8 @@ const ACCESS = {
   journal: ['owner', 'smm'],
   staff: ['owner'],
   settings: ['owner', 'smm'],
+  mail: ['owner', 'smm'],
+  mail_contacts: ['owner'],
 };
 
 function can(area) {
@@ -266,6 +270,7 @@ const ctx = {
   // Экраны с вкладками проектов переключают панель целиком: иначе «новая
   // идея» ушла бы не в ту школу, которую человек только что открыл.
   switchProject: (id) => switchProject(id),
+  can: (area) => can(area),
   setTopbar({ title, subtitle = '', actions = [], back = null }) {
     dom.title.textContent = title;
     dom.subtitle.textContent = subtitle;
@@ -308,6 +313,7 @@ function route() {
       ? 'post'
       : hash.startsWith('#/plan') ? 'plan'
       : hash.startsWith('#/trends') ? 'trends'
+      : hash.startsWith('#/mail') ? 'mail'
       : hash.startsWith('#/projects') || hash.startsWith('#/platforms') ? 'platforms'
       : hash.startsWith('#/staff') ? 'staff'
       : hash.startsWith('#/journal') ? 'journal'
@@ -322,6 +328,7 @@ function route() {
     if (postMatch) dom.outlet.append(composerView(ctx, Number(postMatch[1])));
     else if (hash.startsWith('#/plan')) dom.outlet.append(planView(ctx));
     else if (hash.startsWith('#/trends')) dom.outlet.append(trendsView(ctx));
+    else if (hash.startsWith('#/mail')) dom.outlet.append(mailView(ctx));
     else if (hash.startsWith('#/projects')) dom.outlet.append(projectsView(ctx));
     else if (hash.startsWith('#/platforms')) dom.outlet.append(platformsView(ctx));
     else if (hash.startsWith('#/staff')) dom.outlet.append(staffView(ctx));

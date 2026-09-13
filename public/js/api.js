@@ -220,3 +220,39 @@ export const api = {
 };
 
 export { ApiError };
+
+  /* Рассылка: базы адресов (docs/рассылка.md). Всё — в пределах открытой школы. */
+  mailSummary: (archived = false) => request(withProject(`/api/mail/summary${archived ? '?archived=1' : ''}`)),
+  createMailList: (body) => request(withProject('/api/mail/lists'), { method: 'POST', body }),
+  updateMailList: (id, body) => request(withProject(`/api/mail/lists/${id}`), { method: 'PUT', body }),
+  /** @param {{list: number|'all', q?: string, status?: string, sort?: string, page?: number}} params */
+  mailContacts: (params) => request(withProject(`/api/mail/contacts?${new URLSearchParams(params)}`)),
+  mailContact: (id) => request(withProject(`/api/mail/contacts/${id}`)),
+  addMailContact: (body) => request(withProject('/api/mail/contacts'), { method: 'POST', body }),
+  updateMailContact: (id, body) => request(withProject(`/api/mail/contacts/${id}`), { method: 'PUT', body }),
+  mailBulk: (body) => request(withProject('/api/mail/contacts/bulk'), { method: 'POST', body }),
+  resubscribeMailContact: (id, note) =>
+    request(withProject(`/api/mail/contacts/${id}/resubscribe`), { method: 'POST', body: { note } }),
+  eraseMailContact: (id) => request(withProject(`/api/mail/contacts/${id}/erase`), { method: 'POST' }),
+  /** Ссылка, а не запрос: файл скачивает сам браузер, с именем из ответа сервера. */
+  mailExportUrl: (listId) => withProject(`/api/mail/export.csv?list=${listId || 'all'}`),
+  /**
+   * Вставленный текст уходит файлом, а не JSON: у JSON предел в мегабайт,
+   * а база из Google Таблиц на десять тысяч строк его перерастает.
+   */
+  uploadMailImport: ({ file = null, text = '', listId = null }) => {
+    const form = new FormData();
+    if (listId) form.append('listId', String(listId));
+    if (file) form.append('file', file);
+    else {
+      form.append('pasted', '1');
+      form.append('file', new Blob([text], { type: 'text/plain' }), 'pasted.txt');
+    }
+    return request(withProject('/api/mail/imports'), { method: 'POST', raw: form });
+  },
+  /** @param {{verdict?: string, page?: number, listId?: number|'new', warnings?: '0'|'1'}} params */
+  mailImport: (id, params = {}) => request(withProject(`/api/mail/imports/${id}?${new URLSearchParams(params)}`)),
+  reparseMailImport: (id, body) => request(withProject(`/api/mail/imports/${id}`), { method: 'PUT', body }),
+  decideMailImport: (id, body) => request(withProject(`/api/mail/imports/${id}/decisions`), { method: 'PUT', body }),
+  commitMailImport: (id, body) => request(withProject(`/api/mail/imports/${id}/commit`), { method: 'POST', body }),
+  discardMailImport: (id) => request(withProject(`/api/mail/imports/${id}`), { method: 'DELETE' }),

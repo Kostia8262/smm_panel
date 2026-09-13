@@ -247,6 +247,25 @@ test('вставленный текст и смена настроек разб�
   assert.equal(reread.counts.invalid, 1, 'строка заголовка без флага стала строкой без адреса');
 });
 
+test('пробел, разрезавший имя ящика, не превращается в чужой готовый адрес', async () => {
+  const id = await importText('Имя;Email\nЛіна;lina danyliuk@gmail.com\nІрина;Ірина ira3@gmail.com\nТарас;taras@gmail.com');
+  const rows = pipeline.readImport(id, { projectId }).rows;
+  const lina = rows.find((r) => r.email.includes('danyliuk'));
+  assert.equal(lina.verdict, 'fixable', 'хвост «danyliuk@gmail.com» — чужой ящик, его нельзя считать готовым');
+  assert.equal(lina.suggestion, 'linadanyliuk@gmail.com');
+  const shifted = await importText('Имя;Email;Город\nГанна;hanna@gmail.com;Дніпро\nyevhen@ukr.net;;Київ');
+  const moved = pipeline.readImport(shifted, { projectId }).rows.find((r) => r.email === 'yevhen@ukr.net');
+  assert.equal(moved.verdict, 'ok', 'адрес, уехавший в колонку имени, не теряется');
+  assert.equal(moved.name, '', 'сам адрес не становится именем');
+  assert.ok(moved.issues.includes('адрес не в своей колонке'));
+  pipeline.discardImport(shifted, { projectId });
+
+  const ira = rows.find((r) => r.email.includes('ira3'));
+  assert.equal(ira.verdict, 'ok', 'имя перед адресом в той же ячейке — не часть адреса');
+  assert.equal(ira.email, 'ira3@gmail.com');
+  pipeline.discardImport(id, { projectId });
+});
+
 test('брошенная загрузка стирается через сутки', async () => {
   const id = await importText('stale@ukr.net');
   db.prepare("UPDATE mail_imports SET created_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(id);

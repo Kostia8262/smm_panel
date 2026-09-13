@@ -110,6 +110,21 @@ function withHeader(base, rows, overrides) {
 
 /* --------------------------- строки предпросмотра --------------------------- */
 
+/**
+ * «lina danyliuk@gmail.com»: пробел разрезал имя ящика, и поиск адреса нашёл
+ * только хвост — `danyliuk@gmail.com`, то есть чужой ящик, и отметил его
+ * готовым. Найдено 13.09.2026 на осмотре предпросмотра.
+ *
+ * Отличить от имени перед адресом («Ірина ira@…») помогает то, как их пишут:
+ * имя — кириллицей или с заглавной, обрубок ящика — строчной латиницей.
+ */
+function localPartSplit(cell, candidate) {
+  const before = cell.slice(0, cell.indexOf(candidate));
+  if (!/\s$/.test(before) || /[<("'«:]\s*$/.test(before)) return false;
+  const word = before.trim().split(/\s+/).pop() || '';
+  return /^[a-z0-9._%+-]+$/.test(word);
+}
+
 function validRoles(roles, width) {
   const out = {};
   for (let col = 0; col < width; col++) {
@@ -172,9 +187,28 @@ export function buildRows(parsed, { projectId, roles = null }) {
       const value = cell(c);
       if (!value) continue;
       const candidates = emailsIn(value);
+      if (candidates.length === 1 && localPartSplit(value, candidates[0])) {
+        found.push(value);
+        continue;
+      }
       // Ячейка есть, а адреса в ней не нашлось — показываем её как ошибочную,
       // а не теряем молча: «ivan.gmail.com» стоит увидеть глазами.
       found.push(...(candidates.length ? candidates : [value]));
+    }
+
+    // Колонка адреса пуста, а адрес уехал в соседнюю — так бывает в таблицах,
+    // которые вели руками. Берём его, но говорим об этом: вдруг это адрес
+    // другого человека из заметки.
+    let stray = false;
+    if (!found.length) {
+      cells.forEach((value, c) => {
+        if (emailCols.includes(c)) return;
+        const candidates = emailsIn(value);
+        if (candidates.length) {
+          found.push(...candidates);
+          stray = true;
+        }
+      });
     }
 
     const rowNo = index + firstLine;
@@ -184,14 +218,18 @@ export function buildRows(parsed, { projectId, roles = null }) {
     }
     for (const raw of found) {
       const check = checkAddress(raw);
+      const issues = [...check.issues];
+      if (found.length > 1) issues.push('несколько адресов в строке');
+      if (stray) issues.push('адрес не в своей колонке');
       rows.push({
         rowNo,
         seq: seq++,
         email: check.email || String(raw).slice(0, 200),
-        name: name.slice(0, 200),
-        attrs,
+        // Имя, в котором лежит сам адрес, — не имя.
+        name: (name.includes('@') ? '' : name).slice(0, 200),
+        attrs: Object.fromEntries(Object.entries(attrs).filter(([, v]) => !emailsIn(v).length)),
         verdict: check.verdict,
-        issues: found.length > 1 ? [...check.issues, 'несколько адресов в строке'] : check.issues,
+        issues,
         suggestion: check.suggestion,
       });
     }
@@ -664,7 +702,8 @@ export function commitImport(id, { projectId, staffId = null, listId = null, new
   runs.delete(row.id);
   log(
     'info',
-    `рассылка: загружена база «${list.name}» из «${row.source_name}» — добавлено ${stats.added}, уже были ${stats.existed}` +
+    `рассылка: загружена база «${list.name}» из «${row.source_name}» — добавлено ${stats.added}` +
+      (stats.existed ? `, уже были ${stats.existed}` : '') +
       (stats.blocked ? `, в стоп-листе ${stats.blocked}` : '')
   );
   return { list: store.getList(list.id), stats };
