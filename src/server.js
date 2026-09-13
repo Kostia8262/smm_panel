@@ -144,7 +144,7 @@ app.get('/login', (req, res) => {
 // не нарисовать саму страницу входа.
 installAuth(app, {
   publicPaths: [
-    '/login', '/css/', '/js/', '/media/', '/healthz', '/favicon.ico', '/r/',
+    '/login', '/css/', '/js/', '/media/', '/healthz', '/favicon.ico', '/favicon.svg', '/r/',
     '/api/ingest/observed', // расширение ходит с ключом, а не с сессией
   ],
   secureCookies: String(process.env.PUBLIC_BASE_URL || '').startsWith('https://'),
