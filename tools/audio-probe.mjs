@@ -110,14 +110,11 @@ for (const v of [...new Set([version, 'v25.0'])]) {
     const title = `${v} · ${type}${q ? ` · «${q}»` : ' · тренды'}`;
     try {
       const params = { audio_type: type, user_id: creds.userId, ...(q ? { search_query: q } : {}) };
-      let data = await get('ig_audio', params, v);
-      let rows = data.data || [];
-      // Первая страница бывает пустой при живом курсоре — пройти ещё пару.
-      for (let page = 0; !rows.length && data.paging?.cursors?.after && page < 3; page++) {
-        data = await get('ig_audio', { ...params, after: data.paging.cursors.after }, v);
-        rows = data.data || [];
-      }
-      if (raw) console.log(JSON.stringify({ ...data, data: rows.slice(0, 2) }, null, 2));
+      const data = await get('ig_audio', params, v);
+      // Список лежит в `audio`, а не в `data`, как написано в документации:
+      // проба 13.09.2026 сперва показала «0 шт.» при полном ответе.
+      const rows = data.audio || data.data || [];
+      if (raw) console.log(JSON.stringify({ ...data, audio: rows.slice(0, 2) }, null, 2));
       console.log(`=== ${title}: ${rows.length} шт.${data.paging?.cursors?.after ? ', есть следующая страница' : ''}`);
       rows.slice(0, 8).forEach(printAudio);
       if (rows[0]) console.log('  поля:', Object.keys(rows[0]).join(', '));
