@@ -191,7 +191,7 @@ function fakeFacebook() {
     if (href.endsWith('/photos')) return reply({ id: 'photo-1' });
     if (href.endsWith('/photo_stories')) return reply({ success: true, post_id: 'story-photo' });
     if (href.endsWith('/video_stories') && body.upload_phase === 'start') {
-      return reply({ video_id: 'v9', upload_url: 'https://rupload.facebook.com/video-upload/v21.0/v9' });
+      return reply({ video_id: 'v9', upload_url: 'https://rupload.facebook.com/video-upload/v26.0/v9' });
     }
     if (href.includes('rupload.facebook.com')) return reply({ success: true });
     if (href.includes('fields=status')) return reply({ status: { uploading_phase: { status: 'complete' } } });

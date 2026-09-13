@@ -11,8 +11,7 @@
  */
 
 import { reelAudioParams, assertAudioAvailable, publishedAudioType } from './instagram-audio.js';
-
-const API = 'https://graph.facebook.com/v21.0';
+import { GRAPH_API as API } from './graph.js';
 
 export const id = 'instagram';
 

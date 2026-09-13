@@ -13,6 +13,7 @@
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GRAPH_API } from '../src/platforms/graph.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const envFile = resolve(here, '../.env');
@@ -38,8 +39,8 @@ const creds = credentialsFor(projectId, platform);
 
 const HOSTS = {
   threads: { api: 'https://graph.threads.net/v1.0', token: creds.accessToken, fields: 'permalink,text,timestamp' },
-  instagram: { api: 'https://graph.facebook.com/v21.0', token: creds.pageToken, fields: 'permalink,caption,timestamp' },
-  facebook: { api: 'https://graph.facebook.com/v21.0', token: creds.pageToken, fields: 'permalink_url,message,created_time' },
+  instagram: { api: GRAPH_API, token: creds.pageToken, fields: 'permalink,caption,timestamp' },
+  facebook: { api: GRAPH_API, token: creds.pageToken, fields: 'permalink_url,message,created_time' },
 };
 
 const cfg = HOSTS[platform];

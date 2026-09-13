@@ -22,7 +22,7 @@
  * значит увеличивать то, что можно украсть.
  */
 
-const GRAPH = 'https://graph.facebook.com/v21.0';
+import { GRAPH_API as GRAPH, LOGIN_DIALOG } from '../platforms/graph.js';
 
 /**
  * Права, которые просим. Ровно те, что есть у нынешнего бессрочного токена
@@ -66,7 +66,7 @@ export function authorizeUrl({ appId, redirectUri, state, configId = null }) {
   // С конфигурацией права задаёт она, а `scope` Meta просит не передавать.
   if (configId) params.set('config_id', String(configId));
   else params.set('scope', FACEBOOK_SCOPES.join(','));
-  return `https://www.facebook.com/v21.0/dialog/oauth?${params}`;
+  return `${LOGIN_DIALOG}?${params}`;
 }
 
 async function readJson(res, step) {

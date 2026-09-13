@@ -18,7 +18,7 @@
  * Звук прикрепляется только к Reels: к фото, карусели и сторис API его не даёт.
  */
 
-const API = 'https://graph.facebook.com/v21.0';
+import { GRAPH_API as API } from './graph.js';
 
 export const AUDIO_TYPES = ['music', 'original_sound'];
 

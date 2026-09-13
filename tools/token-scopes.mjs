@@ -18,6 +18,7 @@
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GRAPH_API } from '../src/platforms/graph.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const envFile = resolve(here, '../.env');
@@ -139,7 +140,7 @@ async function readDebug(platform, token, projectId) {
   if (!fb.appId || !fb.appSecret) throw new Error('не заполнены ID и секрет приложения в карточке Facebook');
 
   const appToken = `${fb.appId}|${fb.appSecret}`;
-  const url = `https://graph.facebook.com/v21.0/debug_token?input_token=${token}&access_token=${appToken}`;
+  const url = `${GRAPH_API}/debug_token?input_token=${token}&access_token=${appToken}`;
   const res = await fetch(url);
   const data = await res.json().catch(() => ({}));
   if (data.error) throw new Error(data.error.message);

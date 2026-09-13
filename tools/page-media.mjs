@@ -13,6 +13,7 @@
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GRAPH_API } from '../src/platforms/graph.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const envFile = resolve(here, '../.env');
@@ -35,7 +36,7 @@ if (!creds.pageToken) {
   process.exit(1);
 }
 
-const API = 'https://graph.facebook.com/v21.0';
+const API = GRAPH_API;
 
 async function list(edge, fields) {
   const res = await fetch(`${API}/${creds.pageId}/${edge}&fields=${fields}&limit=50&access_token=${creds.pageToken}`);

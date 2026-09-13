@@ -127,7 +127,7 @@ Facebook» и «Подключить через Threads» в карточке п
 6. Обменять на долгоживущий. Сначала пользовательский токен:
 
 ```
-curl "https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id=APP_ID&client_secret=APP_SECRET&fb_exchange_token=КОРОТКИЙ_USER_TOKEN"
+curl "https://graph.facebook.com/v26.0/oauth/access_token?grant_type=fb_exchange_token&client_id=APP_ID&client_secret=APP_SECRET&fb_exchange_token=КОРОТКИЙ_USER_TOKEN"
 ```
 
    Затем **повторить `/me/accounts` уже с долгоживущим пользовательским
@@ -135,13 +135,13 @@ curl "https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange
    сменён пароль и не отозваны права):
 
 ```
-curl "https://graph.facebook.com/v21.0/me/accounts?access_token=ДОЛГИЙ_USER_TOKEN"
+curl "https://graph.facebook.com/v26.0/me/accounts?access_token=ДОЛГИЙ_USER_TOKEN"
 ```
 
 7. Узнать ID Instagram-аккаунта:
 
 ```
-curl "https://graph.facebook.com/v21.0/PAGE_ID?fields=instagram_business_account&access_token=PAGE_TOKEN"
+curl "https://graph.facebook.com/v26.0/PAGE_ID?fields=instagram_business_account&access_token=PAGE_TOKEN"
 ```
 
    В ответе `instagram_business_account.id` — это **ID аккаунта Instagram**
@@ -173,7 +173,7 @@ curl "https://graph.facebook.com/v21.0/PAGE_ID?fields=instagram_business_account
 ### Проверить токен до того, как вписывать
 
 ```
-curl "https://graph.facebook.com/v21.0/debug_token?input_token=PAGE_TOKEN&access_token=APP_ID|APP_SECRET"
+curl "https://graph.facebook.com/v26.0/debug_token?input_token=PAGE_TOKEN&access_token=APP_ID|APP_SECRET"
 ```
 
 Смотреть: `is_valid: true`; `expires_at: 0` — бессрочный; в `scopes` есть
@@ -394,3 +394,23 @@ curl "https://graph.threads.net/v1.0/debug_token?input_token=ТОКЕН&access_t
 имени чужих аккаунтов (продукт для агентств). `threads_keyword_search` в
 режиме разработки кнопка выдаёт, но без Review поиск видит только посты самого
 аккаунта — для трендов по чужим постам Review всё равно нужен.
+
+## Версия Graph API
+
+Facebook и Instagram ходят на одну версию Graph API — `v26.0` (с 13.09.2026,
+до этого `v21.0`, которая отключается 21.01.2027). Номер задан в одном месте,
+`src/platforms/graph.js`; тест не даст вписать его в код где-то ещё. Версия
+Meta живёт около двух лет — сроки смотреть в
+[списке версий](https://developers.facebook.com/docs/graph-api/changelog/versions).
+
+Переезд на следующую:
+
+1. Прочитать списки изменений Graph API и Instagram Platform за пропущенные
+   версии.
+2. На сервере сверить ответы старой и новой версии на боевых доступах —
+   только чтение, токены не печатаются:
+   `node tools/graph-version-probe.mjs --project 1 --to vNN.0`
+3. Поменять номер в `src/platforms/graph.js`, прогнать тесты.
+4. Боевая проба всех форматов с удалением (`tools/smoke-post.mjs`).
+
+У Threads версия своя (`v1.0`, другой нет) и в этот порядок не входит.

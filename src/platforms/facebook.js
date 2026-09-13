@@ -8,7 +8,7 @@
  * Reels (9:16, H.264, AAC). Перекодировать — работа второй машины, не VPS.
  */
 
-const API = 'https://graph.facebook.com/v21.0';
+import { GRAPH_API as API, RUPLOAD_API } from './graph.js';
 
 export const id = 'facebook';
 
@@ -105,7 +105,7 @@ export async function publishReel({ text, video, publicUrl, creds, waitMs = 5000
   const videoId = start.video_id;
   if (!videoId) throw new Error('Facebook Reels: площадка не выдала id видео');
 
-  await uploadByUrl(`https://rupload.facebook.com/video-upload/v21.0/${videoId}`, publicUrl(video), creds, 'Facebook Reels');
+  await uploadByUrl(`${RUPLOAD_API}/${videoId}`, publicUrl(video), creds, 'Facebook Reels');
   await waitUploaded(videoId, creds, { waitMs, tries, label: 'Facebook Reels' });
 
   await call(
@@ -175,7 +175,7 @@ export async function publishStory({ item, publicUrl, creds, waitMs = 5000, trie
   if (!videoId) throw new Error('Facebook сторис: площадка не выдала id видео');
 
   await uploadByUrl(
-    start.upload_url || `https://rupload.facebook.com/video-upload/v21.0/${videoId}`,
+    start.upload_url || `${RUPLOAD_API}/${videoId}`,
     publicUrl(item),
     creds,
     'Facebook сторис'

@@ -16,7 +16,7 @@
  *   --audio-volume N   громкость трека, 0–100 (по умолчанию 100)
  *   --video-volume N   громкость звука ролика, 0–100 (по умолчанию 0)
  *   --wait N           сколько секунд Reels повисит перед удалением (по умолчанию 45)
- *   --version vXX.0    версия Graph API (по умолчанию v21.0, как у адаптеров)
+ *   --version vXX.0    версия Graph API (по умолчанию та же, что у адаптеров — src/platforms/graph.js)
  *
  * Публикация, как и smoke-post, снимает пост за собой. След пишется в
  * `data/smoke-audio-<время>.json` и стирается, когда удаление прошло: остаётся
@@ -26,6 +26,7 @@
 import { existsSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GRAPH_VERSION } from '../src/platforms/graph.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const envFile = resolve(here, '../.env');
@@ -52,7 +53,7 @@ if (!creds.pageToken || !creds.userId) {
   process.exit(1);
 }
 
-const version = flag('version', 'v21.0');
+const version = flag('version', GRAPH_VERSION);
 const api = (v = version) => `https://graph.facebook.com/${v}`;
 
 console.log(`Проект: ${project.title} · Instagram ${creds.userId}\n`);
@@ -101,11 +102,11 @@ if (publishUrl) {
   process.exit(0);
 }
 
-// Поиск. Версия API проверяется двумя: адаптеры сидят на v21.0, а Audio API
+// Поиск. С --version другой версии ответ сверяется с версией адаптеров: Audio API
 // вышел в июне 2026 — не исключено, что старой версии он не отвечает вовсе.
 const q = flag('q');
 const raw = args.includes('--raw');
-for (const v of [...new Set([version, 'v25.0'])]) {
+for (const v of [...new Set([version, GRAPH_VERSION])]) {
   for (const type of ['music', 'original_sound']) {
     const title = `${v} · ${type}${q ? ` · «${q}»` : ' · тренды'}`;
     try {

@@ -11,12 +11,14 @@
  * Только чтение: ничего не публикует и не меняет. Токены и значения полей не
  * печатаются — лишь «совпало / разошлось» и имена полей.
  *
- *   node tools/graph-version-probe.mjs --project 1 --from v21.0 --to v26.0
+ *   node tools/graph-version-probe.mjs --project 1 --to v27.0
+ *   (--from по умолчанию — версия адаптеров из src/platforms/graph.js)
  */
 
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GRAPH_VERSION } from '../src/platforms/graph.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const envFile = resolve(here, '../.env');
@@ -30,15 +32,20 @@ const flag = (name, fallback) => {
   return i === -1 ? fallback : args[i + 1];
 };
 const projectId = Number(flag('project', 1));
-const from = flag('from', 'v21.0');
-const to = flag('to', 'v26.0');
+const from = flag('from', GRAPH_VERSION);
+const to = flag('to', null);
+if (!to) {
+  console.error('Нужна --to: версия, на которую собираемся переезжать');
+  process.exit(1);
+}
 
 const fb = credentialsFor(projectId, 'facebook');
 const ig = credentialsFor(projectId, 'instagram');
 const appToken = fb.appId && fb.appSecret ? `${fb.appId}|${fb.appSecret}` : null;
 
-// Поля, которые меняются сами по себе между двумя запросами подряд.
-const VOLATILE = /(^|\.)(fan_count|followers_count|quota_usage|download_url|expires_at|data_access_expires_at|issued_at)$/;
+// Поля, которые меняются сами по себе между двумя запросами подряд. Обложка
+// трека — подписанная ссылка CDN: v26 расходится в ней сама с собой.
+const VOLATILE = /(^|\.)(fan_count|followers_count|quota_usage|download_url|cover_artwork_thumbnail_uri|expires_at|data_access_expires_at|issued_at)$/;
 
 /** Пути полей до третьего уровня: `data.scopes`, `config.quota_total`… */
 function paths(value, prefix = '', depth = 0, out = new Map()) {
