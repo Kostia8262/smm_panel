@@ -27,6 +27,8 @@ import { getSetting } from '../staff.js';
 import { UPLOAD_DIR } from '../media.js';
 import { fileExists } from '../retention.js';
 import { mediaFor } from '../validate.js';
+import { parseOptions } from '../target-options.js';
+import { parseOwnDomains } from '../shortlink.js';
 import { parseAudio, audioLabel } from '../audio.js';
 
 const MAX_ATTEMPTS = 3;
@@ -34,6 +36,31 @@ const MAX_ATTEMPTS = 3;
 function publicUrlFactory() {
   const base = (process.env.PUBLIC_BASE_URL || 'http://localhost:3210').replace(/\/$/, '');
   return (m) => `${base}/media/${m.stored_name}`;
+}
+
+/**
+ * Что уходит в площадку: текст с подписью и короткими ссылками, настройки
+ * цели. Общее у публикации и правки вышедшего поста — иначе правка ушла бы
+ * без подписи или с исходными ссылками.
+ */
+export function outgoing(post, project, target) {
+  // Подпись добавляется ДО подмены ссылок: ссылка на сайт внутри подписи
+  // тоже должна считать переходы, иначе главный призыв поста остаётся
+  // без счётчика.
+  const raw = withSignature(target.text_override ?? post.body ?? '', signatureFor(post, project));
+  // Ссылки на наши сайты подменяются короткими с метками: иначе потом
+  // нечем ответить, сколько человек пришло именно с этого поста.
+  const ctx = {
+    post,
+    platform: target.platform,
+    baseUrl: (process.env.PUBLIC_BASE_URL || 'http://localhost:3210').replace(/\/$/, ''),
+    ownDomains: parseOwnDomains(getSetting('own_domains', 'mycomputer.education,mycomputer.school')),
+  };
+  const text = shortenLinks(raw, ctx);
+  // Ссылка кнопки — тот же призыв, что и в тексте: считаем переходы и по ней.
+  const options = parseOptions(target.options);
+  if (options.button?.url) options.button = { ...options.button, url: shortenLinks(options.button.url, ctx) };
+  return { text, options };
 }
 
 /**
@@ -156,22 +183,7 @@ async function sendTarget({ post, project, publicUrl }, target) {
   if (format?.series) return sendSeries({ postId, target, adapter, creds, media, publicUrl });
 
   try {
-    // Подпись добавляется ДО подмены ссылок: ссылка на сайт внутри подписи
-    // тоже должна считать переходы, иначе главный призыв поста остаётся
-    // без счётчика.
-    const raw = withSignature(target.text_override ?? post.body ?? '', signatureFor(post, project));
-    // Ссылки на наши сайты подменяются короткими с метками: иначе потом
-    // нечем ответить, сколько человек пришло именно с этого поста.
-    const ownDomains = String(getSetting('own_domains', 'mycomputer.education,mycomputer.school'))
-      .split(',')
-      .map((d) => d.trim())
-      .filter(Boolean);
-    const text = shortenLinks(raw, {
-      post,
-      platform: target.platform,
-      baseUrl: (process.env.PUBLIC_BASE_URL || 'http://localhost:3210').replace(/\/$/, ''),
-      ownDomains,
-    });
+    const { text, options } = outgoing(post, project, target);
     // Отметка ставится ДО вызова площадки. Если процесс умрёт между
     // отправкой и записью результата, мы хотя бы будем знать, что попытка
     // была, и не повторим её вслепую.
@@ -179,14 +191,14 @@ async function sendTarget({ post, project, publicUrl }, target) {
 
     // Звук есть только у Instagram; остальным адаптерам поле ни к чему.
     const audio = target.platform === 'instagram' ? parseAudio(target.audio) : null;
-    const out = await adapter.publish({ text, media, formatId: target.format_id, publicUrl, creds, audio });
+    const out = await adapter.publish({ text, media, formatId: target.format_id, publicUrl, creds, audio, options });
     markPublished(target, out.externalId, out.url);
     log('info', `опубликовано: ${target.platform}`, { postId, platform: target.platform, payload: out });
-    // Главное ушло, а хвост — нет (Telegram: продолжение длинной подписи).
-    // Цель остаётся вышедшей — повтор выпустил бы пост дублем, — но человек
-    // должен узнать, что дослать руками.
+    // Главное ушло, а хвост или закреп — нет (Telegram). Цель остаётся
+    // вышедшей — повтор выпустил бы пост дублем, — но человек должен узнать,
+    // что доделать руками.
     if (out.warning) {
-      log('warn', `не ушло в ${target.platform} продолжение поста: ${out.warning}`, { postId, platform: target.platform });
+      log('warn', `замечание к посту в ${target.platform}: ${out.warning}`, { postId, platform: target.platform });
     }
     if (audio?.id && out.audioType === null) {
       log('warn', `пост #${postId}: Instagram выпустил Reels, но звука ${audioLabel(audio)} в нём не видит — проверьте пост`, {

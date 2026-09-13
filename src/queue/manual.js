@@ -14,8 +14,47 @@
 
 import { db, getPost, log } from '../db.js';
 import { getAdapter } from '../platforms/index.js';
-import { credentialsFor } from '../projects.js';
-import { isDone, partsOf } from './publish.js';
+import { credentialsFor, getProject } from '../projects.js';
+import { isDone, partsOf, outgoing } from './publish.js';
+import { mediaFor } from '../validate.js';
+
+/**
+ * Обновить вышедший пост в сети: текст, кнопку, превью, закреп.
+ *
+ * Медиа не трогаются — площадка их у вышедшего поста не меняет. Что уйдёт,
+ * собирается тем же `outgoing`, что и при публикации: с подписью и короткими
+ * ссылками.
+ */
+export async function editTarget(postId, targetId, { adapterFor = getAdapter, credsFor = credentialsFor } = {}) {
+  const { post, target } = loadTarget(postId, targetId);
+  if (target.status !== 'published') throw httpError(422, 'Обновить можно только вышедший пост');
+  const adapter = adapterFor(target.platform);
+  if (typeof adapter?.edit !== 'function') throw httpError(422, 'Эта площадка не даёт править вышедший пост');
+  if (!target.external_id) throw httpError(422, 'У панели нет id поста — править нечего, только руками');
+
+  const creds = credsFor(post.project_id, target.platform);
+  if (typeof adapter.isConfigured === 'function' && !adapter.isConfigured(creds)) {
+    throw httpError(422, 'Доступы к площадке у проекта не заполнены');
+  }
+
+  const project = post.project_id ? getProject(post.project_id) : null;
+  const { text, options } = outgoing(post, project, target);
+  let out;
+  try {
+    out = await adapter.edit(target.external_id, { text, media: mediaFor(post, target), creds, options });
+  } catch (err) {
+    throw httpError(err.status || 502, err.message);
+  }
+
+  if (out?.externalId && out.externalId !== target.external_id) {
+    db.prepare('UPDATE post_targets SET external_id = ? WHERE id = ?').run(out.externalId, target.id);
+  }
+  log('info', `пост #${postId} обновлён в ${target.platform}`, { postId, platform: target.platform, payload: out });
+  if (out?.warning) {
+    log('warn', `замечание к посту в ${target.platform}: ${out.warning}`, { postId, platform: target.platform });
+  }
+  return { warning: out?.warning || null };
+}
 
 /**
  * Сводный статус поста после ручного действия.

@@ -525,12 +525,81 @@ export function composerView(ctx, postId) {
       }
 
       if (spec.id === 'instagram' && on) row.append(...soundBlocks(mine));
+      if (spec.id === 'telegram' && on) row.append(telegramOptions(mine[0]));
 
       list.append(row);
     }
 
     p.append(list);
     return p;
+  }
+
+  /**
+   * Настройки Telegram: закреп, превью ссылки, кнопка под постом. У вышедшего
+   * поста тоже правятся — применяет их «Обновить в канале» в «Где вышел».
+   */
+  function telegramOptions(target) {
+    const wrap = el('div', 'target__extra tg-options');
+    const options = () => target.options || {};
+
+    const chips = el('div', 'chips chips--wrap');
+    chips.setAttribute('role', 'group');
+    chips.setAttribute('aria-label', 'Настройки Telegram');
+    const toggle = (label, title, pressed, onClick) => {
+      const chip = el('button', 'chip', label);
+      chip.type = 'button';
+      chip.title = title;
+      chip.setAttribute('aria-pressed', String(pressed));
+      chip.addEventListener('click', onClick);
+      return chip;
+    };
+    const flip = (key) => async () => {
+      target.options = { ...options(), [key]: !options()[key] };
+      await save({ quiet: true });
+      renderAll();
+    };
+    chips.append(
+      toggle('Закрепить', 'Закрепить пост в канале, как только выйдет', Boolean(options().pin), flip('pin')),
+      toggle('Без превью ссылки', 'Не показывать под текстом карточку сайта', Boolean(options().noPreview), flip('noPreview')),
+      toggle('Кнопка-ссылка', 'Кнопка со ссылкой под постом', Boolean(options().button), async () => {
+        const next = { ...options() };
+        if (next.button) delete next.button;
+        else next.button = { text: '', url: '' };
+        target.options = next;
+        await save({ quiet: true });
+        renderAll();
+      })
+    );
+    wrap.append(chips);
+
+    const button = options().button;
+    if (button) {
+      const fields = el('div', 'tg-options__button');
+      const input = (label, value, placeholder, key, extra = {}) => {
+        const field = el('label', 'field');
+        field.append(el('span', 'field__label', label));
+        const node = el('input', 'input');
+        node.value = value || '';
+        node.placeholder = placeholder;
+        Object.assign(node, extra);
+        node.addEventListener('input', () => {
+          target.options = { ...options(), button: { ...options().button, [key]: node.value } };
+          autosave();
+        });
+        field.append(node);
+        return field;
+      };
+      fields.append(
+        input('Текст кнопки', button.text, 'Записатися', 'text', { maxLength: 64 }),
+        input('Ссылка', button.url, 'https://mycomputer.education/…', 'url', { type: 'url', inputMode: 'url' })
+      );
+      wrap.append(fields);
+      wrap.append(el('span', 'field__hint', 'Ссылка на наш сайт станет короткой и будет считать переходы. К альбому кнопку Telegram не ставит.'));
+    }
+    if (target.status === 'published') {
+      wrap.append(el('span', 'field__hint', 'Пост уже вышел — изменения применит «Обновить в канале» в блоке «Где вышел».'));
+    }
+    return wrap;
   }
 
   function isReels(target) {
@@ -850,6 +919,29 @@ export function composerView(ctx, postId) {
           link.target = '_blank';
           link.rel = 'noopener';
           row.append(link);
+        }
+        // Правка вышедшего: панель шлёт то, что в посте сейчас, — текст с
+        // подписью, кнопку, превью, закреп. Медиа у вышедшего не меняются.
+        const spec = specs.find((s) => s.id === t.platform);
+        if (isOwner && spec?.editable && t.external_id) {
+          row.append(
+            button('Обновить в канале', {
+              variant: 'quiet',
+              iconName: 'refresh',
+              onClick: async () => {
+                if (!(await save({ quiet: true }))) return;
+                if (!confirm(`Заменить текст и настройки поста в ${labelOf(t)} на те, что сейчас в панели?`)) return;
+                try {
+                  const res = await api.editTarget(post.id, t.id);
+                  post = res.post;
+                  toast(res.warning ? `Обновлён, но: ${res.warning}` : `Обновлён в ${labelOf(t)}`, res.warning ? 'warn' : 'ok');
+                  renderAll();
+                } catch (err) {
+                  toast(err.message, 'danger');
+                }
+              },
+            })
+          );
         }
         // Отмеченный вышедшим вручную пост без id площадки: снимать нечем.
         const removable = Boolean(t.external_id) || (t.parts || []).length > 0;

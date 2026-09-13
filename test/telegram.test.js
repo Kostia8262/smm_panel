@@ -199,7 +199,7 @@ test('права бота: не админ канала — не «связь е
   assert.equal(tg.botRights(channel, { status: 'administrator', can_post_messages: false }).canPost, false);
   assert.deepEqual(
     tg.botRights(channel, { status: 'administrator', can_post_messages: true, can_delete_messages: false }),
-    { canPost: true, canDelete: false, problem: null }
+    { canPost: true, canDelete: false, canPin: false, problem: null }
   );
   assert.equal(tg.botRights({ type: 'supergroup' }, { status: 'member' }).canPost, true);
 });
@@ -220,4 +220,121 @@ test('проверка связи: без прав — ошибка, без уд
   const res = await tg.check(creds);
   assert.equal(res.chat, 'Академія');
   assert.match(res.warning, /Удаление сообщений/);
+});
+
+/* ---------------- закреп, превью, кнопка, правка вышедшего (13.09.2026) ---------------- */
+
+const { storeOptions, parseOptions, optionIssues } = await import('../src/target-options.js');
+
+test('настройки: лишнее отбрасывается, включённая кнопка хранится, не у Telegram — ничего', () => {
+  assert.equal(storeOptions('telegram', { pin: true, noPreview: false, hack: 1 }), '{"pin":true}');
+  assert.equal(storeOptions('telegram', { button: { text: ' ', url: '' } }), '{"button":{"text":"","url":""}}', 'включённая кнопка хранится и пустой');
+  assert.equal(storeOptions('telegram', { button: { text: 'Записатися', url: '' } }), '{"button":{"text":"Записатися","url":""}}');
+  assert.equal(storeOptions('threads', { pin: true }), null);
+  assert.deepEqual(parseOptions('битый json'), {});
+});
+
+test('кнопка без ссылки, с кривой ссылкой или у альбома — отказ проверки', () => {
+  const issues = (button, mediaCount = 0) => optionIssues('telegram', { button }, { mediaCount }).blockers.join(' | ');
+  assert.match(issues({ text: 'Записатися', url: '' }), /нет ссылки/);
+  assert.match(issues({ text: '', url: 'https://mycomputer.education' }), /нет текста/);
+  assert.match(issues({ text: 'Записатися', url: 'mycomputer' }), /не адрес сайта/);
+  assert.match(issues({ text: 'Записатися', url: 'https://mycomputer.education' }, 2), /альбому/);
+  assert.equal(issues({ text: 'Записатися', url: 'https://mycomputer.education' }, 1), '');
+});
+
+test('публикация: превью выключено, кнопка под последним сообщением, закреп без уведомления', async (t) => {
+  t.after(() => (globalThis.fetch = realFetch));
+  const calls = fakeBot({ pinChatMessage: () => true });
+  const text = `${'слово '.repeat(900)}конец`; // два сообщения
+  const out = await tg.publish({
+    text,
+    creds,
+    options: { pin: true, noPreview: true, button: { text: 'Записатися', url: 'https://x.ua/r/abc' } },
+  });
+  const [first, second, pin] = calls;
+  assert.deepEqual(calls.map((c) => c.method), ['sendMessage', 'sendMessage', 'pinChatMessage']);
+  assert.equal(first.fields.reply_markup, undefined, 'кнопка не у первого из двух');
+  assert.deepEqual(JSON.parse(second.fields.reply_markup).inline_keyboard[0][0], { text: 'Записатися', url: 'https://x.ua/r/abc' });
+  assert.equal(JSON.parse(first.fields.link_preview_options).is_disabled, true);
+  assert.equal(pin.fields.message_id, '100');
+  assert.equal(pin.fields.disable_notification, 'true');
+  assert.equal(out.warning, undefined);
+});
+
+test('незакрепившийся пост — замечание, а не ошибка публикации', async (t) => {
+  t.after(() => (globalThis.fetch = realFetch));
+  fakeBot({
+    pinChatMessage: () => {
+      throw { code: 400, description: 'Bad Request: not enough rights to manage pinned messages in the chat' };
+    },
+  });
+  const out = await tg.publish({ text: 'пост', creds, options: { pin: true } });
+  assert.equal(out.externalId, '100');
+  assert.match(out.warning, /не закрепился/);
+});
+
+test('фото с кнопкой: клавиатура у самого фото', async (t) => {
+  t.after(() => (globalThis.fetch = realFetch));
+  const calls = fakeBot();
+  await tg.publish({
+    text: 'подпись',
+    media: [{ kind: 'image', path: tmpFile('a.jpg') }],
+    creds,
+    options: { button: { text: 'Так', url: 'https://x.ua' } },
+  });
+  assert.ok(calls[0].fields.reply_markup.includes('https://x.ua'));
+});
+
+test('правка текстового поста: текст, превью, кнопка; «не изменилось» — не ошибка', async (t) => {
+  t.after(() => (globalThis.fetch = realFetch));
+  const calls = fakeBot({
+    editMessageText: (f) => {
+      if (f.text === 'тот же') throw { code: 400, description: 'Bad Request: message is not modified' };
+      return true;
+    },
+    unpinChatMessage: () => true,
+  });
+  const out = await tg.edit('7', { text: 'новый текст', creds, options: { noPreview: true, button: { text: 'Так', url: 'https://x.ua' } } });
+  assert.equal(calls[0].method, 'editMessageText');
+  assert.equal(calls[0].fields.message_id, '7');
+  assert.equal(calls[0].fields.text, 'новый текст');
+  assert.ok(calls[0].fields.reply_markup.includes('x.ua'));
+  assert.equal(calls[1].method, 'unpinChatMessage');
+  assert.equal(out.externalId, '7');
+
+  await tg.edit('7', { text: 'тот же', creds });
+});
+
+test('правка: кнопку убрали — уходит пустая клавиатура', async (t) => {
+  t.after(() => (globalThis.fetch = realFetch));
+  const calls = fakeBot({ editMessageText: () => true, unpinChatMessage: () => true });
+  await tg.edit('7', { text: 'текст', creds, options: {} });
+  assert.deepEqual(JSON.parse(calls[0].fields.reply_markup), { inline_keyboard: [] });
+});
+
+test('правка: текст стал короче — лишнее продолжение удаляется; длиннее — отказ', async (t) => {
+  t.after(() => (globalThis.fetch = realFetch));
+  const calls = fakeBot({ editMessageText: () => true, deleteMessage: () => true, unpinChatMessage: () => true });
+  const out = await tg.edit('10,11', { text: 'коротко', creds });
+  assert.deepEqual(calls.map((c) => c.method), ['editMessageText', 'deleteMessage', 'unpinChatMessage']);
+  assert.equal(calls[1].fields.message_id, '11');
+  assert.equal(out.externalId, '10');
+
+  fakeBot();
+  await assert.rejects(() => tg.edit('10', { text: 'слово '.repeat(1000), creds }), /в середину канала нельзя/);
+});
+
+test('правка альбома: подпись у первого файла, хвост — после файлов, кнопка у хвоста', async (t) => {
+  t.after(() => (globalThis.fetch = realFetch));
+  const calls = fakeBot({ editMessageCaption: () => true, editMessageText: () => true, unpinChatMessage: () => true });
+  const media = [{ kind: 'image' }, { kind: 'image' }];
+  const text = `${'слово '.repeat(300)}конец`; // подпись + хвост
+  await tg.edit('1,2,3', { text, media, creds, options: { button: { text: 'Так', url: 'https://x.ua' } } });
+  assert.equal(calls[0].method, 'editMessageCaption');
+  assert.equal(calls[0].fields.message_id, '1');
+  assert.equal(calls[0].fields.reply_markup, undefined, 'у альбома клавиатуры нет');
+  assert.equal(calls[1].method, 'editMessageText');
+  assert.equal(calls[1].fields.message_id, '3');
+  assert.ok(calls[1].fields.reply_markup.includes('x.ua'));
 });

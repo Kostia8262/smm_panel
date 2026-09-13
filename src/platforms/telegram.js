@@ -152,28 +152,32 @@ async function call(method, form, creds, { timeoutMs = CALL_TIMEOUT_MS } = {}) {
  */
 export function botRights(chat, member) {
   const status = member?.status;
-  if (status === 'creator') return { canPost: true, canDelete: true, problem: null };
+  if (status === 'creator') return { canPost: true, canDelete: true, canPin: true, problem: null };
 
   if (chat?.type === 'channel') {
     if (status !== 'administrator') {
-      return { canPost: false, canDelete: false, problem: 'бот не администратор канала — добавьте его в «Администраторы»' };
+      return { canPost: false, canDelete: false, canPin: false, problem: 'бот не администратор канала — добавьте его в «Администраторы»' };
     }
     const canPost = member.can_post_messages !== false;
     return {
       canPost,
       canDelete: Boolean(member.can_delete_messages),
+      // Закреп в канале Telegram привязал к праву править чужие публикации.
+      canPin: Boolean(member.can_edit_messages),
       problem: canPost ? null : 'у бота нет права «Публикация сообщений»',
     };
   }
 
   // Группа: писать может и обычный участник, если его не ограничили.
   if (status === 'left' || status === 'kicked') {
-    return { canPost: false, canDelete: false, problem: 'бота нет в группе' };
+    return { canPost: false, canDelete: false, canPin: false, problem: 'бота нет в группе' };
   }
   const canPost = status !== 'restricted' || member.can_send_messages !== false;
+  const admin = status === 'administrator';
   return {
     canPost,
-    canDelete: status === 'administrator' ? Boolean(member.can_delete_messages) : true,
+    canDelete: admin ? Boolean(member.can_delete_messages) : true,
+    canPin: admin ? Boolean(member.can_pin_messages) : false,
     problem: canPost ? null : 'боту запрещено писать в группе',
   };
 }
@@ -205,23 +209,42 @@ export async function check(creds) {
     bot: me.username,
     chat: chat.title || chat.username || String(chat.id),
     canDelete: rights.canDelete,
+    canPin: rights.canPin,
   };
-  if (!rights.canDelete) {
-    result.warning = `публиковать может, а снять пост — нет: дайте боту право «Удаление сообщений» в «${result.chat}»`;
+  const missing = [];
+  if (!rights.canDelete) missing.push('снимать посты — право «Удаление сообщений»');
+  if (!rights.canPin) missing.push(`закреплять — право «${chat.type === 'channel' ? 'Изменение публикаций' : 'Закрепление сообщений'}»`);
+  if (missing.length) {
+    result.warning = `публиковать может, но не может ${missing.join(' и ')} в «${result.chat}»`;
   }
   return result;
 }
 
+/** Кнопка-ссылка под сообщением; пустая клавиатура снимает прежнюю. */
+function keyboard(button) {
+  const rows = button?.text && button?.url ? [[{ text: button.text, url: button.url }]] : [];
+  return JSON.stringify({ inline_keyboard: rows });
+}
+
+const NO_PREVIEW = JSON.stringify({ is_disabled: true });
+
 /**
- * @param {{text: string, media: Array<{path: string, kind: string, width?: number, height?: number, duration?: number}>}} payload
+ * @param {{text: string, media: Array<{path: string, kind: string, width?: number, height?: number, duration?: number}>,
+ *   options?: {pin?: boolean, noPreview?: boolean, button?: {text: string, url: string}}}} payload
  * @returns {Promise<{externalId: string, url: string|null, warning?: string}>}
  */
-export async function publish({ text, media = [], creds }) {
+export async function publish({ text, media = [], creds, options = {} }) {
   const chatId = normalizeChatId(creds.chatId);
   const body = String(text || '').trim();
+  const button = options.button?.text && options.button?.url ? options.button : null;
+  const warnings = [];
 
   let ids;
   let tails;
+
+  // Кнопка — под последним сообщением поста: там кончается текст и стоит
+  // призыв. Сразу у главного — только если продолжения нет.
+  const buttonOnMain = (rest) => button && !rest.length;
 
   if (!media.length) {
     // Без медиа — обычное сообщение. Длиннее 4096 текст становится после
@@ -230,6 +253,8 @@ export async function publish({ text, media = [], creds }) {
     const form = new FormData();
     form.set('chat_id', chatId);
     form.set('text', first);
+    if (options.noPreview) form.set('link_preview_options', NO_PREVIEW);
+    if (buttonOnMain(rest)) form.set('reply_markup', keyboard(button));
     const msg = await call('sendMessage', form, creds);
     ids = [msg.message_id];
     tails = rest;
@@ -242,6 +267,7 @@ export async function publish({ text, media = [], creds }) {
     form.set(isVideo ? 'video' : 'photo', await openAsBlob(m.path), basename(m.path));
     if (caption) form.set('caption', caption);
     if (isVideo) for (const [k, v] of Object.entries(videoFields(m))) form.set(k, String(v));
+    if (buttonOnMain(rest)) form.set('reply_markup', keyboard(button));
     // Выгрузку не режем своим таймаутом: 50 МБ по медленному каналу идут долго.
     const msg = await call(isVideo ? 'sendVideo' : 'sendPhoto', form, creds, { timeoutMs: 0 });
     ids = [msg.message_id];
@@ -265,6 +291,9 @@ export async function publish({ text, media = [], creds }) {
     const msgs = await call('sendMediaGroup', form, creds, { timeoutMs: 0 });
     ids = msgs.map((x) => x.message_id);
     tails = rest;
+    // Альбому Telegram клавиатуру не даёт; проверка поста такое не пускает,
+    // но если дошло — говорим, а не теряем кнопку молча.
+    if (button && !rest.length) warnings.push('к альбому кнопку Telegram не прикрепляет — пост вышел без неё');
   }
 
   // Главное сообщение уже в канале. Упавшее продолжение нельзя превращать в
@@ -275,15 +304,136 @@ export async function publish({ text, media = [], creds }) {
       const form = new FormData();
       form.set('chat_id', chatId);
       form.set('text', tail);
+      if (options.noPreview) form.set('link_preview_options', NO_PREVIEW);
+      if (button && i === tails.length - 1) form.set('reply_markup', keyboard(button));
       const msg = await call('sendMessage', form, creds);
       ids.push(msg.message_id);
     } catch (err) {
-      out.warning = `пост вышел, но продолжение текста (${tails.length - i} из ${tails.length} сообщ.) не отправлено — ${err.message}. Дошлите его в канал руками`;
+      warnings.push(
+        `пост вышел, но продолжение текста (${tails.length - i} из ${tails.length} сообщ.${button ? ', с кнопкой' : ''}) не отправлено — ${err.message}. Дошлите его в канал руками`
+      );
       break;
     }
   }
+
+  // Закреп — после всего: пост уже вышел, и неудача закрепа его не отменяет.
+  if (options.pin) {
+    try {
+      await pin(chatId, ids[0], creds);
+    } catch (err) {
+      warnings.push(`пост вышел, но не закрепился — ${err.message}. Нужно право «Изменение публикаций» у бота`);
+    }
+  }
+
   out.externalId = ids.join(',');
+  if (warnings.length) out.warning = warnings.join('; ');
   return out;
+}
+
+async function pin(chatId, messageId, creds) {
+  const form = new FormData();
+  form.set('chat_id', chatId);
+  form.set('message_id', String(messageId));
+  // Закреп в канале сам присылает подписчикам уведомление — второе незачем.
+  form.set('disable_notification', 'true');
+  await call('pinChatMessage', form, creds);
+}
+
+/**
+ * Обновить вышедший пост: текст (подпись), кнопку, превью ссылки и закреп.
+ *
+ * Медиа не меняются — это другой пост. Сообщения поста раскладываются так:
+ * сначала файлы (у альбома — по сообщению на файл, подпись у первого), потом
+ * продолжение текста. Если новый текст требует больше сообщений, чем вышло,
+ * — отказ: дописать сообщение в середину ленты канала нельзя, оно встанет в
+ * конец, после чужих постов. Лишние хвосты, наоборот, удаляются.
+ *
+ * @returns {Promise<{externalId: string, warning?: string}>}
+ */
+export async function edit(externalId, { text, media = [], creds, options = {} }) {
+  const chatId = normalizeChatId(creds.chatId);
+  const ids = String(externalId ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const fileMessages = media.length > 1 ? Math.min(media.length, 10) : media.length;
+  if (!ids.length || ids.length < Math.max(fileMessages, 1)) {
+    throw new Error('Telegram: у поста не хватает id сообщений — обновить нечего, опубликуйте заново');
+  }
+
+  const body = String(text || '').trim();
+  const button = options.button?.text && options.button?.url ? options.button : null;
+  const parts = splitText(body, media.length ? CAPTION_LIMIT : TEXT_LIMIT);
+
+  // Слоты текста: у поста с файлами — подпись первого файла и хвосты после
+  // файлов; у текстового — все сообщения.
+  const slots = media.length
+    ? [{ id: ids[0], caption: true }, ...ids.slice(fileMessages).map((id) => ({ id }))]
+    : ids.map((id) => ({ id }));
+  const needed = Math.max(parts.length, media.length ? 1 : 1);
+  if (needed > slots.length) {
+    throw new Error(
+      `Новый текст уйдёт ${needed} сообщениями, а в канале их ${slots.length} — дописать в середину канала нельзя. Сократите текст или опубликуйте пост заново`
+    );
+  }
+
+  const kept = slots.slice(0, needed);
+  const extra = slots.slice(needed);
+  const album = media.length > 1;
+  const warnings = [];
+
+  for (const [i, slot] of kept.entries()) {
+    const last = i === kept.length - 1;
+    const form = new FormData();
+    form.set('chat_id', chatId);
+    form.set('message_id', String(slot.id));
+    // Клавиатуру ставим последнему, у альбома её не бывает.
+    const markup = last && !(album && slot.caption) ? keyboard(button) : null;
+    if (slot.caption) {
+      form.set('caption', parts[i] || '');
+      if (markup) form.set('reply_markup', markup);
+      await callEdit('editMessageCaption', form, creds);
+    } else {
+      form.set('text', parts[i]);
+      if (options.noPreview) form.set('link_preview_options', NO_PREVIEW);
+      if (markup) form.set('reply_markup', markup);
+      await callEdit('editMessageText', form, creds);
+    }
+  }
+  if (button && album && kept.length === 1) warnings.push('к альбому кнопку Telegram не прикрепляет');
+
+  for (const slot of extra) {
+    try {
+      await remove(slot.id, creds);
+    } catch (err) {
+      warnings.push(`лишнее продолжение (сообщение ${slot.id}) не удалилось — ${err.message}`);
+    }
+  }
+
+  // Закреп: поставить или снять. Снятие незакреплённого Telegram может
+  // отвергнуть — это не ошибка правки.
+  try {
+    if (options.pin) await pin(chatId, ids[0], creds);
+    else {
+      const form = new FormData();
+      form.set('chat_id', chatId);
+      form.set('message_id', String(ids[0]));
+      await call('unpinChatMessage', form, creds);
+    }
+  } catch (err) {
+    if (options.pin) warnings.push(`текст обновлён, но пост не закрепился — ${err.message}`);
+  }
+
+  const leftIds = ids.filter((id) => !extra.some((s) => String(s.id) === id));
+  const out = { externalId: leftIds.join(',') };
+  if (warnings.length) out.warning = warnings.join('; ');
+  return out;
+}
+
+/** «Ничего не изменилось» при правке — не ошибка. */
+async function callEdit(method, form, creds) {
+  try {
+    await call(method, form, creds);
+  } catch (err) {
+    if (!/message is not modified/i.test(err.message)) throw err;
+  }
 }
 
 /**

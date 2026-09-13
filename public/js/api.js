@@ -186,6 +186,7 @@ export const api = {
   unschedule: (id) => request(`/api/posts/${id}/unschedule`, { method: 'POST' }),
   publishNow: (id) => request(`/api/posts/${id}/publish-now`, { method: 'POST' }),
   // Ручные действия с одной площадкой поста: снять из сети, разобрать «неизвестно, ушёл ли».
+  editTarget: (id, targetId) => request(`/api/posts/${id}/targets/${targetId}/edit`, { method: 'POST' }),
   unpublishTarget: (id, targetId) => request(`/api/posts/${id}/targets/${targetId}/unpublish`, { method: 'POST' }),
   resolveTarget: (id, targetId, outcome) =>
     request(`/api/posts/${id}/targets/${targetId}/resolve`, { method: 'POST', body: { outcome } }),

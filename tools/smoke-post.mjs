@@ -21,6 +21,10 @@
  *   --image URL     публичный JPEG: **обязателен для Instagram**, там текстом нельзя
  *   --audio ID      трек из библиотеки Instagram к Reels (tools/audio-probe.mjs
  *                   покажет id); громкости — --audio-volume и --video-volume
+ *   --pin, --no-preview, --button "Текст|https://…"
+ *                   настройки Telegram: закреп, без превью ссылки, кнопка под постом
+ *   --edit-text "…" после выхода обновить пост этим текстом (где площадка умеет);
+ *                   --edit-clear — заодно снять кнопку, превью и закреп
  *   --wait N        сколько секунд пост повисит перед удалением (по умолчанию 45)
  *   --keep          не удалять — тогда снимать руками
  *
@@ -69,6 +73,16 @@ const audio = flag('audio')
     }
   : null;
 const keep = has('keep');
+// Настройки Telegram — тем же объектом, что кладёт очередь из post_targets.options.
+const buttonFlag = flag('button');
+const options = {
+  ...(has('pin') ? { pin: true } : {}),
+  ...(has('no-preview') ? { noPreview: true } : {}),
+  ...(buttonFlag ? { button: { text: buttonFlag.split('|')[0], url: buttonFlag.split('|')[1] || '' } } : {}),
+};
+// Правка вышедшего поста — после публикации, до удаления.
+const editText = flag('edit-text');
+const editOptions = has('edit-clear') ? {} : options;
 
 const media = [
   ...(video ? [{ kind: 'video', url: video }] : []),
@@ -158,12 +172,27 @@ for (const platform of platforms) {
       publicUrl: (m) => m.url,
       creds,
       audio: platform === 'instagram' ? audio : null,
+      options: platform === 'telegram' ? options : undefined,
     });
-    published.push({ platform, externalId: out.externalId, url: out.url });
+    const item = { platform, externalId: out.externalId, url: out.url };
+    published.push(item);
     results.push({ platform, step: 'публикация', ok: true, externalId: out.externalId });
     console.log(`${platform}: опубликовано — ${out.externalId}${out.url ? ` · ${out.url}` : ''}`);
     if (out.audioType !== undefined) console.log(`${platform}: звук по словам площадки — ${out.audioType ?? 'НЕТ'}`);
     if (out.warning) console.log(`${platform}: ЗАМЕЧАНИЕ — ${out.warning}`);
+
+    if (editText && typeof adapter.edit === 'function') {
+      await new Promise((r) => setTimeout(r, Math.min(waitSec, 15) * 1000));
+      try {
+        const edited = await adapter.edit(out.externalId, { text: editText, media, creds, options: editOptions });
+        item.externalId = edited.externalId || item.externalId;
+        results.push({ platform, step: 'правка', ok: true, externalId: item.externalId });
+        console.log(`${platform}: обновлён — ${item.externalId}${edited.warning ? ` · ЗАМЕЧАНИЕ — ${edited.warning}` : ''}`);
+      } catch (err) {
+        results.push({ platform, step: 'правка', ok: false, error: err.message });
+        console.log(`${platform}: НЕ обновлён — ${err.message}`);
+      }
+    }
   } catch (err) {
     results.push({ platform, step: 'публикация', ok: false, error: err.message });
     console.log(`${platform}: НЕ опубликовано — ${err.message}`);

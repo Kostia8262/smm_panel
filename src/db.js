@@ -1025,6 +1025,19 @@ const MIGRATIONS = [
       ALTER TABLE trends ADD COLUMN audio TEXT;
     `,
   },
+  {
+    /**
+     * Настройки цели, которые есть только у своей площадки (13.09.2026).
+     *
+     * `post_targets.options` — JSON. Сейчас его понимает Telegram:
+     * `{pin, noPreview, button: {text, url}}` — закрепить пост, не рисовать
+     * превью ссылки, кнопка-ссылка под последним сообщением. Отдельными
+     * колонками не заводим: у каждой сети такие настройки свои, и колонка
+     * на каждую превратила бы таблицу в свалку пустых полей.
+     */
+    name: '024t-target-options',
+    sql: `ALTER TABLE post_targets ADD COLUMN options TEXT;`,
+  },
 ];
 
 function migrate() {

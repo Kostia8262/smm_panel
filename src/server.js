@@ -36,6 +36,7 @@ const collector = await import('./trends/collector.js');
 const observed = await import('./trends/observed.js');
 const { signatureFor, withSignature } = await import('./signature.js');
 const { parseOwnDomains } = await import('./shortlink.js');
+const { parseOptions, storeOptions } = await import('./target-options.js');
 const tokensDb = await import('./tokens.js');
 const threadsOauth = await import('./oauth/threads.js');
 const facebookOauth = await import('./oauth/facebook.js');
@@ -1027,6 +1028,17 @@ app.post('/api/posts/:id/targets/:targetId/resolve', requireAccess('platforms'),
   }
 });
 
+/** Обновить вышедший пост в сети по тому, что сейчас в панели. */
+app.post('/api/posts/:id/targets/:targetId/edit', requireAccess('platforms'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { warning } = await manual.editTarget(id, Number(req.params.targetId));
+    res.json({ post: decorate(getPost(id)), warning });
+  } catch (err) {
+    manualError(res, err);
+  }
+});
+
 /** Снять вышедший пост из одной сети. Только владелец — это не отменить. */
 app.post('/api/posts/:id/targets/:targetId/unpublish', requireAccess('platforms'), async (req, res) => {
   try {
@@ -1698,6 +1710,7 @@ function saveTargets(postId, targets) {
   // вкладка из кэша): оставляем как есть, а не стираем выбранный трек.
   const updateAudio = db.prepare('UPDATE post_targets SET audio = ? WHERE post_id = ? AND platform = ? AND format_id = ?');
   const audioOf = (t) => (t.audio === undefined ? undefined : t.platform === 'instagram' ? audioStore.storeAudio(t.audio) : null);
+  const updateOptions = db.prepare('UPDATE post_targets SET options = ? WHERE post_id = ? AND platform = ? AND format_id = ?');
 
   // Выбор кадров цели: только кадры этого поста. `undefined` — клиент выбор
   // не прислал, оставляем как есть; `null` — все кадры.
@@ -1721,6 +1734,9 @@ function saveTargets(postId, targets) {
     }
     const audio = audioOf(t);
     if (audio !== undefined && row?.status !== 'published') updateAudio.run(audio, postId, t.platform, formatId);
+    // Настройки площадки (Telegram: закреп, превью, кнопка). У вышедшей цели
+    // тоже правятся — их применяет «Обновить в канале».
+    if (t.options !== undefined) updateOptions.run(storeOptions(t.platform, t.options), postId, t.platform, formatId);
   }
 }
 
@@ -1764,6 +1780,7 @@ function decorate(post) {
     media_ids: targetMediaIds(t),
     parts: partsOf(t),
     audio: audioStore.parseAudio(t.audio),
+    options: parseOptions(t.options),
   }));
   post.media = (post.media || []).map((m) => ({
     ...m,

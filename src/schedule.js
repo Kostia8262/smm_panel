@@ -359,7 +359,7 @@ export function requeueEvergreen(postId) {
   // сторис копии указывала бы на кадры оригинала, которых у неё нет. Части
   // серии не копируются: у копии ещё ничего не вышло.
   const targets = db
-    .prepare('SELECT platform, format_id, text_override, media_ids, audio FROM post_targets WHERE post_id = ?')
+    .prepare('SELECT platform, format_id, text_override, media_ids, audio, options FROM post_targets WHERE post_id = ?')
     .all(postId);
   const insert = db.prepare(
     'INSERT OR IGNORE INTO post_targets (post_id, platform, format_id, text_override, media_ids) VALUES (?, ?, ?, ?, ?)'
@@ -367,6 +367,7 @@ export function requeueEvergreen(postId) {
   // Звук копии — тот же трек. Отметку о пропаже не переносим: до выхода
   // копии месяцы, сторож перепроверит трек сам.
   const setAudio = db.prepare('UPDATE post_targets SET audio = ? WHERE post_id = ? AND platform = ? AND format_id = ?');
+  const setOptions = db.prepare('UPDATE post_targets SET options = ? WHERE post_id = ? AND platform = ? AND format_id = ?');
   for (const t of targets) {
     let mediaIds = null;
     if (t.media_ids) {
@@ -377,6 +378,8 @@ export function requeueEvergreen(postId) {
       }
     }
     insert.run(copyId, t.platform, t.format_id, t.text_override, mediaIds);
+    // Настройки площадки (закреп, кнопка) — те же, что у оригинала.
+    if (t.options) setOptions.run(t.options, copyId, t.platform, t.format_id);
     const audio = parseAudio(t.audio);
     if (audio) {
       delete audio.missing;

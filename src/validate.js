@@ -19,6 +19,7 @@
 import { PLATFORMS, formatOf, mediaRulesFor } from './platforms/specs.js';
 import { withSignature } from './signature.js';
 import { withShortLinks } from './shortlink.js';
+import { optionIssues } from './target-options.js';
 import { splitText, CAPTION_LIMIT, TEXT_LIMIT } from './platforms/telegram.js';
 import { parseAudio, audioAllowed, audioLabel } from './audio.js';
 
@@ -152,6 +153,9 @@ export function validatePost(post, ctx = {}) {
     checkMediaSet(post, target, spec, format, rules, media, issues);
     for (const m of media) checkFile(m, spec, format, rules, issues);
     checkSound(post, target, spec, format, media, issues);
+    const opt = optionIssues(spec.id, target.options, { mediaCount: media.length });
+    issues.blockers.push(...opt.blockers);
+    issues.warnings.push(...opt.warnings);
 
     // --- готовность канала ---
     if (!spec.ready) {

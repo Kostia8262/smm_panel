@@ -172,3 +172,30 @@ test('сводный статус после ручных действий', () 
   assert.equal(s('published', 'needs_check'), 'partial');
   assert.equal(s('failed'), 'failed');
 });
+
+test('правка вышедшего: адаптер получает текст и настройки, новые id сохраняются', async () => {
+  const postId = makePost();
+  const t = makeTarget(postId, { externalId: '20,21' });
+  db.prepare('UPDATE post_targets SET options = ? WHERE id = ?').run('{"pin":true,"button":{"text":"Так","url":"https://example.com/x"}}', t);
+  let seen;
+  const adapterFor = () => ({
+    edit: async (id, payload) => {
+      seen = { id, ...payload };
+      return { externalId: '20' };
+    },
+  });
+  await manual.editTarget(postId, t, { adapterFor, credsFor: () => ({}) });
+  assert.equal(seen.id, '20,21');
+  assert.ok(seen.text.startsWith('текст'), 'текст поста — с подписью проекта, как при публикации');
+  assert.equal(seen.options.pin, true);
+  assert.equal(seen.options.button.url, 'https://example.com/x', 'чужая ссылка кнопки не подменяется');
+  assert.equal(targetOf(t).external_id, '20');
+});
+
+test('правка не вышедшего или у площадки без edit — отказ', async () => {
+  const postId = makePost('scheduled');
+  const pending = makeTarget(postId, { status: 'pending' });
+  await assert.rejects(() => manual.editTarget(postId, pending, { adapterFor: () => ({ edit: async () => ({}) }), credsFor: () => ({}) }), /только вышедший/);
+  const live = makeTarget(postId, { platform: 'threads', externalId: '1' });
+  await assert.rejects(() => manual.editTarget(postId, live, { adapterFor: () => ({}), credsFor: () => ({}) }), /не даёт править/);
+});
