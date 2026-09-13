@@ -314,6 +314,14 @@ export const api = {
   submitMailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}/submit`), { method: 'POST' }),
   approveMailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}/approve`), { method: 'POST' }),
   rejectMailCampaign: (id, note) => request(withProject(`/api/mail/campaigns/${id}/reject`), { method: 'POST', body: { note } }),
+
+  /* Рассылка: отправка (фаза 4). `at: null` — «разослать сейчас», только владельцу. */
+  scheduleMailCampaign: (id, at) => request(withProject(`/api/mail/campaigns/${id}/schedule`), { method: 'POST', body: { at } }),
+  unscheduleMailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}/unschedule`), { method: 'POST' }),
+  pauseMailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}/pause`), { method: 'POST' }),
+  resumeMailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}/resume`), { method: 'POST' }),
+  cancelMailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}/cancel`), { method: 'POST' }),
+  mailCampaignSends: (id, params = {}) => request(withProject(`/api/mail/campaigns/${id}/sends?${new URLSearchParams(params)}`)),
 };
 
 export { ApiError };

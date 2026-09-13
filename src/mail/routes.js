@@ -21,6 +21,7 @@ import { renderLetter, sampleBlocks } from './compose/render.js';
 import { brandFor } from './compose/brand.js';
 import * as campaigns from './campaigns.js';
 import * as mailMedia from './compose/media.js';
+import * as runner from './runner.js';
 import { makeState, readState } from '../oauth/threads.js';
 import { getProject } from '../projects.js';
 import { tooManyAttempts } from '../ratelimit.js';
@@ -503,6 +504,7 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
   const editorPayload = (campaign) => ({
     campaign,
     check: campaigns.checkCampaign(campaign),
+    delivery: runner.deliveryInfo(campaign),
     options: {
       lists: store.listLists(campaign.projectId).map((l) => ({ id: l.id, name: l.name, active: l.counts.active })),
       senders: senders.listSenders().map((s) => ({ id: s.id, email: s.email, state: s.state, cap: s.cap.effective, sent24h: s.sent24h })),
@@ -513,7 +515,13 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
   router.get(
     '/api/mail/campaigns',
     view,
-    handle((req, res) => res.json({ campaigns: campaigns.listCampaigns(projectOf(req)), statuses: campaigns.CAMPAIGN_STATUS }))
+    handle((req, res) => {
+      // Прогноз окончания — только идущим и запланированным: остальным он ни о чём.
+      const list = campaigns.listCampaigns(projectOf(req)).map((c) =>
+        ['scheduled', 'sending', 'paused'].includes(c.status) ? { ...c, delivery: runner.deliveryInfo(campaigns.getCampaign(c.id)) } : c
+      );
+      res.json({ campaigns: list, statuses: campaigns.CAMPAIGN_STATUS });
+    })
   );
 
   router.post(
@@ -651,6 +659,53 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
     '/api/mail/campaigns/:id/reject',
     mailboxes,
     handle((req, res) => res.json(editorPayload(campaigns.rejectCampaign(campaignOf(req).id, req.user, req.body?.note))))
+  );
+
+  /* ------------------------------ отправка (фаза 4) ------------------------------ */
+
+  /** { at: ISO | null } — null или время в прошлом = «разослать сейчас», только владельцу. */
+  router.post(
+    '/api/mail/campaigns/:id/schedule',
+    view,
+    handle((req, res) =>
+      res.json(editorPayload(runner.scheduleCampaign(campaignOf(req).id, { at: req.body?.at || null, user: req.user, projectId: projectOf(req) })))
+    )
+  );
+
+  router.post(
+    '/api/mail/campaigns/:id/unschedule',
+    view,
+    handle((req, res) => res.json(editorPayload(runner.unscheduleCampaign(campaignOf(req).id, { user: req.user, projectId: projectOf(req) }))))
+  );
+
+  router.post(
+    '/api/mail/campaigns/:id/pause',
+    view,
+    handle((req, res) => res.json(editorPayload(runner.pauseCampaign(campaignOf(req).id, { user: req.user, projectId: projectOf(req) }))))
+  );
+
+  router.post(
+    '/api/mail/campaigns/:id/resume',
+    view,
+    handle((req, res) => res.json(editorPayload(runner.resumeCampaign(campaignOf(req).id, { user: req.user, projectId: projectOf(req) }))))
+  );
+
+  router.post(
+    '/api/mail/campaigns/:id/cancel',
+    mailboxes,
+    handle((req, res) => res.json(editorPayload(runner.cancelCampaign(campaignOf(req).id, { user: req.user, projectId: projectOf(req) }))))
+  );
+
+  /** Письма рассылки поимённо — только владельцу: это адреса. */
+  router.get(
+    '/api/mail/campaigns/:id/sends',
+    manage,
+    handle((req, res) => {
+      const campaign = campaignOf(req);
+      const status = String(req.query.status || '');
+      const page = Math.max(1, Number(req.query.page) || 1);
+      res.json(campaigns.listSends(campaign.id, { status, page }));
+    })
   );
 
   /* ------------------------------ отписка: наружу ------------------------------ */

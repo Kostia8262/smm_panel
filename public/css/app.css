@@ -2449,6 +2449,26 @@ a.btn { text-decoration: none; }
 .mail-preview__frame { position: absolute; top: 0; left: 0; border: 0; transform-origin: 0 0; background: var(--surface-3); }
 .mail-preview__name .input { height: 32px; padding-block: 0; }
 
+/* ------------------------- рассылка: отправка (фаза 4) ------------------------- */
+
+.mail-delivery { display: flex; flex-direction: column; gap: var(--sp-3); padding-top: var(--sp-4); border-top: 1px solid var(--line-soft); }
+.mail-delivery__title { font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); }
+.mail-delivery__row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-3); }
+.mail-delivery__row .field { width: 240px; max-width: 100%; }
+/* Кнопки встают вровень с полем, а не с подсказкой под ним. */
+.mail-delivery__row > .btn { margin-bottom: 22px; }
+.mail-delivery__lead { color: var(--ink); }
+.mail-delivery__lead b { font-size: var(--fs-lg); }
+.mail-delivery__hold { color: var(--warn); font-size: var(--fs-sm); }
+.mail-delivery__toggle { align-self: flex-start; }
+.mail-progress-box { display: flex; flex-direction: column; gap: var(--sp-2); max-width: 640px; }
+.mail-counts { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); font-size: var(--fs-sm); color: var(--ink-2); }
+.mail-count b { color: var(--ink); }
+.mail-count--danger b { color: var(--danger); }
+.mail-count--warn b { color: var(--warn); }
+.mail-sub--warn { color: var(--warn); }
+.mail-list-meter { width: 160px; max-width: 100%; margin-top: 2px; }
+
 @media (max-width: 1240px) {
   .mail-editor { grid-template-columns: minmax(0, 1fr); }
   .mail-editor__side { position: static; }

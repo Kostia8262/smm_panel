@@ -85,6 +85,11 @@ export function editorView(ctx, id) {
   let nameTimer = null;
   let contentHeight = 0;
   let resizeObserver = null;
+  let delivery = null;
+  let pollTimer = null;
+  let sendsOpen = false;
+  let sendsFilter = '';
+  let sendsPage = 1;
 
   // Узлы, которые обновляются после сохранения, не трогая форму.
   const stateHost = el('div', 'mail-slot');
@@ -107,9 +112,10 @@ export function editorView(ctx, id) {
   const excludeHost = el('div', 'mail-picks');
   const senderHint = el('span', 'field__hint');
   const fromNameInput = input('');
+  const sendsHost = el('div', 'mail-slot');
 
   ctx.setTopbar({ title: 'Рассылка', subtitle: 'Письмо' });
-  root.append(backLink('Письма', '#/mail'), stateHost, loading);
+  root.append(backLink('Письма', '#/mail'), stateHost, sendsHost, loading);
 
   window.addEventListener('hashchange', onLeave);
   window.addEventListener('beforeunload', onUnload);
@@ -150,6 +156,7 @@ export function editorView(ctx, id) {
     campaign = payload.campaign;
     check = payload.check;
     options = payload.options;
+    delivery = payload.delivery || null;
     if (before && ['review', 'approved'].includes(before.status) && campaign.status === 'draft' && !campaign.reviewNote) {
       toast('Текст изменён — письмо снова черновик: нужно новое пробное письмо и утверждение', 'warn');
     }
@@ -208,7 +215,24 @@ export function editorView(ctx, id) {
     window.removeEventListener('hashchange', onLeave);
     window.removeEventListener('beforeunload', onUnload);
     resizeObserver?.disconnect();
+    clearTimeout(pollTimer);
     if (pending) flush();
+  }
+
+  /** Идущая рассылка обновляется сама: счётчики и прогноз меняются каждые несколько секунд. */
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    if (!['scheduled', 'sending', 'paused'].includes(campaign.status)) return;
+    pollTimer = setTimeout(async () => {
+      if (!root.isConnected) return;
+      try {
+        adopt(await api.mailCampaign(campaign.id));
+        renderState();
+        if (sendsOpen) loadSends();
+      } catch {
+        schedulePoll();
+      }
+    }, 10000);
   }
 
   function onUnload(e) {
@@ -268,6 +292,10 @@ export function editorView(ctx, id) {
       box.append(steps);
     }
 
+    if (campaign.pauseReason && campaign.status === 'paused') box.append(note('warn', 'Рассылка на паузе', campaign.pauseReason));
+    const deliveryNode = deliveryBox();
+    if (deliveryNode) box.append(deliveryNode);
+
     const extra = el('div', 'mail-actions');
     if (isOwner && ['review', 'approved'].includes(campaign.status)) {
       extra.append(button('Вернуть на доработку', { variant: 'quiet', onClick: () => openReject(box) }));
@@ -275,6 +303,7 @@ export function editorView(ctx, id) {
     if (extra.childNodes.length) box.append(extra);
     if (openAsk) box.append(openAsk);
     stateHost.append(box);
+    schedulePoll();
 
     renderChecks();
     renderAudience();
@@ -301,10 +330,227 @@ export function editorView(ctx, id) {
           ? 'Просят согласовать. Откройте пробное письмо в почте и утвердите или верните с замечанием.'
           : 'Ждёт владельца. Правка текста вернёт письмо в черновик.';
       case 'approved':
-        return 'Правка текста вернёт письмо в черновик, базы можно менять. Отправка по базам появится в следующем обновлении панели.';
+        return isOwner
+          ? 'Готово к отправке: выберите время или разошлите сейчас. Правка текста вернёт письмо в черновик, базы можно менять.'
+          : 'Готово к отправке: выберите время. Правка текста вернёт письмо в черновик, базы можно менять.';
+      case 'scheduled':
+        return 'Письмо в расписании. Чтобы что-то поправить — снимите его с расписания.';
+      case 'sending':
+        return 'Письма уходят по одному, с паузой 4–12 секунд, в окне отправки ящика и в пределах его потолка на сутки.';
+      case 'paused':
+        return 'Не ушедшие письма ждут. Продолжите, когда причина паузы устранена.';
+      case 'done':
+        return 'Рассылка завершена. Письмо можно скопировать и отправить снова — другим базам или позже.';
+      case 'cancelled':
+        return 'Рассылка отменена: ушедшие письма остались у получателей, остальные не уйдут.';
       default:
-        return 'Письмо уже в отправке или разослано — править его нельзя.';
+        return '';
     }
+  }
+
+  /* ------------------------------ отправка ------------------------------ */
+
+  function deliveryBox() {
+    const status = campaign.status;
+    if (!['approved', 'scheduled', 'sending', 'paused', 'done', 'cancelled'].includes(status)) return null;
+    const box = el('div', 'mail-delivery');
+    box.append(el('div', 'mail-delivery__title', 'Отправка'));
+    const progress = campaign.progress;
+
+    if (status === 'approved') {
+      const row = el('div', 'mail-delivery__row');
+      const when = input(localValue(nextHour()), { type: 'datetime-local' });
+      when.min = localValue(new Date());
+      const whenField = field('Когда начать', when, 'По времени вашего компьютера');
+      const planButton = button('Запланировать', {
+        iconName: 'clock',
+        onClick: () => {
+          const at = new Date(when.value);
+          if (Number.isNaN(at.getTime())) return toast('Выберите дату и время', 'danger');
+          run(() => api.scheduleMailCampaign(campaign.id, at.toISOString()), `Рассылка запланирована: ${whenText(at.toISOString())}`);
+        },
+      });
+      row.append(whenField, planButton);
+      if (isOwner) {
+        row.append(
+          button('Разослать сейчас', {
+            variant: 'primary',
+            iconName: 'send',
+            onClick: () => {
+              const n = check.audience.recipients;
+              const finish = delivery?.forecast ? `\nПоследнее письмо уйдёт примерно ${whenText(delivery.forecast.finishAt)}.` : '';
+              if (!confirm(`Разослать «${campaign.title}» сейчас?\n\nПолучат ${plural(n, ADDRESSES)}.${finish}\n\nПисьма уходят по одному; остановить можно паузой или отменой.`)) return;
+              run(() => api.scheduleMailCampaign(campaign.id, null), 'Рассылка началась');
+            },
+          })
+        );
+      }
+      box.append(row, forecastLine(check.audience.recipients));
+      return box;
+    }
+
+    if (status === 'scheduled') {
+      const soon = Date.parse(campaign.scheduledAt) <= Date.now() + 60000;
+      box.append(
+        el('div', 'mail-delivery__lead', `${soon ? 'Начнётся в течение минуты' : `Начнётся ${whenText(campaign.scheduledAt)}`} · получат около ${plural(check.audience.recipients, ADDRESSES)}`),
+        forecastLine(check.audience.recipients)
+      );
+      const actions = el('div', 'mail-actions');
+      actions.append(button('Снять с расписания', { variant: 'quiet', onClick: () => run(() => api.unscheduleMailCampaign(campaign.id), 'Снято с расписания') }));
+      if (isOwner) actions.append(button('Отменить рассылку', { variant: 'danger', onClick: () => cancel() }));
+      box.append(actions);
+      return box;
+    }
+
+    if (progress) box.append(progressNode(progress));
+    if (['sending', 'paused'].includes(status)) {
+      const hold = holdText();
+      if (hold && status === 'sending') box.append(el('div', 'mail-delivery__hold', hold));
+      if (delivery?.forecast && status === 'sending') box.append(el('div', 'mail-sub', `Последнее письмо уйдёт примерно ${whenText(delivery.forecast.finishAt)}`));
+      const actions = el('div', 'mail-actions');
+      if (status === 'sending') actions.append(button('Пауза', { iconName: 'pause', onClick: () => run(() => api.pauseMailCampaign(campaign.id), 'Рассылка на паузе') }));
+      else actions.append(button('Продолжить', { variant: 'primary', iconName: 'play', onClick: () => run(() => api.resumeMailCampaign(campaign.id), 'Рассылка продолжена') }));
+      if (isOwner) actions.append(button('Отменить рассылку', { variant: 'danger', onClick: () => cancel() }));
+      box.append(actions);
+    } else {
+      box.append(el('div', 'mail-sub', `${status === 'done' ? 'Завершена' : 'Отменена'} ${whenText(campaign.finishedAt)}`));
+    }
+    if (isOwner && progress) {
+      const toggle = button(sendsOpen ? 'Скрыть адреса' : 'Кому ушло — поимённо', {
+        variant: 'quiet',
+        onClick: () => {
+          sendsOpen = !sendsOpen;
+          if (sendsOpen) loadSends();
+          else sendsHost.textContent = '';
+          renderState();
+        },
+      });
+      toggle.classList.add('btn--sm', 'mail-delivery__toggle');
+      box.append(toggle);
+    }
+    return box;
+  }
+
+  function progressNode(p) {
+    const wrap = el('div', 'mail-progress-box');
+    const done = p.sent + p.failed + p.skipped + p.unknown + p.cancelled;
+    const head = el('div', 'mail-delivery__lead');
+    head.append(el('b', 'num', num(p.sent)), el('span', null, ` из ${num(p.total)} ушло`));
+    const meter = el('div', 'meter');
+    const fill = el('div', 'meter__fill');
+    fill.style.setProperty('--value', String(p.total ? done / p.total : 0));
+    meter.append(fill);
+    const facts = el('div', 'mail-counts');
+    for (const [key, label, tone] of [
+      ['queued', 'в очереди', ''],
+      ['failed', 'не ушло', 'danger'],
+      ['skipped', 'пропущено — отписались', ''],
+      ['unknown', 'судьба неизвестна', 'warn'],
+      ['cancelled', 'отменено', ''],
+    ]) {
+      const n = key === 'queued' ? p.queued + p.sending : p[key];
+      if (!n) continue;
+      const item = el('span', `mail-count${tone ? ` mail-count--${tone}` : ''}`);
+      item.append(el('b', 'num', num(n)), el('span', null, ` ${label}`));
+      facts.append(item);
+    }
+    wrap.append(head, meter);
+    if (facts.childNodes.length) wrap.append(facts);
+    if (p.unknown) wrap.append(el('div', 'mail-sub', 'Судьба неизвестна — Google не ответил на отправку. Такие письма не повторяются сами: лучше не дослать, чем прислать дважды.'));
+    return wrap;
+  }
+
+  function forecastLine(recipients) {
+    const line = el('div', 'mail-sub');
+    if (!delivery || !recipients) return line;
+    const parts = [];
+    if (delivery.forecast) parts.push(`${campaign.status === 'scheduled' ? 'Закончится' : 'Если начать сейчас, закончится'} примерно ${whenText(delivery.forecast.finishAt)}`);
+    parts.push(`окно ящика ${delivery.window.from}–${delivery.window.to} по Киеву`);
+    parts.push(`на сутки осталось ${num(delivery.capLeft)} из ${num(delivery.cap)}`);
+    if (delivery.ahead) parts.push(`впереди в очереди ящика ${plural(delivery.ahead, ['письмо', 'письма', 'писем'])} других рассылок`);
+    line.textContent = parts.join(' · ');
+    return line;
+  }
+
+  /** Что сейчас держит идущую рассылку — словами, иначе «ничего не происходит» выглядит поломкой. */
+  function holdText() {
+    if (!delivery) return '';
+    if (delivery.holdUntil) return `Google попросил притормозить — продолжим ${whenText(delivery.holdUntil)}${delivery.holdReason ? ` (${delivery.holdReason})` : ''}`;
+    if (!delivery.window.open) return `Окно отправки закрыто — продолжим ${whenText(delivery.window.opensAt)}`;
+    if (delivery.capLeft <= 0) return `Потолок ящика на сутки исчерпан (${num(delivery.cap)}) — продолжим, когда освободится`;
+    return '';
+  }
+
+  async function cancel() {
+    const left = campaign.progress ? campaign.progress.queued : check.audience.recipients;
+    if (!confirm(`Отменить рассылку «${campaign.title}»?\n\nНе ушедшие письма (${num(left)}) не уйдут. Ушедшие останутся у получателей. Вернуть отменённую рассылку нельзя — только сделать копию письма.`)) return;
+    run(() => api.cancelMailCampaign(campaign.id), 'Рассылка отменена');
+  }
+
+  async function loadSends() {
+    let data;
+    try {
+      data = await api.mailCampaignSends(campaign.id, { status: sendsFilter, page: sendsPage });
+    } catch (err) {
+      toast(err.message, 'danger');
+      return;
+    }
+    if (!root.isConnected || !sendsOpen) return;
+    sendsHost.textContent = '';
+    const box = panel('Письма рассылки');
+    const chips = el('div', 'chips chips--wrap');
+    const p = campaign.progress || {};
+    chips.append(chip(`Все · ${num(p.total || 0)}`, !sendsFilter, () => pickSends('')));
+    for (const [key, title] of Object.entries(data.statuses)) {
+      if (!p[key]) continue;
+      chips.append(chip(`${title} · ${num(p[key])}`, sendsFilter === key, () => pickSends(key)));
+    }
+    box.append(chips);
+    const wrap = el('div', 'scroll-x');
+    const table = el('table', 'table mail-table');
+    const hr = el('tr');
+    for (const text of ['Адрес', 'Состояние', 'Когда', 'Причина']) hr.append(el('th', null, text));
+    const thead = el('thead');
+    thead.append(hr);
+    const tbody = el('tbody');
+    for (const s of data.sends) {
+      const tr = el('tr');
+      const who = el('td', 'mail-name-cell');
+      who.append(el('div', 'mail-name', s.email));
+      if (s.name) who.append(el('div', 'mail-sub', s.name));
+      const tone = { sent: 'tag--ok', failed: 'tag--danger', unknown: 'tag--warn', sending: 'tag--gold' }[s.status] || '';
+      const state = el('td');
+      state.append(el('span', `tag ${tone}`.trim(), s.statusTitle));
+      tr.append(who, state, el('td', 'table__time', s.sentAt ? whenText(s.sentAt) : '—'), el('td', 'mail-sub-cell', s.error || ''));
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    wrap.append(table);
+    box.append(wrap);
+    const pages = Math.ceil(data.total / data.pageSize);
+    if (pages > 1) {
+      const pager = el('div', 'mail-pager');
+      const prev = button('Назад', { variant: 'quiet', onClick: () => turnSends(-1) });
+      prev.disabled = sendsPage <= 1;
+      const next = button('Дальше', { variant: 'quiet', onClick: () => turnSends(1) });
+      next.disabled = sendsPage >= pages;
+      prev.classList.add('btn--sm');
+      next.classList.add('btn--sm');
+      pager.append(prev, el('span', null, `${sendsPage} из ${pages}`), next);
+      box.append(pager);
+    }
+    sendsHost.append(box);
+  }
+
+  function pickSends(status) {
+    sendsFilter = status;
+    sendsPage = 1;
+    loadSends();
+  }
+
+  function turnSends(delta) {
+    sendsPage += delta;
+    loadSends();
   }
 
   function primaryAction(clean, tested) {
@@ -911,6 +1157,36 @@ export function editorView(ctx, id) {
     frame.style.left = `${Math.max(0, (available - width * scale) / 2)}px`;
     sizer.style.height = `${Math.ceil(contentHeight * scale)}px`;
   }
+}
+
+/* ------------------------------ время ------------------------------ */
+
+const pad = (n) => String(n).padStart(2, '0');
+
+/** Значение для `<input type="datetime-local">` — местное время без зоны. */
+function localValue(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** Ближайший круглый час, но не раньше чем через 15 минут: время на последний взгляд. */
+function nextHour() {
+  const d = new Date(Date.now() + 15 * 60000);
+  d.setMinutes(0, 0, 0);
+  d.setHours(d.getHours() + 1);
+  return d;
+}
+
+/** «сегодня в 14:00», «завтра в 08:00», «17 сентября в 10:30». */
+function whenText(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const today = new Date();
+  const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+  if (d.toDateString() === today.toDateString()) return `сегодня в ${time}`;
+  if (d.toDateString() === tomorrow.toDateString()) return `завтра в ${time}`;
+  return `${day(iso)} в ${time}`;
 }
 
 /* ------------------------------ картинка в браузере ------------------------------ */

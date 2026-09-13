@@ -82,10 +82,20 @@ export function capOf(row, now = Date.now()) {
   return { google, panel, warmupDay, warmupCap, effective: warmupCap ? Math.min(panel, warmupCap) : panel };
 }
 
-/** Отправлено за последние 24 часа — считается по записям, а не полем, которое может разойтись. */
+/**
+ * Отправлено за последние 24 часа — считается по записям, а не полем, которое
+ * может разойтись. Письма с неизвестной судьбой и захваченные прямо сейчас
+ * тоже в счёт: Google мог их принять, и перебрать его лимит хуже, чем недобрать свой.
+ */
 export function usage24h(senderId, now = Date.now()) {
   const since = nowIso(now - DAY_MS);
-  return db.prepare('SELECT COUNT(*) AS n FROM mail_test_sends WHERE sender_id = ? AND sent_at > ?').get(senderId, since).n;
+  return db
+    .prepare(
+      `SELECT (SELECT COUNT(*) FROM mail_test_sends WHERE sender_id = ? AND sent_at > ?)
+            + (SELECT COUNT(*) FROM mail_sends WHERE sender_id = ?
+                 AND ((status IN ('sent', 'unknown') AND sent_at > ?) OR status = 'sending')) AS n`
+    )
+    .get(senderId, since, senderId, since).n;
 }
 
 /* --------------------------------- ящики --------------------------------- */

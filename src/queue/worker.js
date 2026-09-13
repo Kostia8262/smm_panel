@@ -260,7 +260,34 @@ function launch(postId) {
     });
 }
 
+/**
+ * Рассылка писем (src/mail/runner.js) — свой частый цикл и свой флаг
+ * занятости: пауза между письмами — секунды, и ждать минутного тика постов
+ * значило бы слать по письму в минуту. Долгая выгрузка видео письма не держит,
+ * и наоборот. Одна и та же ошибка пишется в журнал раз в десять минут, а не
+ * каждые пять секунд.
+ */
+const MAIL_TICK_MS = Number(process.env.MAIL_TICK_MS || 5000);
+let mailBusy = false;
+let mailError = { text: '', at: 0 };
+async function mailTick() {
+  if (mailBusy) return;
+  mailBusy = true;
+  try {
+    const { mailStep } = await import('../mail/runner.js');
+    await mailStep();
+  } catch (err) {
+    if (err.message !== mailError.text || Date.now() - mailError.at > 10 * 60 * 1000) {
+      log('warn', `рассылка: отправщик споткнулся: ${err.message}`);
+      mailError = { text: err.message, at: Date.now() };
+    }
+  } finally {
+    mailBusy = false;
+  }
+}
+
 log('info', `воркер запущен, тик ${TICK_MS / 1000} с`);
 recoverStuck(db, log);
 tick();
 setInterval(tick, TICK_MS);
+setInterval(mailTick, MAIL_TICK_MS);

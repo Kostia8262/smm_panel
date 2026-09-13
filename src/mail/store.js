@@ -479,6 +479,11 @@ function suppress(row, reason, note = null) {
     `INSERT INTO mail_suppressions (project_id, email_hash, reason, note) VALUES (?, ?, ?, ?)
      ON CONFLICT(project_id, email_hash) DO UPDATE SET reason = excluded.reason, note = excluded.note`
   ).run(row.project_id, emailHash(row.email), reason, note);
+  // Письма, ещё ждущие в очереди рассылок школы, этому человеку уже не уходят.
+  prepared(
+    `UPDATE mail_sends SET status = 'skipped', error = ?
+     WHERE status = 'queued' AND email = ? AND campaign_id IN (SELECT id FROM mail_campaigns WHERE project_id = ?)`
+  ).run(reason === 'unsubscribed' || reason === 'manual' ? 'отписался' : 'адрес не принимает письма', row.email, row.project_id);
   const status = STATUS_BY_REASON[reason];
   if (status) {
     const at = nowIso();
@@ -490,6 +495,14 @@ function suppress(row, reason, note = null) {
       row.id
     );
   }
+}
+
+/** Google не принял адрес при отправке: в стоп-лист школы, контакт — «ошибочный». */
+export function markInvalid(contactId, note) {
+  const row = getContactRow(contactId);
+  if (!row) return;
+  suppress(row, 'invalid', String(note || '').slice(0, 300) || null);
+  log('warn', `рассылка: Google не принял адрес ${maskEmail(row.email)} — отмечен ошибочным`);
 }
 
 /* ---------------------------- массовые действия ---------------------------- */
@@ -664,6 +677,13 @@ export function erase(id) {
       `INSERT INTO mail_suppressions (project_id, email_hash, reason, note) VALUES (?, ?, 'erased', NULL)
        ON CONFLICT(project_id, email_hash) DO UPDATE SET reason = 'erased', note = NULL`
     ).run(row.project_id, emailHash(row.email));
+    // В истории рассылок адрес тоже стирается: строка остаётся для счёта, человека в ней нет.
+    prepared(
+      `UPDATE mail_sends SET email = 'erased-' || id, name = '',
+              status = CASE WHEN status = 'queued' THEN 'skipped' ELSE status END,
+              error = CASE WHEN status = 'queued' THEN 'стёрт по просьбе' ELSE error END
+       WHERE email = ? AND campaign_id IN (SELECT id FROM mail_campaigns WHERE project_id = ?)`
+    ).run(row.email, row.project_id);
     prepared('DELETE FROM mail_contacts WHERE id = ?').run(row.id);
     db.exec('COMMIT');
   } catch (err) {

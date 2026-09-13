@@ -153,9 +153,70 @@ function publicCampaign(row) {
     approvedBy: row.approved_by ? db.prepare('SELECT name FROM staff WHERE id = ?').get(row.approved_by)?.name || null : null,
     testedCurrent: tested,
     contentHash: row.content_hash,
+    approvedCurrent: Boolean(row.approved_hash) && row.approved_hash === row.content_hash,
+    scheduledAt: row.scheduled_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    pauseReason: row.pause_reason,
+    progress: progressOf(row.id),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+export const SEND_STATUS = {
+  queued: 'в очереди',
+  sending: 'отправляется',
+  sent: 'ушло',
+  failed: 'не ушло',
+  skipped: 'пропущено',
+  unknown: 'судьба неизвестна',
+  cancelled: 'отменено',
+};
+
+/** Письма рассылки поимённо: сначала беды, потом ушедшие. */
+export function listSends(campaignId, { status = '', page = 1, pageSize = 50 } = {}) {
+  const where = ['campaign_id = ?'];
+  const params = [Number(campaignId)];
+  if (status && SEND_STATUS[status]) {
+    where.push('status = ?');
+    params.push(status);
+  }
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM mail_sends WHERE ${where.join(' AND ')}`).get(...params).n;
+  const rows = db
+    .prepare(
+      `SELECT id, email, name, status, attempts, sent_at, error FROM mail_sends WHERE ${where.join(' AND ')}
+       ORDER BY CASE status WHEN 'failed' THEN 0 WHEN 'unknown' THEN 1 WHEN 'sending' THEN 2 WHEN 'queued' THEN 3 ELSE 4 END, id
+       LIMIT ? OFFSET ?`
+    )
+    .all(...params, pageSize, (page - 1) * pageSize);
+  return {
+    total,
+    page,
+    pageSize,
+    statuses: SEND_STATUS,
+    sends: rows.map((r) => ({ id: r.id, email: r.email, name: r.name, status: r.status, statusTitle: SEND_STATUS[r.status], attempts: r.attempts, sentAt: r.sent_at, error: r.error })),
+  };
+}
+
+/** Строка письма как в базе — отправщику нужен утверждённый отпечаток и карта ссылок. */
+export function campaignRow(id) {
+  return rowOf(id);
+}
+
+/**
+ * Сколько писем рассылки в каком состоянии. До старта снимка нет — и счётчиков нет.
+ * @returns {{total: number, queued: number, sending: number, sent: number, failed: number, skipped: number, unknown: number, cancelled: number}|null}
+ */
+export function progressOf(campaignId) {
+  const rows = db.prepare('SELECT status, COUNT(*) AS n FROM mail_sends WHERE campaign_id = ? GROUP BY status').all(Number(campaignId));
+  if (!rows.length) return null;
+  const out = { total: 0, queued: 0, sending: 0, sent: 0, failed: 0, skipped: 0, unknown: 0, cancelled: 0 };
+  for (const r of rows) {
+    out[r.status] = r.n;
+    out.total += r.n;
+  }
+  return out;
 }
 
 export function getCampaign(id, projectId = null) {
@@ -180,7 +241,11 @@ export function listCampaigns(projectId) {
         sender: c.sender?.email || null,
         updatedAt: c.updatedAt,
         testedCurrent: c.testedCurrent,
-        audience: audience(c).recipients,
+        scheduledAt: c.scheduledAt,
+        finishedAt: c.finishedAt,
+        pauseReason: c.pauseReason,
+        progress: c.progress,
+        audience: c.progress ? c.progress.total : audience(c).recipients,
       };
     });
 }

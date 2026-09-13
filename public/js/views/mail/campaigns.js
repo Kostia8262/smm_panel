@@ -10,6 +10,8 @@ import { api } from '../../api.js';
 import { el, button, iconButton, panel, empty, skeleton, toast } from '../../ui.js';
 import { num, day, plural, mailTabs, CAMPAIGN_TAG, ADDRESSES } from './common.js';
 
+const time = (iso) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+
 export function campaignsView(ctx) {
   const root = el('div', 'view');
   const project = ctx.state.projects.find((p) => p.id === ctx.state.projectId);
@@ -18,6 +20,7 @@ export function campaignsView(ctx) {
 
   const host = panel(null);
   host.append(skeleton(48), skeleton(48));
+  let pollTimer = null;
   root.append(mailTabs(ctx, 'letters'), host);
   load();
   return root;
@@ -35,6 +38,11 @@ export function campaignsView(ctx) {
 
   function render(campaigns) {
     host.textContent = '';
+    // Идущая рассылка — счётчики обновляются сами, пока экран открыт.
+    clearTimeout(pollTimer);
+    if (campaigns.some((c) => ['scheduled', 'sending'].includes(c.status))) {
+      pollTimer = setTimeout(() => root.isConnected && load(), 15000);
+    }
     if (!campaigns.length) {
       host.append(
         empty(
@@ -58,7 +66,7 @@ export function campaignsView(ctx) {
       ['Письмо', ''],
       ['Состояние', ''],
       ['Базы', ''],
-      ['Получат', 'mail-num'],
+      ['Адресатов', 'mail-num'],
       ['Изменено', ''],
       ['', ''],
     ]) {
@@ -91,6 +99,19 @@ export function campaignsView(ctx) {
     // пробное письмо уже ничего не решает.
     if (['draft', 'review'].includes(c.status)) {
       stateBox.append(el('span', `mail-sub${c.testedCurrent ? ' mail-sub--ok' : ''}`, c.testedCurrent ? 'пробное письмо этой версии ушло' : 'пробного письма этой версии нет'));
+    }
+    if (c.status === 'scheduled') stateBox.append(el('span', 'mail-sub', `начнётся ${day(c.scheduledAt)} в ${time(c.scheduledAt)}`));
+    if (c.progress) {
+      const p = c.progress;
+      const done = p.sent + p.failed + p.skipped + p.unknown + p.cancelled;
+      const meter = el('div', 'meter mail-list-meter');
+      const fill = el('div', 'meter__fill');
+      fill.style.setProperty('--value', String(p.total ? done / p.total : 0));
+      meter.append(fill);
+      const bad = [p.failed && `не ушло ${num(p.failed)}`, p.unknown && `неизвестно ${num(p.unknown)}`].filter(Boolean).join(', ');
+      stateBox.append(meter, el('span', 'mail-sub', `ушло ${num(p.sent)} из ${num(p.total)}${bad ? ` · ${bad}` : ''}`));
+      if (c.status === 'sending' && c.delivery?.forecast) stateBox.append(el('span', 'mail-sub', `закончится ~${day(c.delivery.forecast.finishAt)} в ${time(c.delivery.forecast.finishAt)}`));
+      if (c.status === 'paused' && c.pauseReason) stateBox.append(el('span', 'mail-sub mail-sub--warn', c.pauseReason));
     }
     tdState.append(stateBox);
     tr.append(tdState);

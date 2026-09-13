@@ -1234,6 +1234,52 @@ const MIGRATIONS = [
       CREATE INDEX idx_mail_media_stored ON mail_media(stored_name);
     `,
   },
+  {
+    /*
+     * Рассылка, фаза 4: отправка (docs/рассылка.md, §10).
+     *
+     * Одно письмо одному человеку — строка `mail_sends`. Снимок получателей
+     * делается в момент старта: база, поправленная посреди многодневной
+     * рассылки, не даёт ни дублей, ни пропусков. UNIQUE (campaign_id, email) —
+     * страховка самой базы от второго письма тому же адресу в той же рассылке.
+     *
+     * `sending` — письмо захвачено отправщиком; не дождались ответа Google —
+     * `unknown`, и повторять его сама очередь не будет: дубль хуже пропажи.
+     *
+     * `link_map` — короткие ссылки рассылки: одна на адрес в письме, общая
+     * для всех получателей. `hold_reason` — почему ящик придержан до
+     * `paused_until` (Google попросил притормозить или кончился лимит).
+     */
+    name: '028-mail-sends',
+    sql: `
+      CREATE TABLE mail_sends (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id   INTEGER NOT NULL REFERENCES mail_campaigns(id) ON DELETE CASCADE,
+        sender_id     INTEGER NOT NULL REFERENCES mail_senders(id),
+        contact_id    INTEGER REFERENCES mail_contacts(id) ON DELETE SET NULL,
+        email         TEXT NOT NULL,
+        name          TEXT NOT NULL DEFAULT '',
+        via_list_id   INTEGER,
+        status        TEXT NOT NULL DEFAULT 'queued',
+        attempts      INTEGER NOT NULL DEFAULT 0,
+        not_before    TEXT,
+        sending_since TEXT,
+        sent_at       TEXT,
+        gmail_id      TEXT,
+        error         TEXT,
+        UNIQUE (campaign_id, email)
+      );
+
+      CREATE INDEX idx_mail_sends_queue ON mail_sends(campaign_id, status, id);
+      CREATE INDEX idx_mail_sends_sender_day ON mail_sends(sender_id, sent_at);
+      CREATE INDEX idx_mail_sends_contact ON mail_sends(contact_id);
+      CREATE INDEX idx_mail_sends_email ON mail_sends(email, status);
+
+      ALTER TABLE mail_campaigns ADD COLUMN link_map TEXT;
+      ALTER TABLE mail_senders ADD COLUMN hold_reason TEXT;
+      ALTER TABLE links ADD COLUMN mail_campaign_id INTEGER REFERENCES mail_campaigns(id) ON DELETE SET NULL;
+    `,
+  },
 ];
 
 function migrate() {
