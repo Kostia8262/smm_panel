@@ -97,15 +97,21 @@ for (const project of projects) {
  *
  * У Facebook и Instagram его отдаёт `debug_token`, и спрашивать надо токеном
  * приложения — отсюда appId и appSecret из карточки Facebook того же проекта.
- * У Threads своего `debug_token` нет: там разрешения видно только косвенно —
- * по тому, отвечает ли конкретный вызов. Поэтому для Threads печатаем честное
- * «неизвестно», а не выдуманный список.
+ *
+ * У Threads `debug_token` тоже есть, хотя в документации его нет, — выяснено
+ * 13.09.2026, когда три токена подряд не умели удалять. Спрашивать можно самим
+ * токеном. Именно он показал, что «Генератор маркеров» выдаёт фиксированный
+ * набор прав и не берёт добавленные в сценарий `threads_delete` и
+ * `threads_keyword_search`.
  */
 async function readScopes(platform, token, projectId) {
-  // Список разрешений Threads не отдаёт ни одним вызовом: `threads_delete`
-  // проверяется только пробой удаления. Возвращаем признак «спрашивать
-  // негде», а печатает это вызывающий — иначе выходили две строки подряд.
-  if (platform === 'threads') return 'unknown';
+  if (platform === 'threads') {
+    const res = await fetch(`https://graph.threads.net/v1.0/debug_token?input_token=${token}&access_token=${token}`);
+    const data = await res.json().catch(() => ({}));
+    // Не ответил — честное «неизвестно», а не выдуманный список.
+    if (data.error || !Array.isArray(data.data?.scopes)) return 'unknown';
+    return data.data.scopes;
+  }
 
   const fb = credentialsFor(projectId, 'facebook');
   if (!fb.appId || !fb.appSecret) throw new Error('не заполнены ID и секрет приложения в карточке Facebook');
