@@ -43,6 +43,7 @@ const ACCESS = {
   settings: ['owner', 'smm'],
   mail: ['owner', 'smm'],
   mail_contacts: ['owner'],
+  mail_senders: ['owner'],
 };
 
 function can(area) {

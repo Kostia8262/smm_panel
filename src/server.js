@@ -154,6 +154,7 @@ app.get('/login', (req, res) => {
 installAuth(app, {
   publicPaths: [
     '/login', '/css/', '/js/', '/media/', '/healthz', '/favicon.ico', '/favicon.svg', '/r/',
+    '/u/', // отписка по ссылке из письма: у получателя нет входа в панель
     '/api/ingest/observed', // расширение ходит с ключом, а не с сессией
   ],
   secureCookies: String(process.env.PUBLIC_BASE_URL || '').startsWith('https://'),
@@ -1685,7 +1686,7 @@ app.put('/api/settings', requireAccess('platforms'), (req, res) => {
 
 // Базы адресов, загрузка с распознаванием (docs/рассылка.md, фаза 1).
 const { mountMailRoutes } = await import('./mail/routes.js');
-mountMailRoutes(app, { requireAccess, currentProjectId, can: staffDb.can });
+mountMailRoutes(app, { requireAccess, currentProjectId, can: staffDb.can, publicBase });
 
 /* --------------------------------- служебное --------------------------------- */
 

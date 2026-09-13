@@ -277,6 +277,16 @@ export const api = {
   decideMailImport: (id, body) => request(withProject(`/api/mail/imports/${id}/decisions`), { method: 'PUT', body }),
   commitMailImport: (id, body) => request(withProject(`/api/mail/imports/${id}/commit`), { method: 'POST', body }),
   discardMailImport: (id) => request(withProject(`/api/mail/imports/${id}`), { method: 'DELETE' }),
+
+  /* Рассылка: ящики-отправители (фаза 2). Ящики общие на панель, школа — только для пробного письма. */
+  mailSenders: () => request('/api/mail/senders'),
+  mailSenderAlerts: () => request('/api/mail/senders/alerts'),
+  saveGoogleApp: (body) => request('/api/mail/google-app', { method: 'PUT', body }),
+  startGoogleOauth: (loginHint = '') => request(withProject('/api/mail/senders/oauth/start'), { method: 'POST', body: { loginHint } }),
+  updateMailSender: (id, body) => request(`/api/mail/senders/${id}`, { method: 'PUT', body }),
+  checkMailSender: (id) => request(`/api/mail/senders/${id}/check`, { method: 'POST' }),
+  testMailSender: (id, to = []) => request(withProject(`/api/mail/senders/${id}/test`), { method: 'POST', body: { to } }),
+  disconnectMailSender: (id) => request(`/api/mail/senders/${id}`, { method: 'DELETE' }),
 };
 
 export { ApiError };

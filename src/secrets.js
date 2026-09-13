@@ -15,7 +15,7 @@
  * не расшифруется молча, а честно упадёт.
  */
 
-import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
+import { randomBytes, createCipheriv, createDecipheriv, hkdfSync } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -99,4 +99,20 @@ export function decryptFields(obj = {}) {
 export function tail(value, keep = 4) {
   const s = String(value || '');
   return s ? `…${s.slice(-keep)}` : '';
+}
+
+/**
+ * Отдельный ключ под отдельную задачу, выведенный из ключа панели (HKDF).
+ *
+ * Ссылка отписки в письме подписывается HMAC, а не шифруется: её прочтёт
+ * почтовый сканер, и в ней нечего прятать, но подделать нельзя. Подписывать
+ * самим ключом шифрования токенов значило бы использовать один ключ для двух
+ * разных целей — утечка подписей в тысячах писем не должна давать ни шага к
+ * ключу, которым зашифрованы доступы площадок.
+ *
+ * @param {string} label — назначение ключа, например 'mail-unsubscribe'
+ * @returns {Buffer} 32 байта
+ */
+export function deriveKey(label) {
+  return Buffer.from(hkdfSync('sha256', loadKey(), Buffer.from('smm-panel'), Buffer.from(String(label)), 32));
 }

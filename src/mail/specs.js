@@ -144,3 +144,34 @@ export const NAME_HEADERS = {
   first: ['first name', 'firstname', 'given name', 'имя', "ім'я", 'імя'],
   last: ['last name', 'lastname', 'surname', 'family name', 'фамилия', 'прізвище'],
 };
+
+/* ------------------------------ отправка (фаза 2) ------------------------------ */
+
+/**
+ * Потолки и дозирование ящика-отправителя (docs/рассылка.md, §8.4).
+ *
+ * Потолок Google — скользящие 24 часа, а не календарные сутки, и в него
+ * входят письма, отправленные человеком руками из того же ящика: панель их
+ * не видит. Поэтому панель по умолчанию берёт себе 80 %.
+ */
+export const SENDING = {
+  googleDaily: { gmail: 500, workspace: 2000 },
+  panelShare: 0.8,
+  /**
+   * Прогрев нового ящика: [до какого дня включительно, писем в сутки]. Резкий
+   * старт с сотен одинаковых писем Google может принять за взлом ящика.
+   */
+  warmup: [
+    [3, 50],
+    [7, 100],
+    [14, 200],
+    [21, 400],
+  ],
+  window: { from: '08:00', to: '21:00', timeZone: 'Europe/Kyiv' },
+  /** Сколько адресов можно указать для пробного письма. */
+  testRecipientsMax: 5,
+};
+
+/** Права, которые просим у Google. Больше — нельзя: панель только отправляет. */
+export const GOOGLE_SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/gmail.send'];
+export const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';

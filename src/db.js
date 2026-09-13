@@ -1038,6 +1038,73 @@ const MIGRATIONS = [
     name: '024t-target-options',
     sql: `ALTER TABLE post_targets ADD COLUMN options TEXT;`,
   },
+  {
+    /*
+     * Рассылка, фаза 2: ящики-отправители, пробные письма, отписки
+     * (docs/рассылка.md, §4 и §8).
+     *
+     * Ящик — общий на панель, а не на школу: потолок Google считается на ящик.
+     * В базе только refresh-токен шифротекстом; access-токен живёт час и
+     * держится в памяти процесса. `token_expires_at` заполнен, только если
+     * Google сам назвал срок — так выглядит приложение, забытое в Testing.
+     *
+     * Пробные письма пишутся отдельно от будущей очереди рассылок: по ним
+     * видно «эту версию письма смотрели глазами», и они входят в суточный
+     * счётчик ящика.
+     */
+    name: '025-mail-senders',
+    sql: `
+      CREATE TABLE mail_senders (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider          TEXT NOT NULL DEFAULT 'gmail',
+        email             TEXT NOT NULL UNIQUE,
+        display_name      TEXT NOT NULL DEFAULT '',
+        kind              TEXT NOT NULL,
+        refresh_token_enc TEXT,
+        scopes            TEXT NOT NULL DEFAULT '',
+        token_saved_at    TEXT,
+        token_expires_at  TEXT,
+        daily_cap         INTEGER,
+        warmup_from       TEXT,
+        window_from       TEXT NOT NULL DEFAULT '08:00',
+        window_to         TEXT NOT NULL DEFAULT '21:00',
+        paused_until      TEXT,
+        state             TEXT NOT NULL DEFAULT 'unknown',
+        checked_at        TEXT,
+        last_error        TEXT,
+        warned_stage      TEXT,
+        connected_by      INTEGER REFERENCES staff(id) ON DELETE SET NULL,
+        created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        disconnected_at   TEXT
+      );
+
+      CREATE TABLE mail_test_sends (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id    INTEGER NOT NULL REFERENCES mail_senders(id),
+        campaign_id  INTEGER,
+        content_hash TEXT,
+        to_email     TEXT NOT NULL,
+        gmail_id     TEXT,
+        sent_by      INTEGER REFERENCES staff(id) ON DELETE SET NULL,
+        sent_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+
+      CREATE TABLE mail_events (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  INTEGER NOT NULL,
+        campaign_id INTEGER,
+        contact_id  INTEGER,
+        type        TEXT NOT NULL,
+        source      TEXT NOT NULL,
+        note        TEXT,
+        at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+
+      CREATE INDEX idx_mail_tests_sender ON mail_test_sends(sender_id, sent_at);
+      CREATE INDEX idx_mail_events_campaign ON mail_events(campaign_id, type);
+      CREATE INDEX idx_mail_events_contact ON mail_events(contact_id, at);
+    `,
+  },
 ];
 
 function migrate() {

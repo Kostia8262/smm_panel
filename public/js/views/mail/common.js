@@ -148,3 +148,23 @@ export function setHashParams(path, params) {
   const query = clean.toString();
   history.replaceState(null, '', `${path}${query ? `?${query}` : ''}`);
 }
+
+/**
+ * Вкладки раздела: «Базы» и «Ящики». Ящики видит только владелец — у
+ * СММщика вкладка одна, и полосу из одной вкладки не рисуем.
+ */
+export function mailTabs(ctx, active) {
+  if (!ctx.can('mail_senders')) return null;
+  const nav = el('nav', 'mail-tabs');
+  nav.setAttribute('aria-label', 'Разделы рассылки');
+  for (const [id, title, hash] of [
+    ['lists', 'Базы', '#/mail'],
+    ['senders', 'Ящики', '#/mail/senders'],
+  ]) {
+    const a = el('a', 'mail-tab', title);
+    a.href = hash;
+    if (id === active) a.setAttribute('aria-current', 'page');
+    nav.append(a);
+  }
+  return nav;
+}

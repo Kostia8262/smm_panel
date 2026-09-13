@@ -133,6 +133,14 @@ async function watchTokens() {
     await sweepTokens();
   } catch (err) {
     log('warn', `сторож токенов не отработал: ${err.message}`);
+  }
+  // Ящики рассылки — тем же обходом: у них та же беда, доступ умирает молча
+  // (смена пароля Google, отзыв в аккаунте, режим Testing).
+  try {
+    const { sweepSenders } = await import('../mail/sender/senders.js');
+    await sweepSenders();
+  } catch (err) {
+    log('warn', `рассылка: сторож ящиков не отработал: ${err.message}`);
   } finally {
     tokensBusy = false;
   }

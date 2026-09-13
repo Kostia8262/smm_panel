@@ -1,0 +1,59 @@
+/* Страница отписки по ссылке из письма. Её видит ученик, а не команда, но мир
+   тот же — тёмная студия академии; цвета и размеры только из tokens.css.
+   Встроенных стилей нет: CSP панели их запрещает. */
+
+body {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-6) var(--sp-4);
+}
+
+.u-card {
+  width: 100%;
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-8) var(--sp-6);
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+}
+
+.u-school {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.u-card h1 { font-size: var(--fs-xl); }
+
+.u-text { color: var(--ink-2); font-size: var(--fs-base); }
+
+.u-note { color: var(--ink-3); font-size: var(--fs-xs); }
+
+.u-form { margin-top: var(--sp-2); }
+
+.u-btn {
+  width: 100%;
+  height: 44px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--gold);
+  background: var(--gold);
+  color: var(--gold-ink);
+  font: 600 var(--fs-base) / 1 var(--font);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.u-btn:hover { background: var(--gold-bright); border-color: var(--gold-bright); }
+
+.u-btn--quiet { background: transparent; color: var(--ink); border-color: var(--line); }
+.u-btn--quiet:hover { background: var(--surface-2); border-color: var(--line); }
+
+.u-btn:focus-visible { outline: none; box-shadow: var(--ring); }

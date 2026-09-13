@@ -11,20 +11,28 @@
 import express from 'express';
 import multer from 'multer';
 import { log } from '../db.js';
-import { CONSENT_BASES, CONTACT_STATUS, IMPORT_LIMITS } from './specs.js';
+import { CONSENT_BASES, CONTACT_STATUS, IMPORT_LIMITS, SENDING } from './specs.js';
 import * as store from './store.js';
 import * as pipeline from './import/pipeline.js';
+import * as senders from './sender/senders.js';
+import * as googleOauth from './sender/google-oauth.js';
+import * as unsubscribe from './unsubscribe.js';
+import { makeState, readState } from '../oauth/threads.js';
+import { getProject } from '../projects.js';
+import { tooManyAttempts } from '../ratelimit.js';
 
 const { MailError } = store;
 
 /**
  * @param {import('express').Express} app
- * @param {{requireAccess: (area: string) => Function, currentProjectId: (req: object) => number|null, can: (role: string, area: string) => boolean}} deps
+ * @param {{requireAccess: (area: string) => Function, currentProjectId: (req: object) => number|null,
+ *   can: (role: string, area: string) => boolean, publicBase: () => string}} deps
  */
-export function mountMailRoutes(app, { requireAccess, currentProjectId, can }) {
+export function mountMailRoutes(app, { requireAccess, currentProjectId, can, publicBase }) {
   const router = express.Router();
   const view = requireAccess('mail');
   const manage = requireAccess('mail_contacts');
+  const mailboxes = requireAccess('mail_senders');
 
   const upload = multer({
     storage: multer.memoryStorage(),
@@ -314,6 +322,168 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can }) {
       res.json({ ok: true });
     })
   );
+
+  /* ------------------------ ящики-отправители (фаза 2) ------------------------ */
+
+  /** Адрес возврата. До символа совпадает с вписанным в Google Cloud → Clients. */
+  const googleRedirectUri = () => `${publicBase()}/oauth/google`;
+
+  router.get(
+    '/api/mail/senders',
+    mailboxes,
+    handle((_req, res) => {
+      const googleApp = senders.googleApp();
+      res.json({
+        app: { clientId: googleApp.clientId, hasSecret: Boolean(googleApp.clientSecret), redirectUri: googleRedirectUri() },
+        senders: senders.listSenders({ includeDisconnected: true }),
+        limits: { window: SENDING.window, warmup: SENDING.warmup, testRecipientsMax: SENDING.testRecipientsMax },
+      });
+    })
+  );
+
+  router.get(
+    '/api/mail/senders/alerts',
+    view,
+    handle((_req, res) => res.json(senders.senderAlerts()))
+  );
+
+  router.put(
+    '/api/mail/google-app',
+    mailboxes,
+    handle((req, res) => {
+      senders.saveGoogleApp(req.body || {});
+      const googleApp = senders.googleApp();
+      res.json({ app: { clientId: googleApp.clientId, hasSecret: Boolean(googleApp.clientSecret), redirectUri: googleRedirectUri() } });
+    })
+  );
+
+  /**
+   * Ссылка на окно согласия Google. Отдаётся ссылкой, а не редиректом: экран
+   * сперва объясняет по-человечески, если приложение не заполнено.
+   */
+  router.post(
+    '/api/mail/senders/oauth/start',
+    mailboxes,
+    handle((req, res) => {
+      const googleApp = senders.googleApp();
+      if (!googleApp.configured) throw new MailError('Сначала впишите Client ID и Client secret приложения Google');
+      const state = makeState({ projectId: projectOf(req), staffId: req.user.id, platform: 'google' });
+      res.json({
+        url: googleOauth.authorizeUrl({
+          clientId: googleApp.clientId,
+          redirectUri: googleRedirectUri(),
+          state,
+          loginHint: String(req.body?.loginHint || ''),
+        }),
+      });
+    })
+  );
+
+  /** Возврат из окна Google. Страница, а не API: сюда приходит браузер человека. */
+  router.get('/oauth/google', async (req, res) => {
+    const back = (params) => res.redirect(`/?${new URLSearchParams({ oauth: 'google', ...params })}#/mail/senders`);
+    if (!req.user || !can(req.user.role, 'mail_senders')) return back({ result: 'error', message: 'подключать ящики может только владелец' });
+    if (req.query.error) {
+      const reason = req.query.error === 'access_denied' ? 'в окне Google нажали «Отмена»' : String(req.query.error_description || req.query.error);
+      return back({ result: 'error', message: reason });
+    }
+    try {
+      readState(String(req.query.state || ''), { staffId: req.user.id, platform: 'google' });
+      const googleApp = senders.googleApp();
+      const out = await googleOauth.exchangeCode({
+        clientId: googleApp.clientId,
+        clientSecret: googleApp.clientSecret,
+        redirectUri: googleRedirectUri(),
+        code: req.query.code,
+      });
+      const sender = senders.saveConnected({
+        email: out.email,
+        refreshToken: out.refreshToken,
+        scopes: out.scopes,
+        refreshExpiresAt: out.refreshExpiresAt,
+        staffId: req.user.id,
+      });
+      return back({ result: 'ok', email: sender.email, temporary: out.refreshExpiresAt ? '1' : '' });
+    } catch (err) {
+      log('warn', `рассылка: подключение ящика не удалось: ${err.message}`);
+      return back({ result: 'error', message: err.message });
+    }
+  });
+
+  router.put(
+    '/api/mail/senders/:id',
+    mailboxes,
+    handle((req, res) => res.json({ sender: senders.updateSender(req.params.id, req.body || {}) }))
+  );
+
+  router.post(
+    '/api/mail/senders/:id/check',
+    mailboxes,
+    handle(async (req, res) => {
+      try {
+        res.json({ sender: await senders.checkSender(req.params.id) });
+      } catch (err) {
+        if (err instanceof MailError) throw err;
+        res.status(502).json({ error: err.message, sender: senders.getSender(req.params.id) });
+      }
+    })
+  );
+
+  router.post(
+    '/api/mail/senders/:id/test',
+    mailboxes,
+    handle(async (req, res) => {
+      try {
+        const result = await senders.sendTest(req.params.id, {
+          to: Array.isArray(req.body?.to) ? req.body.to : [],
+          projectId: projectOf(req),
+          staffId: req.user.id,
+          publicBase: publicBase(),
+        });
+        res.json({ ...result, sender: senders.getSender(req.params.id) });
+      } catch (err) {
+        if (err instanceof MailError) throw err;
+        res.status(502).json({ error: err.message, sender: senders.getSender(req.params.id) });
+      }
+    })
+  );
+
+  router.delete(
+    '/api/mail/senders/:id',
+    mailboxes,
+    handle(async (req, res) => {
+      await senders.disconnect(req.params.id);
+      res.json({ ok: true });
+    })
+  );
+
+  /* ------------------------------ отписка: наружу ------------------------------ */
+
+  const unsubscribeHandler = (req, res) => {
+    // Считаем все обращения, но с запасом: одна семья открывает ссылки из
+    // нескольких писем, а перебирать токены смысла нет — они подписаны.
+    if (tooManyAttempts(`unsubscribe:${req.ip}`, { limit: 60 })) {
+      return res.status(429).type('text/plain').send('Забагато спроб. Спробуйте за кілька хвилин.');
+    }
+    let out;
+    try {
+      out = unsubscribe.handle({
+        token: req.params.token,
+        method: req.method,
+        body: req.body || {},
+        projectTitle: (id) => getProject(id)?.title || '',
+      });
+    } catch (err) {
+      log('error', `рассылка: сбой страницы отписки: ${err.message}`);
+      return res.status(500).type('text/plain').send('Щось пішло не так. Напишіть нам — відпишемо вручну.');
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Robots-Tag', 'noindex');
+    if (out.text) return res.status(out.status).type('text/plain').send(out.text);
+    res.status(out.status).type('html').send(out.html);
+  };
+  router.get('/u/:token', unsubscribeHandler);
+  router.post('/u/:token', express.urlencoded({ extended: false, limit: '10kb' }), unsubscribeHandler);
 
   app.use(router);
 }

@@ -57,6 +57,7 @@ export const ACCESS = {
   // для письма, а сами адреса, загрузку и выгрузку — только владелец.
   mail: ['owner', 'smm'],
   mail_contacts: ['owner'],
+  mail_senders: ['owner'], // подключённый ящик — это право слать письма от имени школы
 };
 
 export function can(role, area) {

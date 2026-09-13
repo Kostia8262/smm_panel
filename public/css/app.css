@@ -2205,3 +2205,54 @@ a.btn { text-decoration: none; }
 .mail-name-cell { min-width: 200px; }
 /* Место под карточку, форму или предупреждение: пустое не должно давать отступ в ритме .view. */
 .mail-slot:empty { display: none; }
+
+/* ---------------------- рассылка: вкладки и ящики (фаза 2) ---------------------- */
+
+.mail-tabs { display: flex; gap: var(--sp-1); border-bottom: 1px solid var(--line-soft); margin-bottom: calc(var(--sp-2) * -1); }
+.mail-tab {
+  padding: var(--sp-2) var(--sp-4);
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-2);
+  font-weight: 600;
+  text-decoration: none;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.mail-tab:hover { color: var(--ink); }
+.mail-tab[aria-current="page"] { color: var(--gold-bright); border-bottom-color: var(--gold); }
+
+.mail-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--sp-3); }
+.mail-fact { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mail-fact__value { font-size: var(--fs-base); font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.mail-fact__sub { font-size: var(--fs-xs); color: var(--ink-3); }
+.mail-fact .meter { margin-top: 2px; }
+
+.mail-form__wide { grid-column: 1 / -1; }
+.mail-copy {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 2px 2px 2px var(--sp-3);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.mail-copy__value { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--ink); font-size: var(--fs-xs); }
+
+.mail-sender {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+}
+.mail-sender--dead,
+.mail-sender--error { border-color: var(--danger-dim); }
+.mail-sender__head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
+.mail-sender__title { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; min-width: 0; }
+.mail-sender__title .mail-name { font-size: var(--fs-base); overflow-wrap: anywhere; }
+.mail-sender__settings { padding-top: var(--sp-3); border-top: 1px solid var(--line-soft); }
+/* Client ID длинный: в четырёх узких колонках общей сетки он обрезался. */
+.mail-app-form { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }

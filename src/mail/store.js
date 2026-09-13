@@ -557,6 +557,75 @@ export function bulk({ projectId, ids, action, listId = null, targetListId = nul
   return { done };
 }
 
+/* -------------------------- отписка самим человеком -------------------------- */
+
+function recordEvent({ projectId, campaignId = null, contactId = null, type, source, note = null }) {
+  prepared(
+    'INSERT INTO mail_events (project_id, campaign_id, contact_id, type, source, note) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(projectId, campaignId, contactId, type, source, note);
+}
+
+/**
+ * Человек отписался сам — по ссылке из письма или кнопкой почтовой программы.
+ * Повторная отписка ничего не ломает и не плодит событий.
+ *
+ * @param {{campaignId?: number|null, source: 'page'|'one_click'}} opts
+ * @returns {'unsubscribed'|'already'|'gone'}
+ */
+export function selfUnsubscribe(contactId, projectId, { campaignId = null, source }) {
+  const row = getContactRow(contactId);
+  if (!row || row.project_id !== Number(projectId)) return 'gone';
+  const hit = prepared('SELECT reason FROM mail_suppressions WHERE project_id = ? AND email_hash = ?').get(row.project_id, emailHash(row.email));
+  if (hit) return 'already';
+  db.exec('BEGIN');
+  try {
+    suppress(row, 'unsubscribed');
+    recordEvent({ projectId: row.project_id, campaignId, contactId: row.id, type: 'unsubscribed', source });
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  log('info', `рассылка: ${maskEmail(row.email)} отписался сам (${source === 'one_click' ? 'кнопкой почты' : 'по ссылке'})`);
+  return 'unsubscribed';
+}
+
+/**
+ * «Я випадково — повернути підписку» на странице отписки. Возвращается только
+ * то, что человек снял сам: отписку, сделанную владельцем по просьбе, и
+ * недоставляемый адрес страница не отменяет.
+ *
+ * @returns {'resubscribed'|'not_allowed'|'gone'}
+ */
+export function selfResubscribe(contactId, projectId, { campaignId = null } = {}) {
+  const row = getContactRow(contactId);
+  if (!row || row.project_id !== Number(projectId)) return 'gone';
+  const hit = prepared('SELECT reason FROM mail_suppressions WHERE project_id = ? AND email_hash = ?').get(row.project_id, emailHash(row.email));
+  if (!hit) return 'resubscribed';
+  if (hit.reason !== 'unsubscribed') return 'not_allowed';
+  db.exec('BEGIN');
+  try {
+    prepared('DELETE FROM mail_suppressions WHERE project_id = ? AND email_hash = ?').run(row.project_id, emailHash(row.email));
+    const at = nowIso();
+    prepared("UPDATE mail_contacts SET status = 'active', status_note = NULL, status_at = ?, updated_at = ? WHERE id = ?").run(at, at, row.id);
+    recordEvent({ projectId: row.project_id, campaignId, contactId: row.id, type: 'resubscribed', source: 'page' });
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  log('info', `рассылка: ${maskEmail(row.email)} вернул подписку сам — «я випадково»`);
+  return 'resubscribed';
+}
+
+/** Состояние для страницы отписки: подписан ли человек сейчас. */
+export function subscriptionState(contactId, projectId) {
+  const row = getContactRow(contactId);
+  if (!row || row.project_id !== Number(projectId)) return { state: 'gone' };
+  const hit = prepared('SELECT reason FROM mail_suppressions WHERE project_id = ? AND email_hash = ?').get(row.project_id, emailHash(row.email));
+  return { state: hit ? 'unsubscribed' : 'active', reason: hit?.reason || null, email: row.email };
+}
+
 /** Вернуть подписку — только с причиной: это решение против стоп-листа. */
 export function resubscribe(id, note) {
   const row = getContactRow(id);

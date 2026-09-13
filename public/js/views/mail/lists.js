@@ -8,7 +8,7 @@
 
 import { api } from '../../api.js';
 import { el, button, iconButton, panel, empty, skeleton, toast, note } from '../../ui.js';
-import { tile, num, day, plural, field, input, select, chip } from './common.js';
+import { tile, num, day, plural, field, input, select, chip, mailTabs } from './common.js';
 
 export function listsView(ctx) {
   const root = el('div', 'view');
@@ -34,7 +34,26 @@ export function listsView(ctx) {
   const listsHost = panel(null);
   listsHost.append(skeleton(48), skeleton(48));
 
-  root.append(pendingHost, summaryHost, listsHost);
+  // Беда с ящиком видна там, где владелец бывает, — на базах, а не только
+  // на вкладке ящиков, куда заходят раз в месяц.
+  const alertHost = el('div', 'mail-slot');
+  const tabs = mailTabs(ctx, 'lists');
+  if (tabs) root.append(tabs);
+  root.append(alertHost, pendingHost, summaryHost, listsHost);
+  if (ctx.can('mail_senders')) {
+    api
+      .mailSenderAlerts()
+      .then((alerts) => {
+        if (!alerts.count) return;
+        const box = note(
+          alerts.worst === 'danger' ? 'danger' : 'warn',
+          alerts.worst === 'danger' ? 'Ящик рассылки потерял доступ к Gmail' : 'С ящиком рассылки не всё в порядке',
+          'Письма с него не уйдут. Откройте вкладку «Ящики» — там сказано, что случилось и как подключить заново.'
+        );
+        alertHost.append(box);
+      })
+      .catch(() => {});
+  }
   load();
   return root;
 
