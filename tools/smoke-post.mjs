@@ -19,6 +19,8 @@
  *   --platforms a,b какие площадки (по умолчанию threads,facebook)
  *   --text "…"      свой текст; по умолчанию — служебная строка с отметкой времени
  *   --image URL     публичный JPEG: **обязателен для Instagram**, там текстом нельзя
+ *   --audio ID      трек из библиотеки Instagram к Reels (tools/audio-probe.mjs
+ *                   покажет id); громкости — --audio-volume и --video-volume
  *   --wait N        сколько секунд пост повисит перед удалением (по умолчанию 45)
  *   --keep          не удалять — тогда снимать руками
  *
@@ -56,6 +58,16 @@ const video = flag('video');
 // адаптер выбирает ленту — как делала панель до появления форматов.
 const formatId = flag('format');
 const waitSec = Number(flag('wait', 45));
+// Звук идёт тем же путём, что из очереди: адаптер сам проверит трек до контейнера.
+const audio = flag('audio')
+  ? {
+      id: String(flag('audio')),
+      type: 'music',
+      title: `трек ${flag('audio')}`,
+      audioVolume: Number(flag('audio-volume', 100)),
+      videoVolume: Number(flag('video-volume', 0)),
+    }
+  : null;
 const keep = has('keep');
 
 const media = [
@@ -145,10 +157,12 @@ for (const platform of platforms) {
       // Здесь это тот адрес, что передан ключом --image или --video.
       publicUrl: (m) => m.url,
       creds,
+      audio: platform === 'instagram' ? audio : null,
     });
     published.push({ platform, externalId: out.externalId, url: out.url });
     results.push({ platform, step: 'публикация', ok: true, externalId: out.externalId });
     console.log(`${platform}: опубликовано — ${out.externalId}${out.url ? ` · ${out.url}` : ''}`);
+    if (out.audioType !== undefined) console.log(`${platform}: звук по словам площадки — ${out.audioType ?? 'НЕТ'}`);
     if (out.warning) console.log(`${platform}: ЗАМЕЧАНИЕ — ${out.warning}`);
   } catch (err) {
     results.push({ platform, step: 'публикация', ok: false, error: err.message });
