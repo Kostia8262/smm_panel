@@ -245,7 +245,20 @@ test('кнопка без ссылки, с кривой ссылкой или у
 
 test('публикация: превью выключено, кнопка под последним сообщением, закреп без уведомления', async (t) => {
   t.after(() => (globalThis.fetch = realFetch));
-  const calls = fakeBot({ pinChatMessage: () => true });
+  // Обновления бота: чужое «закреплено» из другого канала и наше — на пост 100.
+  let served = false;
+  const calls = fakeBot({
+    pinChatMessage: () => true,
+    getUpdates: () => {
+      if (served) return [];
+      served = true;
+      return [
+        { update_id: 1, channel_post: { message_id: 55, chat: { username: 'other' }, pinned_message: { message_id: 100 } } },
+        { update_id: 2, channel_post: { message_id: 102, chat: { username: 'My_Computer_Academy' }, pinned_message: { message_id: 100 } } },
+      ];
+    },
+    deleteMessage: () => true,
+  });
   const text = `${'слово '.repeat(900)}конец`; // два сообщения
   const out = await tg.publish({
     text,
@@ -253,13 +266,24 @@ test('публикация: превью выключено, кнопка под
     options: { pin: true, noPreview: true, button: { text: 'Записатися', url: 'https://x.ua/r/abc' } },
   });
   const [first, second, pin] = calls;
-  assert.deepEqual(calls.map((c) => c.method), ['sendMessage', 'sendMessage', 'pinChatMessage']);
+  assert.deepEqual(calls.slice(0, 3).map((c) => c.method), ['sendMessage', 'sendMessage', 'pinChatMessage']);
   assert.equal(first.fields.reply_markup, undefined, 'кнопка не у первого из двух');
   assert.deepEqual(JSON.parse(second.fields.reply_markup).inline_keyboard[0][0], { text: 'Записатися', url: 'https://x.ua/r/abc' });
   assert.equal(JSON.parse(first.fields.link_preview_options).is_disabled, true);
   assert.equal(pin.fields.message_id, '100');
   assert.equal(pin.fields.disable_notification, 'true');
+  const deleted = calls.filter((c) => c.method === 'deleteMessage').map((c) => c.fields.message_id);
+  assert.deepEqual(deleted, ['102'], 'удаляется служебное сообщение нашего канала, чужое — нет');
+  assert.equal(out.externalId, '100,101', 'служебное в id поста не попадает');
   assert.equal(out.warning, undefined);
+});
+
+test('служебное «закреплено» не нашлось — замечание, пост при этом вышел', async (t) => {
+  t.after(() => (globalThis.fetch = realFetch));
+  fakeBot({ pinChatMessage: () => true, getUpdates: () => [] });
+  const out = await tg.publish({ text: 'пост', creds, options: { pin: true } });
+  assert.equal(out.externalId, '100');
+  assert.match(out.warning, /служебное «закреплено»/);
 });
 
 test('незакрепившийся пост — замечание, а не ошибка публикации', async (t) => {

@@ -319,7 +319,9 @@ export async function publish({ text, media = [], creds, options = {} }) {
   // Закреп — после всего: пост уже вышел, и неудача закрепа его не отменяет.
   if (options.pin) {
     try {
-      await pin(chatId, ids[0], creds);
+      if (!(await pin(chatId, ids[0], creds))) {
+        warnings.push('пост закреплён, но служебное «закреплено» в ленте канала убрать не удалось — удалите его руками');
+      }
     } catch (err) {
       warnings.push(`пост вышел, но не закрепился — ${err.message}. Нужно право «Изменение публикаций» у бота`);
     }
@@ -330,6 +332,16 @@ export async function publish({ text, media = [], creds, options = {} }) {
   return out;
 }
 
+/**
+ * Закрепить и убрать служебное «закреплено» из ленты канала.
+ *
+ * 13.09.2026 проба показала: закреп в канале добавляет в ленту служебное
+ * сообщение, и после удаления поста оно оставалось висеть. Его id Bot API не
+ * возвращает — ищем в обновлениях бота запись, которая ссылается ровно на наш
+ * пост. «Следующий id после поста» не годится: между ними мог выйти чужой пост.
+ *
+ * @returns {Promise<boolean>} удалось ли убрать служебное сообщение
+ */
 async function pin(chatId, messageId, creds) {
   const form = new FormData();
   form.set('chat_id', chatId);
@@ -337,6 +349,74 @@ async function pin(chatId, messageId, creds) {
   // Закреп в канале сам присылает подписчикам уведомление — второе незачем.
   form.set('disable_notification', 'true');
   await call('pinChatMessage', form, creds);
+  return dropPinNotice(chatId, messageId, creds);
+}
+
+/** Тот ли это чат: `@имя` сверяем с username, числовой id — с id. */
+function sameChat(chatId, chat) {
+  if (!chat) return false;
+  const id = String(chatId);
+  if (id.startsWith('@')) return String(chat.username || '').toLowerCase() === id.slice(1).toLowerCase();
+  return String(chat.id) === id;
+}
+
+/**
+ * Обновления бота по кругу, пока не кончатся. Прочитанное подтверждается
+ * (`offset`): другого читателя обновлений у бота панели нет, а без
+ * подтверждения очередь в 100 записей однажды заслонила бы нужную.
+ */
+export async function readUpdates(creds, { onUpdate, rounds = 5, peek = false } = {}) {
+  let offset = 0;
+  // peek — только посмотреть первые 100, ничего не подтверждая.
+  for (let i = 0; i < (peek ? 1 : rounds); i++) {
+    const form = new FormData();
+    if (offset) form.set('offset', String(offset));
+    form.set('timeout', '0');
+    form.set('allowed_updates', JSON.stringify(['channel_post', 'message']));
+    const updates = await call('getUpdates', form, creds);
+    if (!updates.length) return;
+    for (const u of updates) {
+      offset = Math.max(offset, u.update_id + 1);
+      if (onUpdate?.(u) === true) {
+        // Нашли — подтверждаем прочитанное и выходим.
+        const ack = new FormData();
+        ack.set('offset', String(offset));
+        ack.set('timeout', '0');
+        await call('getUpdates', ack, creds).catch(() => {});
+        return;
+      }
+    }
+  }
+}
+
+async function dropPinNotice(chatId, messageId, creds, { tries = 4, pauseMs = 700 } = {}) {
+  for (let attempt = 0; attempt < tries; attempt++) {
+    let notice = null;
+    try {
+      await readUpdates(creds, {
+        onUpdate: (u) => {
+          const post = u.channel_post || u.message;
+          if (post?.pinned_message?.message_id === Number(messageId) && sameChat(chatId, post.chat)) {
+            notice = post.message_id;
+            return true;
+          }
+          return false;
+        },
+      });
+    } catch {
+      return false; // вебхук у бота или сбой — служебное сообщение останется, скажем об этом
+    }
+    if (notice) {
+      try {
+        await remove(String(notice), { ...creds, chatId });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    await sleep(pauseMs);
+  }
+  return false;
 }
 
 /**
@@ -410,8 +490,16 @@ export async function edit(externalId, { text, media = [], creds, options = {} }
   // Закреп: поставить или снять. Снятие незакреплённого Telegram может
   // отвергнуть — это не ошибка правки.
   try {
-    if (options.pin) await pin(chatId, ids[0], creds);
-    else {
+    if (options.pin) {
+      // Уже закреплённый не закрепляем заново: каждый закреп — новое
+      // служебное сообщение в ленте.
+      const chatForm = new FormData();
+      chatForm.set('chat_id', chatId);
+      const chat = await call('getChat', chatForm, creds);
+      if (String(chat.pinned_message?.message_id) !== String(ids[0]) && !(await pin(chatId, ids[0], creds))) {
+        warnings.push('пост закреплён, но служебное «закреплено» в ленте канала убрать не удалось — удалите его руками');
+      }
+    } else {
       const form = new FormData();
       form.set('chat_id', chatId);
       form.set('message_id', String(ids[0]));
