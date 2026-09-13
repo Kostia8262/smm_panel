@@ -322,21 +322,42 @@ export function requeueEvergreen(postId) {
     .run(post.title, post.body, when, post.project_id, post.category_id, post.id, post.author_id);
   const copyId = Number(info.lastInsertRowid);
 
-  const targets = db.prepare('SELECT platform, format_id, text_override FROM post_targets WHERE post_id = ?').all(postId);
-  const insert = db.prepare(
-    'INSERT OR IGNORE INTO post_targets (post_id, platform, format_id, text_override) VALUES (?, ?, ?, ?)'
-  );
-  for (const t of targets) insert.run(copyId, t.platform, t.format_id, t.text_override);
-
   const media = db.prepare('SELECT * FROM media WHERE post_id = ? ORDER BY position').all(postId);
   // Копия ссылается на те же файлы — и оригинал, и миниатюру. Снимать их с
   // диска можно только через retention.js, который считает все ссылки.
   const copyMedia = db.prepare(
-    `INSERT INTO media (post_id, kind, original_name, stored_name, mime, bytes, width, height, duration, focus_x, focus_y, position, thumb_name, thumb_bytes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO media (post_id, kind, original_name, stored_name, mime, bytes, width, height, duration,
+       video_codec, audio_codec, fps, focus_x, focus_y, position, thumb_name, thumb_bytes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
+  const newIdOf = new Map();
   for (const m of media) {
-    copyMedia.run(copyId, m.kind, m.original_name, m.stored_name, m.mime, m.bytes, m.width, m.height, m.duration, m.focus_x, m.focus_y, m.position, m.thumb_name, m.thumb_bytes);
+    const info = copyMedia.run(
+      copyId, m.kind, m.original_name, m.stored_name, m.mime, m.bytes, m.width, m.height, m.duration,
+      m.video_codec, m.audio_codec, m.fps, m.focus_x, m.focus_y, m.position, m.thumb_name, m.thumb_bytes
+    );
+    newIdOf.set(m.id, Number(info.lastInsertRowid));
+  }
+
+  // Выбор кадров цели хранит id кадров — у копии они свои. Не переложи их, и
+  // сторис копии указывала бы на кадры оригинала, которых у неё нет. Части
+  // серии не копируются: у копии ещё ничего не вышло.
+  const targets = db
+    .prepare('SELECT platform, format_id, text_override, media_ids FROM post_targets WHERE post_id = ?')
+    .all(postId);
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO post_targets (post_id, platform, format_id, text_override, media_ids) VALUES (?, ?, ?, ?, ?)'
+  );
+  for (const t of targets) {
+    let mediaIds = null;
+    if (t.media_ids) {
+      try {
+        mediaIds = JSON.stringify(JSON.parse(t.media_ids).map((id) => newIdOf.get(Number(id))).filter(Boolean));
+      } catch {
+        mediaIds = null;
+      }
+    }
+    insert.run(copyId, t.platform, t.format_id, t.text_override, mediaIds);
   }
 
   log('info', `вечнозелёный повтор: пост #${postId} вернулся копией #${copyId} на ${when}`, { postId: copyId });

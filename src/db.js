@@ -971,6 +971,37 @@ const MIGRATIONS = [
       CREATE INDEX idx_mail_import_rows_verdict ON mail_import_rows(import_id, verdict);
     `,
   },
+  {
+    /*
+     * Видео и сторис (13.09.2026).
+     *
+     * Паспорт ролика. Сервер знал о видео только размер файла: длительность и
+     * размеры кадра не писались вовсе, и проверка «Reels Facebook до 90 с»
+     * не срабатывала никогда. Длительность и размеры ложатся в уже
+     * существующие столбцы, кодеки и частота кадров — в новые
+     * (src/video-probe.js разбирает контейнер без ffmpeg).
+     *
+     * Кадры цели. Один набор файлов на все площадки не давал собрать «карусель
+     * 4:5 в ленту + вертикальная сторис» одним постом. `media_ids` — JSON со
+     * списком id кадров, NULL — все кадры поста, как было.
+     *
+     * Части публикации. Серия сторис — это отдельная публикация на каждый
+     * кадр. Упади третий кадр из пяти — первые два уже вышли, и повтор не
+     * имеет права выпустить их снова. `parts` — JSON с тем, что уже вышло:
+     * id кадра, id публикации у площадки, ссылка.
+     *
+     * Имя с буквой по уговору 16a: номера в тот день писали в конец списка
+     * несколько сессий сразу.
+     */
+    name: '022v-video-stories',
+    sql: `
+      ALTER TABLE media ADD COLUMN video_codec TEXT;
+      ALTER TABLE media ADD COLUMN audio_codec TEXT;
+      ALTER TABLE media ADD COLUMN fps REAL;
+      ALTER TABLE post_targets ADD COLUMN media_ids TEXT;
+      ALTER TABLE post_targets ADD COLUMN parts TEXT;
+    `,
+  },
 ];
 
 function migrate() {

@@ -30,6 +30,17 @@ const SWEEP_MS = 3600 * 1000;
 const ORPHAN_AGE_MS = 3 * 3600 * 1000;
 const PURGE_MS = 10 * 60 * 1000;
 const TOKENS_MS = Number(process.env.TOKEN_SWEEP_MS || 6 * 3600 * 1000);
+/**
+ * Сколько постов публикуется одновременно.
+ *
+ * До 13.09.2026 — строго один: Reels в трёх сетях держал очередь полчаса, и
+ * пост, назначенный на 10:00, выходил в 10:30. Публикация — это ожидание
+ * ответов Graph API, а не работа процессора, так что параллель ядро VPS не
+ * нагружает. Больше трёх незачем: у аккаунтов суточные лимиты, а не поток.
+ */
+const PARALLEL = Math.max(1, Number(process.env.WORKER_PARALLEL || 3));
+/** Посты, которые публикуются прямо сейчас, — их разбор зависших не трогает. */
+const inFlight = new Set();
 let busy = false;
 let sweptAt = 0;
 let purgedAt = 0;
@@ -127,22 +138,26 @@ async function tick() {
   } catch (err) {
     console.error(`[worker] отметка не записалась: ${err.message}`);
   }
-  if (busy) return; // публикация может идти дольше минуты — второй заход не нужен
+  // Сам обход короткий: публикации запускаются без ожидания и живут в
+  // `inFlight`, так что второй заход в него же не нужен и не опасен.
+  if (busy) return;
   busy = true;
   try {
     // Разбор зависших идёт каждый тик, а не только при старте: процесс может
     // умереть и в середине дня, а пост с неизвестной судьбой должен всплыть
     // в панели через четверть часа, а не после следующей перезагрузки.
-    recoverStuck(db, log);
+    // Идущие публикации этого процесса — не зависшие, их не трогаем.
+    recoverStuck(db, log, { busyPostIds: inFlight });
     sweep();
     purge();
     // Намеренно без await: обход площадок не должен задерживать созревшие
     // посты — иначе медленный Graph API отодвигает публикацию по времени.
     watchTokens();
 
-    const due = db.prepare(dueQuery()).all();
+    const due = db.prepare(dueQuery()).all().filter((post) => !inFlight.has(post.id));
 
     for (const post of due) {
+      if (inFlight.size >= PARALLEL) break;
       // Время в базе местное и без зоны. Приписка 'Z' объявляла его UTC и
       // сдвигала опоздание на часовой пояс — в Киеве летом на три часа.
       const lateMin = Math.round(
@@ -151,13 +166,30 @@ async function tick() {
       if (lateMin > 15) {
         log('warn', `пост #${post.id} уходит с опозданием на ${lateMin} мин`, { postId: post.id });
       }
-      await publishPost(post.id);
+      launch(post.id);
     }
   } catch (err) {
     log('error', `воркер споткнулся: ${err.message}`);
   } finally {
     busy = false;
   }
+}
+
+/**
+ * Запустить публикацию, не дожидаясь её.
+ *
+ * Статус `publishing` пост получает синхронно, в самом начале `publishPost`, —
+ * до первого обращения к сети. Поэтому следующий обход его уже не выберет.
+ * Освободилось место — сразу смотрим очередь, а не ждём минуту до тика.
+ */
+function launch(postId) {
+  inFlight.add(postId);
+  publishPost(postId)
+    .catch((err) => log('error', `публикация поста #${postId} споткнулась: ${err.message}`, { postId }))
+    .finally(() => {
+      inFlight.delete(postId);
+      setImmediate(tick);
+    });
 }
 
 log('info', `воркер запущен, тик ${TICK_MS / 1000} с`);

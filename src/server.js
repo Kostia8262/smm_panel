@@ -17,13 +17,14 @@ const envFile = resolve(here, '../.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const { db, getPost, listPosts, touchPost, log } = await import('./db.js');
-const { PLATFORMS, PLATFORM_LIST, safeZonesFor } = await import('./platforms/specs.js');
+const { PLATFORMS, PLATFORM_LIST, safeZonesFor, mediaRulesFor } = await import('./platforms/specs.js');
 const { connectionStatus, getAdapter, idMismatch, accountIdFix } = await import('./platforms/index.js');
-const { validatePost } = await import('./validate.js');
+const { validatePost, targetMediaIds } = await import('./validate.js');
+const { probeVideo } = await import('./video-probe.js');
 const { UPLOAD_DIR, THUMB_DIR, storedName, kindOf, imageSize, cropFor, isAllowedMedia, checkThumb, removeStored } =
   await import('./media.js');
 const retention = await import('./retention.js');
-const { publishPost } = await import('./queue/publish.js');
+const { publishPost, partsOf } = await import('./queue/publish.js');
 const { installAuth, requireAccess } = await import('./auth.js');
 const { tooManyAttempts, clearAttempts } = await import('./ratelimit.js');
 const staffDb = await import('./staff.js');
@@ -184,6 +185,22 @@ staffDb.ensureOwner(resolve(here, '../data/owner-token.txt'), writeFileSync);
 // потерять при переходе на проекты — значит остановить публикацию.
 projectsDb.importEnvAccounts(1);
 
+// Ролики, загруженные до паспорта видео (13.09.2026), дочитываются при старте:
+// без длительности проверка пределов площадок у них молчит. Только живые
+// файлы и только без паспорта — повторный запуск ничего не перечитывает.
+{
+  const rows = db
+    .prepare("SELECT id, stored_name FROM media WHERE kind = 'video' AND duration IS NULL AND purged_at IS NULL")
+    .all();
+  const fill = db.prepare('UPDATE media SET width = ?, height = ?, duration = ?, video_codec = ?, audio_codec = ?, fps = ? WHERE id = ?');
+  for (const row of rows) {
+    const path = resolve(UPLOAD_DIR, row.stored_name);
+    if (!existsSync(path)) continue;
+    const p = probeVideo(path);
+    if (p.duration) fill.run(p.width, p.height, p.duration, p.videoCodec, p.audioCodec, p.fps, row.id);
+  }
+}
+
 /**
  * Какой проект открыт. Приходит параметром `project`; без него берём первый —
  * панель всегда должна что-то показывать, даже по прямой ссылке из письма.
@@ -208,6 +225,8 @@ function currentProjectId(req) {
   return first ? first.id : null;
 }
 
+const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
+
 const upload = multer({
   storage: multer.diskStorage({
     // Миниатюры — в свой каталог: у них другая раздача и другой срок жизни.
@@ -215,7 +234,9 @@ const upload = multer({
     // Расширение — из типа файла, а не из присланного имени: см. media.js.
     filename: (_req, file, cb) => cb(null, storedName(file.mimetype)),
   }),
-  limits: { fileSize: 512 * 1024 * 1024 },
+  // Гигабайт — предел видео у Facebook и Threads; больше не примет ни одна из
+  // подключённых сетей. Место на общем с сайтами диске сторожит квота.
+  limits: { fileSize: MAX_UPLOAD_BYTES },
   // Имя файла из формы multer по умолчанию читает как latin1, и «фото.jpg»
   // ложилось в базу как «ÑÐ¾ÑÐ¾.jpg» — у школы все имена файлов кириллицей.
   // Найдено 13.09.2026 при проверке миниатюр.
@@ -235,7 +256,9 @@ app.get('/api/specs', (_req, res) => {
   res.json({
     platforms: PLATFORM_LIST.map((p) => ({
       ...p,
-      formats: p.formats.map((f) => ({ ...f, safeZones: safeZonesFor(p.id, f.id) })),
+      // Лимиты уже сведены с площадкой: композеру незачем знать, как они
+      // хранятся в справочнике, — только что действует у раскладки.
+      formats: p.formats.map((f) => ({ ...f, safeZones: safeZonesFor(p.id, f.id), media: mediaRulesFor(p.id, f.id) })),
     })),
   });
 });
@@ -784,19 +807,60 @@ app.post('/api/posts/:id/media', uploadQuota, mediaUpload, (req, res) => {
   }
 
   const insert = db.prepare(`INSERT INTO media
-    (post_id, kind, original_name, stored_name, mime, bytes, width, height, position, thumb_name, thumb_bytes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  const start = db.prepare('SELECT COUNT(*) n FROM media WHERE post_id = ?').get(id).n;
+    (post_id, kind, original_name, stored_name, mime, bytes, width, height, duration, video_codec, audio_codec, fps,
+     position, thumb_name, thumb_bytes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  // После перестановки и удаления кадров номера идут с дырами — счёт строк
+  // выдал бы новому кадру номер уже занятого, и порядок серии поплыл бы.
+  const start = db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS n FROM media WHERE post_id = ?').get(id).n;
 
   for (const [i, file] of files.entries()) {
     const kind = kindOf(file.mimetype);
-    const { width, height } = kind === 'image' ? imageSize(file.path) : { width: null, height: null };
+    const p = passportOf(kind, file.path);
+    if (kind === 'video' && !p.duration) {
+      log('warn', `у ролика «${file.originalname}» не прочитана длительность — проверка пределов площадок не сработает`, {
+        postId: id,
+      });
+    }
     const thumb = thumbByIndex.get(i);
     insert.run(
-      id, kind, file.originalname, file.filename, file.mimetype, file.size, width, height, start + i,
-      thumb?.filename || null, thumb?.size || null
+      id, kind, file.originalname, file.filename, file.mimetype, file.size, p.width, p.height, p.duration,
+      p.videoCodec, p.audioCodec, p.fps, start + i, thumb?.filename || null, thumb?.size || null
     );
   }
+  touchPost(id);
+  res.json({ post: decorate(getPost(id)) });
+});
+
+/**
+ * Паспорт файла: размеры кадра, а у видео — ещё длительность, кодеки и
+ * частота кадров (video-probe.js). Разбор идёт по заголовку контейнера и
+ * укладывается в миллисекунды даже у гигабайтного ролика: тело файла не
+ * читается.
+ */
+function passportOf(kind, path) {
+  if (kind === 'video') return probeVideo(path);
+  const { width, height } = kind === 'image' ? imageSize(path) : { width: null, height: null };
+  return { width, height, duration: null, videoCodec: null, audioCodec: null, fps: null };
+}
+
+/**
+ * Порядок кадров поста. Для серии сторис это порядок показа, для карусели —
+ * порядок листания. Приходит полным списком id: частичный список означал бы,
+ * что интерфейс видел другой набор кадров, и молча дописывать остальные
+ * куда-то в конец нельзя.
+ */
+app.put('/api/posts/:id/media/order', (req, res) => {
+  const id = Number(req.params.id);
+  const post = getPost(id);
+  if (!post) return res.status(404).json({ error: 'Пост не найден' });
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number) : [];
+  const own = post.media.map((m) => m.id);
+  if (ids.length !== own.length || new Set(ids).size !== ids.length || !ids.every((m) => own.includes(m))) {
+    return res.status(422).json({ error: 'Кадры поста изменились — обновите страницу' });
+  }
+  const move = db.prepare('UPDATE media SET position = ? WHERE id = ?');
+  ids.forEach((mediaId, i) => move.run(i, mediaId));
   touchPost(id);
   res.json({ post: decorate(getPost(id)) });
 });
@@ -820,9 +884,17 @@ app.delete('/api/media/:id', (req, res) => {
   // Но не всегда: вечнозелёная копия ссылается на тот же файл, и прямое
   // удаление стирало кадр у поста, который ещё ждёт своей очереди. Решает
   // retention — файл уходит, только если больше никому не нужен.
-  const row = db.prepare('SELECT stored_name, thumb_name FROM media WHERE id = ?').get(id);
+  const row = db.prepare('SELECT post_id, stored_name, thumb_name FROM media WHERE id = ?').get(id);
   db.prepare('DELETE FROM media WHERE id = ?').run(id);
   if (row) {
+    // Кадр уходит и из выбора целей. Опустевший выбор остаётся пустым, а не
+    // становится «все кадры»: иначе сторис, у которой сняли её единственный
+    // кадр, молча получила бы всю карусель ленты.
+    const update = db.prepare('UPDATE post_targets SET media_ids = ? WHERE id = ?');
+    for (const t of db.prepare('SELECT id, media_ids FROM post_targets WHERE post_id = ? AND media_ids IS NOT NULL').all(row.post_id)) {
+      const ids = targetMediaIds(t);
+      if (ids && ids.includes(id)) update.run(JSON.stringify(ids.filter((m) => m !== id)), t.id);
+    }
     retention.releaseFile(row.stored_name);
     retention.releaseThumb(row.thumb_name);
   }
@@ -1390,15 +1462,31 @@ function saveTargets(postId, targets) {
   }
 
   const insert = db.prepare(
-    'INSERT OR IGNORE INTO post_targets (post_id, platform, format_id, text_override) VALUES (?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO post_targets (post_id, platform, format_id, text_override, media_ids) VALUES (?, ?, ?, ?, ?)'
   );
   const updateText = db.prepare('UPDATE post_targets SET text_override = ? WHERE id = ?');
+  const updateMedia = db.prepare('UPDATE post_targets SET media_ids = ? WHERE id = ?');
+
+  // Выбор кадров цели: только кадры этого поста. `undefined` — клиент выбор
+  // не прислал, оставляем как есть; `null` — все кадры.
+  const own = new Set(db.prepare('SELECT id FROM media WHERE post_id = ?').all(postId).map((m) => m.id));
+  const mediaIdsOf = (t) => {
+    if (t.media_ids === undefined) return undefined;
+    const ids = targetMediaIds(t);
+    return ids === null ? null : JSON.stringify([...new Set(ids)].filter((m) => own.has(m)));
+  };
 
   for (const t of wanted) {
     const formatId = t.format_id || PLATFORMS[t.platform].formats[0].id;
     const row = existing.find((r) => r.platform === t.platform && r.format_id === formatId);
-    if (row) updateText.run(t.text_override ?? null, row.id);
-    else insert.run(postId, t.platform, formatId, t.text_override ?? null);
+    const mediaIds = mediaIdsOf(t);
+    if (row) {
+      updateText.run(t.text_override ?? null, row.id);
+      // У вышедшей цели выбор кадров — история того, что ушло: не переписываем.
+      if (mediaIds !== undefined && row.status !== 'published') updateMedia.run(mediaIds, row.id);
+    } else {
+      insert.run(postId, t.platform, formatId, t.text_override ?? null, mediaIds ?? null);
+    }
   }
 }
 
@@ -1416,6 +1504,8 @@ function decorate(post) {
   post.signature = signatureFor(post, project);
   post.projectSignature = project ? project.signature : '';
   post.signatureEnabled = project ? project.signatureEnabled : false;
+  // В базе выбор кадров и части серии — JSON-строки; интерфейсу — массивы.
+  post.targets = (post.targets || []).map((t) => ({ ...t, media_ids: targetMediaIds(t), parts: partsOf(t) }));
   post.media = (post.media || []).map((m) => ({
     ...m,
     // Снятый после публикации файл по ссылке больше не открывается —
@@ -1449,7 +1539,7 @@ function decorate(post) {
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   if (err?.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: 'Файл больше 512 МБ — столько не примет ни одна сеть' });
+    return res.status(413).json({ error: 'Файл больше 1 ГБ — столько не примет ни одна из подключённых сетей' });
   }
   if (req.path.endsWith('/media') || err?.code?.startsWith?.('LIMIT_')) {
     return res.status(415).json({ error: err.message });

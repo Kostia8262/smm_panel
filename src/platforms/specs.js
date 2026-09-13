@@ -11,6 +11,29 @@
  * помеченные строки, а суточный лимит Instagram вообще не хардкодить:
  * он читается из GET /<IG_ID>/content_publishing_limit.
  *
+ * Лимиты медиа живут на двух уровнях. У площадки — общие, у раскладки —
+ * уточнения поверх них (`format.media`). Так устроены сами сети: Reels у
+ * Facebook — до 90 секунд, а обычное видео в ленту этим пределом не
+ * ограничено; сторис Instagram — до 60 секунд и 100 МБ, а Reels — до 15 минут
+ * и 300 МБ. Пока лимит был один на площадку, проверка либо пропускала
+ * заведомый отказ, либо запрещала то, что сеть примет. Сводит уровни
+ * `mediaRulesFor`. Сверено с документацией Meta 13.09.2026.
+ *
+ * Поля медиа:
+ *   image   — { types, maxBytes, maxBytesByUrl?, aspectMin?, aspectMax? },
+ *             соотношение — ширина / высота;
+ *   video   — { types, maxBytes, minSeconds?, maxSeconds?, codecs?, audio?,
+ *             fpsMin?, fpsMax? }, кодеки — как их называет video-probe.js;
+ *   groupMax — сколько файлов уходит одной публикацией (у сторис — кадров в
+ *             серии, каждый кадр — отдельная сторис);
+ *   kinds   — какие файлы раскладка принимает вовсе (Reels — только видео);
+ *   groupImagesOnly — несколько файлов площадка публикует только фотоальбомом.
+ *
+ * Поля раскладки:
+ *   series   — каждый файл уходит отдельной публикацией по порядку (сторис);
+ *   noText   — текст площадка не показывает, и он не уходит вовсе;
+ *   vertical — рассчитана на кадр 9:16, остальное выйдет с полями.
+ *
  * Безопасные зоны заданы в процентах от кадра, а не в пикселях: интерфейс
  * площадок тянется по ширине экрана, проценты переживают смену размеров.
  */
@@ -31,6 +54,7 @@ export const PLATFORMS = {
     },
     media: {
       image: { types: ['jpeg', 'png', 'webp'], maxBytes: 10 * MB, maxBytesByUrl: 5 * MB },
+      // 50 МБ — предел загрузки файла ботом. Больше Bot API не примет вовсе.
       video: { types: ['mp4'], maxBytes: 50 * MB, maxSeconds: null },
       groupMax: 10,
       required: false, // можно публиковать голый текст
@@ -42,6 +66,7 @@ export const PLATFORMS = {
     notes: [
       'Подпись длиннее 1024 символов Telegram не примет — пост уйдёт двумя сообщениями.',
       'Бот должен быть админом канала с правом публикации.',
+      'Сторис бот в канал не публикует — только посты.',
     ],
   },
 
@@ -50,7 +75,7 @@ export const PLATFORMS = {
     title: 'Threads',
     accent: '#000000',
     order: 2,
-    ready: false,
+    ready: true, // все форматы прошли боем 13.09.2026
     text: {
       limit: 500, // самый жёсткий лимит из пяти — под него режем текст в первую очередь
       limitWithMedia: 500,
@@ -61,7 +86,15 @@ export const PLATFORMS = {
     },
     media: {
       image: { types: ['jpeg', 'png'], maxBytes: 8 * MB },
-      video: { types: ['mp4', 'mov'], maxBytes: 1024 * MB, maxSeconds: 300 },
+      video: {
+        types: ['mp4', 'mov'],
+        maxBytes: 1024 * MB,
+        maxSeconds: 300,
+        codecs: ['h264', 'hevc'],
+        audio: ['aac', 'mp4a'],
+        fpsMin: 23,
+        fpsMax: 60,
+      },
       groupMax: 20,
       required: false,
     },
@@ -73,7 +106,8 @@ export const PLATFORMS = {
     dailyLimit: 250, // verify
     notes: [
       'Соотношение сторон до 10:1 — режется всё, что уже.',
-      'Токен живёт 60 дней и продлевается сам за две недели до смерти. Подключать — кнопкой «Подключить через Threads»: генератор токенов Meta не даёт права на удаление.',
+      'Токен живёт 60 дней и продлевается заранее, иначе постинг встанет молча.',
+      'Сторис у Threads нет.',
     ],
   },
 
@@ -82,7 +116,7 @@ export const PLATFORMS = {
     title: 'Instagram',
     accent: '#E1306C',
     order: 3,
-    ready: false,
+    ready: true, // лента, карусель, сторис и Reels прошли боем 12.09.2026
     text: {
       limit: 2200,
       limitWithMedia: 2200,
@@ -92,8 +126,20 @@ export const PLATFORMS = {
     media: {
       // Контейнер публикации принимает ТОЛЬКО JPEG. PNG отвергается, причём
       // сообщение об ошибке об этом прямо не говорит — отсюда жёсткий блокер.
-      image: { types: ['jpeg'], maxBytes: 8 * MB },
-      video: { types: ['mp4', 'mov'], maxBytes: 1024 * MB, maxSeconds: 900 }, // verify: длина Reels
+      // Кадр ленты и карусели — от 4:5 до 1.91:1, иначе площадка отказывает:
+      // вертикаль 9:16 уходит в сторис или Reels, а не в ленту.
+      image: { types: ['jpeg'], maxBytes: 8 * MB, aspectMin: 0.8, aspectMax: 1.91 },
+      // Одиночное видео в ленте Instagram публикует как Reels — отсюда пределы Reels.
+      video: {
+        types: ['mp4', 'mov'],
+        maxBytes: 300 * MB,
+        minSeconds: 3,
+        maxSeconds: 900,
+        codecs: ['h264', 'hevc'],
+        audio: ['aac', 'mp4a'],
+        fpsMin: 23,
+        fpsMax: 60,
+      },
       groupMax: 10, // через API карусель до 10, в приложении больше
       required: true, // без медиа публиковать нечего
     },
@@ -107,8 +153,31 @@ export const PLATFORMS = {
         gridCrop: { ratio: 1, note: 'В сетке профиля обрежется до квадрата по центру' },
       },
       { id: 'feed-square', title: 'Лента, квадрат', w: 1080, h: 1080, role: 'feed' },
-      { id: 'reels', title: 'Reels', w: 1080, h: 1920, role: 'reel' },
-      { id: 'story', title: 'Stories', w: 1080, h: 1920, role: 'story' },
+      {
+        id: 'reels',
+        title: 'Reels',
+        w: 1080,
+        h: 1920,
+        role: 'reel',
+        vertical: true,
+        media: { kinds: ['video'], groupMax: 1, required: true },
+      },
+      {
+        id: 'story',
+        title: 'Stories',
+        w: 1080,
+        h: 1920,
+        role: 'story',
+        series: true,
+        noText: true,
+        vertical: true,
+        media: {
+          // У сторис соотношение любое — площадка сама добавит поля.
+          image: { types: ['jpeg'], maxBytes: 8 * MB, aspectMin: null, aspectMax: null },
+          video: { maxBytes: 100 * MB, minSeconds: 3, maxSeconds: 60 },
+          groupMax: 10,
+        },
+      },
     ],
     safeZones: {
       reels: [
@@ -122,7 +191,8 @@ export const PLATFORMS = {
     },
     notes: [
       'Сторис через API идут БЕЗ ссылки, стикеров и опросов — свайп остаётся ручным.',
-      'Суточный лимит в документации противоречив: читать content_publishing_limit у аккаунта.',
+      'Серия сторис уходит по кадру: каждый файл — отдельная сторис, по порядку.',
+      'Не больше 100 публикаций через API за скользящие сутки (карусель — одна).',
       'Аккаунт должен быть Business или Creator и связан со страницей Facebook.',
     ],
   },
@@ -132,7 +202,7 @@ export const PLATFORMS = {
     title: 'Facebook',
     accent: '#1877F2',
     order: 4,
-    ready: false,
+    ready: true, // мульти-фото, видео и Reels прошли боем 12.09.2026
     text: {
       limit: 63206,
       limitWithMedia: 63206,
@@ -140,24 +210,62 @@ export const PLATFORMS = {
     },
     media: {
       image: { types: ['jpeg', 'png'], maxBytes: 10 * MB }, // verify
-      video: { types: ['mp4', 'mov'], maxBytes: 1024 * MB, maxSeconds: 90 }, // Reels
+      // Обычное видео в ленту: предела в 90 секунд у него нет — он у Reels.
+      video: {
+        types: ['mp4', 'mov'],
+        maxBytes: 1024 * MB,
+        maxSeconds: null,
+        codecs: ['h264', 'hevc', 'vp9', 'av1'],
+      },
       groupMax: 10,
+      // Несколько файлов адаптер собирает фотоальбомом: видео в нём не уйдёт.
+      groupImagesOnly: true,
       required: false,
     },
     formats: [
       { id: 'feed-landscape', title: 'Лента, горизонт', w: 1200, h: 630, role: 'feed' },
       { id: 'feed-square', title: 'Лента, квадрат', w: 1200, h: 1200, role: 'feed' },
-      { id: 'reels', title: 'Reels', w: 1080, h: 1920, role: 'reel' },
+      {
+        id: 'reels',
+        title: 'Reels',
+        w: 1080,
+        h: 1920,
+        role: 'reel',
+        vertical: true,
+        media: { kinds: ['video'], groupMax: 1, groupImagesOnly: false, required: true, video: { minSeconds: 3, maxSeconds: 90 } },
+      },
+      {
+        id: 'story',
+        title: 'Stories',
+        w: 1080,
+        h: 1920,
+        role: 'story',
+        series: true,
+        noText: true,
+        vertical: true,
+        media: {
+          video: { minSeconds: 3, maxSeconds: 60 },
+          groupMax: 10,
+          groupImagesOnly: false,
+          required: true,
+        },
+      },
     ],
     safeZones: {
       reels: [
         { top: 82, left: 0, width: 100, height: 18, label: 'Подпись' },
         { top: 30, left: 86, width: 14, height: 52, label: 'Кнопки' },
       ],
+      story: [
+        { top: 0, left: 0, width: 100, height: 14, label: 'Страница и время' },
+        { top: 86, left: 0, width: 100, height: 14, label: 'Поле ответа' },
+      ],
     },
     notes: [
       'Публикация только на страницу — с личного профиля API постить не даёт.',
-      'Подключать кнопкой «Подключить через Facebook» — токен страницы выйдет бессрочным. Раз в 90 дней стоит войти кнопкой снова: это продлевает доступ приложения к данным.',
+      'Несколько файлов уходят фотоальбомом — видео в нём не публикуется.',
+      'Сторис страницы — без ссылок и стикеров; видео в сторис до 60 секунд.',
+      'Токен страницы живёт 60 дней; бессрочный берётся у system user в Business Manager.',
     ],
   },
 
@@ -179,7 +287,7 @@ export const PLATFORMS = {
       required: true,
     },
     formats: [
-      { id: 'video', title: 'Видео', w: 1080, h: 1920, role: 'reel' },
+      { id: 'video', title: 'Видео', w: 1080, h: 1920, role: 'reel', vertical: true },
       { id: 'photo', title: 'Фото-пост', w: 1080, h: 1920, role: 'feed' },
     ],
     safeZones: {
@@ -198,6 +306,31 @@ export const PLATFORMS = {
 };
 
 export const PLATFORM_LIST = Object.values(PLATFORMS).sort((a, b) => a.order - b.order);
+
+/** Раскладка площадки по id; неизвестная — первая, как и при сохранении поста. */
+export function formatOf(platformId, formatId) {
+  const p = PLATFORMS[platformId];
+  if (!p) return null;
+  return p.formats.find((f) => f.id === formatId) || p.formats[0];
+}
+
+/**
+ * Лимиты медиа конкретной раскладки: общие площадки, поверх — уточнения
+ * раскладки. Вложенные `image` и `video` сливаются по полям, а не заменяются
+ * целиком: сторис Instagram меняет длительность видео, а типы файлов и кодеки
+ * берёт у площадки.
+ */
+export function mediaRulesFor(platformId, formatId) {
+  const p = PLATFORMS[platformId];
+  if (!p) return null;
+  const own = formatOf(platformId, formatId)?.media || {};
+  return {
+    ...p.media,
+    ...own,
+    image: { ...p.media.image, ...(own.image || {}) },
+    video: { ...p.media.video, ...(own.video || {}) },
+  };
+}
 
 /** Все уникальные раскладки — по ним готовятся нарезки мастер-медиа. */
 export function allFormats() {
@@ -228,6 +361,11 @@ if (process.argv.includes('--selftest')) {
     if (!p.text.limit) problems.push(`${p.id}: не задан лимит текста`);
     for (const f of p.formats) {
       if (!f.w || !f.h) problems.push(`${p.id}/${f.id}: нет размеров кадра`);
+      const rules = mediaRulesFor(p.id, f.id);
+      if (!rules.groupMax) problems.push(`${p.id}/${f.id}: не задано, сколько файлов за раз`);
+      if (!rules.image.types?.length || !rules.video.types?.length) {
+        problems.push(`${p.id}/${f.id}: не заданы типы файлов`);
+      }
       for (const z of safeZonesFor(p.id, f.id)) {
         if (z.top + z.height > 100 || z.left + z.width > 100) {
           problems.push(`${p.id}/${f.id}: зона «${z.label}» вылезает за кадр`);

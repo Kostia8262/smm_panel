@@ -105,29 +105,8 @@ export async function publishReel({ text, video, publicUrl, creds, waitMs = 5000
   const videoId = start.video_id;
   if (!videoId) throw new Error('Facebook Reels: площадка не выдала id видео');
 
-  const up = await fetch(`https://rupload.facebook.com/video-upload/v21.0/${videoId}`, {
-    method: 'POST',
-    headers: { Authorization: `OAuth ${creds.pageToken}`, file_url: publicUrl(video) },
-  });
-  const upData = await up.json().catch(() => ({}));
-  if (!up.ok || upData.error || upData.success === false) {
-    throw new Error(`Facebook Reels загрузка: ${upData.error?.message || upData.debug_info?.message || up.status}`);
-  }
-
-  // Загрузка по адресу идёт в фоне: площадка ответила «принято», а скачивать
-  // ещё только начала. Шаг finish до её конца отбивается.
-  for (let i = 0; i < tries; i++) {
-    const res = await fetch(`${API}/${videoId}?fields=status&access_token=${creds.pageToken}`);
-    const data = await res.json().catch(() => ({}));
-    const status = data.status || {};
-    if (status.video_status === 'error' || status.uploading_phase?.status === 'error') {
-      const reason = status.uploading_phase?.errors?.[0]?.message || status.processing_phase?.errors?.[0]?.message;
-      throw new Error(`Facebook Reels: площадка не приняла файл${reason ? ` — ${reason}` : ''}`);
-    }
-    if (status.uploading_phase?.status === 'complete' || status.uploading_phase?.status === 'completed') break;
-    if (i === tries - 1) throw new Error('Facebook Reels: загрузка не завершилась за отведённое время');
-    await new Promise((r) => setTimeout(r, waitMs));
-  }
+  await uploadByUrl(`https://rupload.facebook.com/video-upload/v21.0/${videoId}`, publicUrl(video), creds, 'Facebook Reels');
+  await waitUploaded(videoId, creds, { waitMs, tries, label: 'Facebook Reels' });
 
   await call(
     `${page}/video_reels`,
@@ -137,8 +116,84 @@ export async function publishReel({ text, video, publicUrl, creds, waitMs = 5000
   return { externalId: videoId, url: `https://www.facebook.com/reel/${videoId}` };
 }
 
+/** Передать площадке адрес файла: Facebook скачивает его сам (заголовок `file_url`). */
+async function uploadByUrl(uploadUrl, fileUrl, creds, label) {
+  const up = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { Authorization: `OAuth ${creds.pageToken}`, file_url: fileUrl },
+  });
+  const upData = await up.json().catch(() => ({}));
+  if (!up.ok || upData.error || upData.success === false) {
+    throw new Error(`${label} загрузка: ${upData.error?.message || upData.debug_info?.message || up.status}`);
+  }
+}
+
+/**
+ * Загрузка по адресу идёт в фоне: площадка ответила «принято», а скачивать
+ * ещё только начала. Шаг finish до её конца отбивается.
+ */
+async function waitUploaded(videoId, creds, { waitMs, tries, label }) {
+  for (let i = 0; i < tries; i++) {
+    const res = await fetch(`${API}/${videoId}?fields=status&access_token=${creds.pageToken}`);
+    const data = await res.json().catch(() => ({}));
+    const status = data.status || {};
+    if (status.video_status === 'error' || status.uploading_phase?.status === 'error') {
+      const reason = status.uploading_phase?.errors?.[0]?.message || status.processing_phase?.errors?.[0]?.message;
+      throw new Error(`${label}: площадка не приняла файл${reason ? ` — ${reason}` : ''}`);
+    }
+    if (status.uploading_phase?.status === 'complete' || status.uploading_phase?.status === 'completed') return;
+    if (i === tries - 1) throw new Error(`${label}: загрузка не завершилась за отведённое время`);
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+}
+
+/**
+ * Сторис страницы — один кадр за вызов. Серию разбирает очередь, как и у
+ * Instagram (queue/publish.js).
+ *
+ * До 13.09.2026 сторис Facebook в панели не было вовсе, хотя у страницы API
+ * есть (документация Meta, Page Stories API):
+ *   фото  — загрузить неопубликованным через `/photos`, затем
+ *           `/photo_stories` с `photo_id`;
+ *   видео — `/video_stories`: start → загрузка по адресу → finish, тот же
+ *           порядок, что у Reels, и то же ожидание загрузки перед finish.
+ * Оба отвечают `{ success, post_id }`. Видео — 3–60 секунд, 9:16.
+ * Разрешение — `pages_manage_posts`, оно у токена страницы уже есть.
+ */
+export async function publishStory({ item, publicUrl, creds, waitMs = 5000, tries = 36 }) {
+  const page = creds.pageId;
+
+  if (item.kind !== 'video') {
+    const photo = await call(`${page}/photos`, { url: publicUrl(item), published: 'false' }, creds);
+    const res = await call(`${page}/photo_stories`, { photo_id: photo.id }, creds);
+    if (res.success === false) throw new Error('Facebook сторис: площадка не опубликовала кадр');
+    return { externalId: res.post_id || photo.id, url: null };
+  }
+
+  const start = await call(`${page}/video_stories`, { upload_phase: 'start' }, creds);
+  const videoId = start.video_id;
+  if (!videoId) throw new Error('Facebook сторис: площадка не выдала id видео');
+
+  await uploadByUrl(
+    start.upload_url || `https://rupload.facebook.com/video-upload/v21.0/${videoId}`,
+    publicUrl(item),
+    creds,
+    'Facebook сторис'
+  );
+  await waitUploaded(videoId, creds, { waitMs, tries, label: 'Facebook сторис' });
+
+  const res = await call(`${page}/video_stories`, { upload_phase: 'finish', video_id: videoId }, creds);
+  if (res.success === false) throw new Error('Facebook сторис: площадка не опубликовала ролик');
+  return { externalId: res.post_id || videoId, url: null };
+}
+
 export async function publish({ text, media = [], formatId, publicUrl, creds }) {
   const page = creds.pageId;
+
+  if (formatId === 'story') {
+    if (media.length !== 1) throw new Error('Facebook: сторис публикуется по одному кадру — серию разбирает очередь');
+    return publishStory({ item: media[0], publicUrl, creds });
+  }
 
   if (formatId === 'reels') {
     const video = media.find((m) => m.kind === 'video');
@@ -146,6 +201,13 @@ export async function publish({ text, media = [], formatId, publicUrl, creds }) 
     // значит выдать не тот формат, который человек выбрал.
     if (!video) throw new Error('Facebook Reels: нужен видеофайл');
     return publishReel({ text, video, publicUrl, creds });
+  }
+
+  // Альбом собирается только из фото, и видео в нём до 13.09.2026 молча
+  // пропускалось: пост выходил без ролика. Валидатор такое не пускает, а
+  // здесь — последний рубеж на случай поста, поставленного в очередь раньше.
+  if (media.length > 1 && media.some((m) => m.kind === 'video')) {
+    throw new Error('Facebook: несколько файлов уходят фотоальбомом — видео в нём не опубликуется');
   }
 
   if (!media.length) {

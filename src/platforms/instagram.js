@@ -105,7 +105,28 @@ async function waitReady(containerId, creds, { tries = 30, pauseMs = 10000 } = {
   throw new Error('Контейнер не дошёл до готовности за отведённое время');
 }
 
-export async function publish({ text, media = [], formatId = 'feed-portrait', publicUrl, creds }) {
+/**
+ * Одна сторис — один кадр.
+ *
+ * Каруселью сторис не бывают: серия из пяти кадров — это пять контейнеров и
+ * пять публикаций. До 13.09.2026 несколько файлов с форматом «Stories» уходили
+ * в ветку карусели и публиковались **в ленту** с подписью. Серию теперь
+ * разбирает очередь (queue/publish.js) и зовёт это по кадру, записывая, что
+ * уже вышло, — упавший третий кадр не выпускает первые два повторно.
+ */
+export async function publishStory({ item, publicUrl, creds, wait }) {
+  const isVideo = item.kind === 'video';
+  const { id: containerId } = await call(
+    `${creds.userId}/media`,
+    { media_type: 'STORIES', [isVideo ? 'video_url' : 'image_url']: publicUrl(item) },
+    creds
+  );
+  await waitReady(containerId, creds, wait || (isVideo ? {} : { tries: 15, pauseMs: 2000 }));
+  const published = await call(`${creds.userId}/media_publish`, { creation_id: containerId }, creds);
+  return { externalId: published.id, url: null };
+}
+
+export async function publish({ text, media = [], formatId = 'feed-portrait', publicUrl, creds, wait }) {
   const user = creds.userId;
   if (!media.length) throw new Error('Instagram не публикует посты без медиа');
 
@@ -113,15 +134,24 @@ export async function publish({ text, media = [], formatId = 'feed-portrait', pu
   const isReel = formatId === 'reels';
   let containerId;
 
+  if (isStory) {
+    if (media.length !== 1) throw new Error('Instagram: сторис публикуется по одному кадру — серию разбирает очередь');
+    return publishStory({ item: media[0], publicUrl, creds, wait });
+  }
+  // Reels из нескольких файлов молча превращался в карусель в ленте, а из
+  // картинки — в обычный пост. Ни то ни другое не Reels, который выбрал человек.
+  if (isReel && (media.length !== 1 || media[0].kind !== 'video')) {
+    throw new Error('Instagram Reels: нужен ровно один видеофайл');
+  }
+
   if (media.length === 1) {
     const m = media[0];
-    const params = { caption: isStory ? undefined : text };
+    const params = { caption: text };
     if (m.kind === 'video') {
       params.video_url = publicUrl(m);
-      params.media_type = isStory ? 'STORIES' : 'REELS';
+      params.media_type = 'REELS';
     } else {
       params.image_url = publicUrl(m);
-      if (isStory) params.media_type = 'STORIES';
     }
     ({ id: containerId } = await call(`${user}/media`, clean(params), creds));
   } else {
@@ -146,7 +176,7 @@ export async function publish({ text, media = [], formatId = 'feed-portrait', pu
   }
 
   const heavy = media.some((m) => m.kind === 'video') || isReel;
-  await waitReady(containerId, creds, heavy ? {} : { tries: 15, pauseMs: 2000 });
+  await waitReady(containerId, creds, wait || (heavy ? {} : { tries: 15, pauseMs: 2000 }));
 
   const published = await call(`${user}/media_publish`, { creation_id: containerId }, creds);
   return { externalId: published.id, url: null };

@@ -58,6 +58,43 @@ async function request(path, { method = 'GET', body, raw } = {}) {
   return data;
 }
 
+/**
+ * Загрузка файлов с прогрессом.
+ *
+ * Через XHR, а не fetch: fetch до сих пор не сообщает, сколько отправлено.
+ * Ролик на сотни мегабайт грузится минутами, и без полосы прогресса человек
+ * решает, что панель зависла, и перезагружает страницу посреди загрузки.
+ * Ответ разбирается так же, как в `request`: единые 401 и текст ошибки.
+ */
+function upload(path, form, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', path);
+    xhr.responseType = 'json';
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) onProgress(e.loaded, e.total);
+      });
+    }
+    xhr.addEventListener('error', () => reject(new ApiError('Сервер не отвечает — загрузка прервалась')));
+    xhr.addEventListener('abort', () => reject(new ApiError('Загрузка отменена')));
+    xhr.addEventListener('load', () => {
+      if (xhr.status === 401) {
+        location.href = `/login?next=${encodeURIComponent(location.pathname + location.hash)}`;
+        reject(new ApiError('Не выполнен вход', { status: 401 }));
+        return;
+      }
+      const data = xhr.response || {};
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else if (xhr.status === 413 && !data.error) {
+        // Прокси отбивает тело раньше сервера панели и отвечает своей страницей.
+        reject(new ApiError('Файл слишком большой для загрузки', { status: 413, data }));
+      } else reject(new ApiError(data.error || `Ошибка ${xhr.status}`, { status: xhr.status, data }));
+    });
+    xhr.send(form);
+  });
+}
+
 export const api = {
   me: () => request('/api/me'),
   logout: () => request('/api/logout', { method: 'POST' }),
@@ -152,8 +189,9 @@ export const api = {
    * @param {File[]} files
    * @param {Array<Blob|null>} [thumbs] — миниатюры по тем же номерам, что файлы;
    *   null там, где браузер сделать её не сумел
+   * @param {(sent: number, total: number) => void} [onProgress]
    */
-  uploadMedia: (postId, files, thumbs = []) => {
+  uploadMedia: (postId, files, thumbs = [], onProgress = null) => {
     const form = new FormData();
     for (const f of files) form.append('files', f);
     // Номер в имени, а не порядок полей: пропуск одной миниатюры не должен
@@ -161,8 +199,9 @@ export const api = {
     thumbs.forEach((blob, i) => {
       if (blob) form.append('thumbs', blob, `thumb-${i}.jpg`);
     });
-    return request(`/api/posts/${postId}/media`, { method: 'POST', raw: form });
+    return upload(`/api/posts/${postId}/media`, form, onProgress);
   },
+  reorderMedia: (postId, ids) => request(`/api/posts/${postId}/media/order`, { method: 'PUT', body: { ids } }),
   setFocus: (mediaId, x, y) =>
     request(`/api/media/${mediaId}/focus`, { method: 'PUT', body: { focus_x: x, focus_y: y } }),
   deleteMedia: (mediaId) => request(`/api/media/${mediaId}`, { method: 'DELETE' }),

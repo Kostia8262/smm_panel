@@ -33,6 +33,7 @@ export function composerView(ctx, postId) {
   let specs = ctx.state.specs;
   let schedule = null; // рубрики и слоты проекта
   let previewKey = null;
+  let previewFrame = 0; // какой кадр серии или карусели показан в превью
   let showZones = true;
   let saveTimer = null;
 
@@ -192,7 +193,7 @@ export function composerView(ctx, postId) {
             if (!(await save({ quiet: true }))) return;
             try {
               const res = await api.enqueue(post.id);
-              for (const w of res.warnings || []) toast(`${w.platform}: ${w.message}`);
+              for (const w of res.warnings || []) toast(`${w.label || w.platform}: ${w.message}`);
               toast(res.review ? 'Отправлен владельцу на утверждение' : 'Пост в очереди', 'ok');
               location.hash = '#/';
             } catch (err) {
@@ -332,11 +333,16 @@ export function composerView(ctx, postId) {
     const host = root.querySelector('#counters');
     if (!host) return;
     host.textContent = '';
-    const hasMedia = (post.media || []).length > 0;
+    const seen = new Set();
 
     for (const t of post.targets) {
       const spec = specs.find((s) => s.id === t.platform);
       if (!spec) continue;
+      // Сторис текст не уносит, а ленте и Reels одной площадки текст общий —
+      // счётчик один на площадку.
+      if (formatOf(spec, t.format_id)?.noText || seen.has(spec.id)) continue;
+      seen.add(spec.id);
+      const hasMedia = mediaOf(t).length > 0;
       const limit = hasMedia ? spec.text.limitWithMedia : spec.text.limit;
       const text = finalText(t);
       const over = text.length > limit;
@@ -394,25 +400,42 @@ export function composerView(ctx, postId) {
     return box;
   }
 
+  /**
+   * Куда уходит пост: площадка → одна или несколько раскладок → кадры.
+   *
+   * До 13.09.2026 раскладка у площадки была одна (выпадающий список), и
+   * «Reels плюс сторис из того же ролика» собиралось двумя постами. Теперь
+   * раскладки — переключатели: лента, Reels и сторис живут рядом, а раскладки
+   * ленты взаимоисключающие — два одинаковых поста в одну ленту это ошибка,
+   * а не замысел.
+   */
   function sectionTargets() {
     const p = panel('Куда публикуем');
     const list = el('div', 'targets');
+    const total = (post.media || []).length;
 
     for (const spec of specs) {
-      const active = post.targets.find((t) => t.platform === spec.id);
-      const row = el('div', `target ${active ? 'target--on' : 'target--off'}`);
+      const mine = post.targets.filter((t) => t.platform === spec.id);
+      const on = mine.length > 0;
+      const row = el('div', `target ${on ? 'target--on' : 'target--off'}`);
 
       const sw = el('label', 'switch');
       const input = el('input');
       input.type = 'checkbox';
-      input.checked = Boolean(active);
+      input.checked = on;
       input.setAttribute('aria-label', `Публиковать в ${spec.title}`);
       const box = el('span', 'switch__box');
       box.innerHTML = iconMarkup('check', 12);
       sw.append(input, box);
       input.addEventListener('change', async () => {
-        if (input.checked) post.targets.push({ platform: spec.id, format_id: spec.formats[0].id });
-        else post.targets = post.targets.filter((t) => t.platform !== spec.id);
+        if (input.checked) {
+          const target = { platform: spec.id, format_id: spec.formats[0].id, media_ids: null };
+          post.targets.push(target);
+          previewKey = keyOf(target);
+        } else {
+          // Вышедшие цели сервер всё равно сохранит — след публикации не стирается.
+          post.targets = post.targets.filter((t) => t.platform !== spec.id || t.status === 'published');
+        }
         await save({ quiet: true });
         renderAll();
       });
@@ -431,55 +454,103 @@ export function composerView(ctx, postId) {
         tag.title = `Не хватает: ${conn.missing.join(', ')}`;
         meta.append(tag);
       }
-      const select = el('select', 'select');
-      select.setAttribute('aria-label', `Раскладка для ${spec.title}`);
-      for (const f of spec.formats) {
-        // Без размеров: они есть в «Ограничениях площадки», а здесь режутся на телефоне
-        const opt = el('option', null, f.title);
-        opt.value = f.id;
-        if (active && active.format_id === f.id) opt.selected = true;
-        select.append(opt);
-      }
-      select.disabled = !active;
-      select.addEventListener('change', async () => {
-        active.format_id = select.value;
-        previewKey = keyOf(active);
-        await save({ quiet: true });
-        renderAll();
-      });
-      meta.append(select);
 
       // Переопределение текста. Нужно прежде всего Threads с его 500 знаками:
       // общий текст туда не влезает, а резать его во всех сетях — терять смысл.
-      if (active) {
-        const hasOverride = active.text_override !== null && active.text_override !== undefined;
+      // Один текст на площадку: у сторис текста нет, а ленте и Reels одной
+      // сети разные тексты нужны редко.
+      const texted = mine.filter((t) => !formatOf(spec, t.format_id)?.noText);
+      if (texted.length) {
+        const hasOverride = texted.some((t) => t.text_override !== null && t.text_override !== undefined);
         const toggle = el('button', 'chip');
         toggle.type = 'button';
         toggle.setAttribute('aria-pressed', String(hasOverride));
         toggle.textContent = hasOverride ? 'Свой текст' : 'Свой текст…';
         toggle.title = 'Написать для этой площадки отдельный текст';
         toggle.addEventListener('click', async () => {
-          active.text_override = hasOverride ? null : (post.body || '');
+          for (const t of texted) t.text_override = hasOverride ? null : post.body || '';
           await save({ quiet: true });
           renderAll();
         });
         meta.append(toggle);
       }
-
       row.append(meta);
-      list.append(row);
 
-      if (active && active.text_override !== null && active.text_override !== undefined) {
-        list.append(overrideBox(spec, active));
+      if (on && spec.formats.length > 1) row.append(formatChips(spec, mine));
+
+      const override = texted.find((t) => t.text_override !== null && t.text_override !== undefined);
+      if (override) row.append(overrideBox(spec, texted, override.text_override));
+
+      // Выбор кадров — когда есть из чего выбирать, или когда выбор уже
+      // отсёк всё (кадр удалили): иначе цель молча осталась бы без медиа.
+      for (const t of mine) {
+        const ids = t.media_ids;
+        const cut = Array.isArray(ids) && ids.length !== total;
+        if (total > 1 || cut) row.append(framesRow(spec, t));
       }
+
+      list.append(row);
     }
 
     p.append(list);
     return p;
   }
 
-  function overrideBox(spec, target) {
-    const box = el('div', 'override');
+  function formatChips(spec, mine) {
+    const wrap = el('div', 'target__extra');
+    const chips = el('div', 'chips chips--wrap');
+    chips.setAttribute('role', 'group');
+    chips.setAttribute('aria-label', `Раскладки ${spec.title}`);
+
+    for (const f of spec.formats) {
+      const target = mine.find((t) => t.format_id === f.id);
+      const chip = el('button', 'chip');
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', String(Boolean(target)));
+      // Без размеров: они есть в «Ограничениях площадки», а здесь режутся на телефоне
+      chip.textContent = f.title;
+      const published = target?.status === 'published';
+      if (published) {
+        chip.disabled = true;
+        chip.title = 'Уже опубликовано — раскладку не снять';
+      } else if (target && mine.length === 1) {
+        chip.title = 'Единственная раскладка — чтобы не публиковать сюда вовсе, снимите галочку площадки';
+      }
+      chip.addEventListener('click', async () => {
+        if (target) {
+          if (mine.length === 1) return;
+          post.targets = post.targets.filter((t) => t !== target);
+        } else {
+          // Две раскладки ленты у одной площадки — это два одинаковых поста в
+          // одну ленту. Выбор второй заменяет первую, а не добавляется к ней.
+          const sameFeed =
+            f.role === 'feed' && mine.find((t) => formatOf(spec, t.format_id)?.role === 'feed' && t.status !== 'published');
+          if (sameFeed) {
+            sameFeed.format_id = f.id;
+            previewKey = keyOf(sameFeed);
+          } else {
+            const donor = mine.find((t) => t.text_override !== null && t.text_override !== undefined);
+            const fresh = {
+              platform: spec.id,
+              format_id: f.id,
+              media_ids: null,
+              text_override: f.noText ? null : donor?.text_override ?? null,
+            };
+            post.targets.push(fresh);
+            previewKey = keyOf(fresh);
+          }
+        }
+        await save({ quiet: true });
+        renderAll();
+      });
+      chips.append(chip);
+    }
+    wrap.append(chips);
+    return wrap;
+  }
+
+  function overrideBox(spec, targets, value) {
+    const box = el('div', 'override target__extra');
     const head = el('div', 'override__head');
     head.append(el('span', 'field__label', `Текст только для ${spec.title}`));
     const counter = el('span', 'counter');
@@ -487,7 +558,7 @@ export function composerView(ctx, postId) {
     box.append(head);
 
     const area = el('textarea', 'textarea');
-    area.value = target.text_override || '';
+    area.value = value || '';
     const limit = (post.media || []).length ? spec.text.limitWithMedia : spec.text.limit;
     const refresh = () => {
       counter.textContent = `${area.value.length}/${limit}`;
@@ -495,7 +566,7 @@ export function composerView(ctx, postId) {
     };
     refresh();
     area.addEventListener('input', () => {
-      target.text_override = area.value;
+      for (const t of targets) t.text_override = area.value;
       refresh();
       autosave();
     });
@@ -504,16 +575,103 @@ export function composerView(ctx, postId) {
     return box;
   }
 
+  /**
+   * Какие кадры уходят в эту цель. «Все» — и те, что загрузят потом; отмеченные
+   * — только они, в порядке кадров поста (порядок меняется в «Медиа»).
+   */
+  function framesRow(spec, target) {
+    const format = formatOf(spec, target.format_id);
+    const all = post.media || [];
+    const ids = Array.isArray(target.media_ids) ? target.media_ids.map(Number) : null;
+    const chosen = ids ? all.filter((m) => ids.includes(Number(m.id))).length : all.length;
+    const locked = target.status === 'published';
+
+    const wrap = el('div', 'frames target__extra');
+    const head = el('div', 'frames__head');
+    head.append(el('span', 'frames__title', format?.title || target.format_id));
+    head.append(
+      el('span', 'frames__count', ids ? `кадров ${chosen} из ${all.length}` : `все кадры · ${all.length}`)
+    );
+    if (format?.series && chosen > 1) head.append(el('span', 'frames__hint', 'каждый — отдельная сторис'));
+
+    const allChip = el('button', 'chip');
+    allChip.type = 'button';
+    allChip.textContent = 'Все';
+    allChip.setAttribute('aria-pressed', String(!ids));
+    allChip.disabled = locked || !ids;
+    allChip.title = 'Все кадры поста, включая загруженные позже';
+    allChip.addEventListener('click', async () => {
+      target.media_ids = null;
+      await save({ quiet: true });
+      renderAll();
+    });
+    head.append(allChip);
+    wrap.append(head);
+
+    const strip = el('div', 'frames__list');
+    all.forEach((m, i) => {
+      const on = !ids || ids.includes(Number(m.id));
+      const cell = el('button', 'frames__cell');
+      cell.type = 'button';
+      cell.disabled = locked;
+      cell.setAttribute('aria-pressed', String(on));
+      cell.setAttribute('aria-label', `Кадр ${i + 1}: ${m.original_name}`);
+      cell.title = `${i + 1}. ${m.original_name}`;
+      const src = m.thumbUrl || (m.kind === 'image' ? m.url : null);
+      if (src) {
+        const img = el('img');
+        img.src = src;
+        img.alt = '';
+        cell.append(img);
+      } else {
+        cell.append(icon(m.kind === 'video' ? 'video' : 'image', { size: 16 }));
+      }
+      cell.append(el('span', 'frames__num', String(i + 1)));
+      const tick = el('span', 'frames__tick');
+      tick.innerHTML = iconMarkup('check', 10);
+      cell.append(tick);
+      cell.addEventListener('click', async () => {
+        const current = ids ? new Set(ids) : new Set(all.map((x) => Number(x.id)));
+        if (current.has(Number(m.id))) current.delete(Number(m.id));
+        else current.add(Number(m.id));
+        // Отметили все — это снова «все кадры»: так новые загрузки не выпадут.
+        target.media_ids = current.size === all.length ? null : [...current];
+        previewKey = keyOf(target);
+        await save({ quiet: true });
+        renderAll();
+      });
+      strip.append(cell);
+    });
+    wrap.append(strip);
+    return wrap;
+  }
+
   /** Что именно не ушло — в самом посте, а не только в общем журнале. */
   function sectionFailures() {
-    const failed = (post.targets || []).filter((t) => t.status === 'failed' && t.error);
+    const failed = (post.targets || []).filter((t) => (t.status === 'failed' || t.status === 'needs_check') && t.error);
     if (!failed.length) return null;
     const p = panel('Не ушло');
     for (const t of failed) {
-      const spec = specs.find((s) => s.id === t.platform);
-      p.append(note('danger', spec ? spec.title : t.platform, `${t.error} · попыток: ${t.attempts}`));
+      p.append(note(t.status === 'needs_check' ? 'warn' : 'danger', labelOf(t), `${t.error} · попыток: ${t.attempts}`));
     }
     return p;
+  }
+
+  /** «Instagram · Stories» — у площадки может быть несколько целей, и «Instagram» не говорит, какая. */
+  function labelOf(target) {
+    const spec = specs.find((s) => s.id === target.platform);
+    if (!spec) return target.platform;
+    const format = formatOf(spec, target.format_id);
+    return spec.formats.length > 1 && format ? `${spec.title} · ${format.title}` : spec.title;
+  }
+
+  /** Кадры цели — та же выборка, что у проверки и очереди (validate.js → mediaFor). */
+  function mediaOf(target) {
+    const all = post.media || [];
+    const ids = target?.media_ids;
+    if (!Array.isArray(ids)) return all;
+    const wanted = new Set(ids.map(Number));
+    return all.filter((m) => wanted.has(Number(m.id)));
   }
 
   function sectionMedia() {
@@ -552,11 +710,30 @@ export function composerView(ctx, postId) {
     }
     zone.addEventListener('drop', (e) => upload([...e.dataTransfer.files]));
 
+    // Полоса прогресса живёт в самой зоне: загрузка ролика идёт минутами, и
+    // без неё человек перезагружает страницу посреди отправки.
+    const progress = el('div', 'upload-progress');
+    progress.id = 'upload-progress';
+    progress.hidden = true;
+    // Общая полоса `.meter`: доля через transform, без дёрганья раскладки.
+    const bar = el('div', 'meter');
+    bar.append(el('div', 'meter__fill'));
+    progress.append(bar, el('span', 'upload-progress__text'));
+    zone.append(progress);
+
     p.append(zone, input);
+    p.append(
+      el(
+        'span',
+        'field__hint',
+        'Видео — MP4 (H.264, звук AAC), 1080×1920 для сторис и Reels. Сторис — до 60 с, Reels Facebook — до 90 с.'
+      )
+    );
 
     if ((post.media || []).length) {
       const list = el('div', 'media');
-      for (const m of post.media) {
+      const count = post.media.length;
+      for (const [index, m] of post.media.entries()) {
         const item = el('div', 'media__item');
         // Файл опубликованного поста снимается с диска (retention.js). Есть
         // миниатюра — показываем её с пометкой; нет (кадр загружен до
@@ -604,15 +781,62 @@ export function composerView(ctx, postId) {
           await reload();
         });
         item.append(del);
-        item.append(
-          el('div', 'media__meta', `${m.width && m.height ? `${m.width}×${m.height}` : m.kind} · ${humanBytes(m.bytes)}`)
-        );
+        // Короткими строками: карточка в 108 px, и «30 к/с» не должно рваться.
+        const meta = el('div', 'media__meta');
+        for (const line of passportLines(m)) meta.append(el('span', null, line));
+        item.append(meta);
+
+        // Порядок кадров — это порядок серии сторис и листания карусели.
+        if (count > 1) {
+          const foot = el('div', 'media__foot');
+          foot.append(el('span', 'media__num', String(index + 1)));
+          const back = iconButton('chevronLeft', { title: 'Раньше', onClick: () => move(index, -1) });
+          const next = iconButton('chevronRight', { title: 'Позже', onClick: () => move(index, 1) });
+          back.classList.add('media__move');
+          next.classList.add('media__move');
+          back.disabled = index === 0;
+          next.disabled = index === count - 1;
+          foot.append(back, next);
+          item.append(foot);
+        }
         list.append(item);
       }
       p.append(list);
     }
 
     return p;
+  }
+
+  /**
+   * Паспорт кадра: размеры, вес, у ролика — длительность, кодек и частота
+   * кадров. Ровно то, по чему площадка примет или отвергнет файл.
+   */
+  function passportLines(m) {
+    const size = m.width && m.height ? `${m.width}×${m.height}` : m.kind === 'video' ? 'размер ?' : m.kind;
+    if (m.kind !== 'video') return [size, humanBytes(m.bytes)];
+    let length = 'длина ?';
+    if (m.duration) {
+      const s = Math.round(m.duration);
+      length = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    }
+    const codecs = { h264: 'H.264', hevc: 'HEVC', prores: 'ProRes', vp9: 'VP9', av1: 'AV1' };
+    const tech = [m.video_codec ? codecs[m.video_codec] || m.video_codec.toUpperCase() : 'кодек ?'];
+    if (m.fps) tech.push(`${Math.round(m.fps)} к/с`);
+    return [size, `${length} · ${humanBytes(m.bytes)}`, tech.join(' · ')];
+  }
+
+  async function move(index, delta) {
+    const ids = post.media.map((m) => m.id);
+    const to = index + delta;
+    if (to < 0 || to >= ids.length) return;
+    [ids[index], ids[to]] = [ids[to], ids[index]];
+    try {
+      post = (await api.reorderMedia(post.id, ids)).post;
+      renderAll();
+    } catch (err) {
+      toast(err.message, 'danger');
+      reload();
+    }
   }
 
   async function upload(files) {
@@ -623,12 +847,32 @@ export function composerView(ctx, postId) {
     // картинки и до пары секунд для видео. Не получилась — файл уйдёт без неё.
     const thumbs = await Promise.all(files.map((f) => makeThumb(f)));
     ctx.setSaveState('загружаю файлы…');
+    const box = root.querySelector('#upload-progress');
+    const fill = box?.querySelector('.meter__fill');
+    const label = box?.querySelector('.upload-progress__text');
+    const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+    const show = (sent, total) => {
+      if (!box) return;
+      box.hidden = false;
+      const share = total ? Math.min(1, sent / total) : 0;
+      fill.style.setProperty('--value', String(share));
+      // Размер берём у файлов: `total` от браузера включает обёртку формы.
+      const sentBytes = Math.round(totalBytes * share);
+      label.textContent =
+        share >= 1
+          ? 'Файлы на сервере, читаю паспорт…'
+          : sentBytes
+          ? `${Math.round(share * 100)}% · ${humanBytes(sentBytes)} из ${humanBytes(totalBytes)}`
+          : `Начинаю загрузку · ${humanBytes(totalBytes)}`;
+    };
+    show(0, 1);
     try {
-      const data = await api.uploadMedia(post.id, files, thumbs);
+      const data = await api.uploadMedia(post.id, files, thumbs, show);
       post = data.post;
       ctx.setSaveState('загружено');
       renderAll();
     } catch (err) {
+      if (box) box.hidden = true;
       toast(err.message, 'danger');
       ctx.setSaveState('');
     }
@@ -836,10 +1080,10 @@ export function composerView(ctx, postId) {
       return;
     }
     for (const b of v.blockers) {
-      host.append(note('danger', titleOf(b.platform), b.message));
+      host.append(note('danger', b.label || titleOf(b.platform), b.message));
     }
     for (const w of v.warnings) {
-      host.append(note('warn', titleOf(w.platform), w.message));
+      host.append(note('warn', w.label || titleOf(w.platform), w.message));
     }
   }
 
@@ -869,6 +1113,7 @@ export function composerView(ctx, postId) {
       tab.append(el('span', null, format.title));
       tab.addEventListener('click', () => {
         previewKey = keyOf(t);
+        previewFrame = 0;
         renderPreview();
       });
       tabs.append(tab);
@@ -892,9 +1137,13 @@ export function composerView(ctx, postId) {
     const [platformId, formatId] = previewKey.split(':');
     const spec = specs.find((s) => s.id === platformId);
     const format = spec.formats.find((f) => f.id === formatId);
-    const media = (post.media || [])[0];
     const activeTarget = post.targets.find((t) => keyOf(t) === previewKey);
-    const text = finalText(activeTarget);
+    // Превью показывает кадры именно этой цели: у сторис они могут быть
+    // совсем другими, чем у ленты того же поста.
+    const frames = mediaOf(activeTarget);
+    previewFrame = Math.min(previewFrame, Math.max(0, frames.length - 1));
+    const media = frames[previewFrame];
+    const text = format.noText ? '' : finalText(activeTarget);
 
     const stage = el('div', 'preview__stage');
     const frame = el('div', 'frame');
@@ -982,27 +1231,75 @@ export function composerView(ctx, postId) {
     frame.append(crop);
     if (text) {
       frame.append(el('div', 'frame__caption', text.slice(0, 240) + (text.length > 240 ? '…' : '')));
+    } else if (format.noText && media) {
+      frame.append(el('div', 'frame__caption frame__caption--muted', 'Сторис уходит без текста и подписи'));
     }
     stage.append(frame);
     right.append(stage);
+
+    if (frames.length > 1) {
+      const pager = el('div', 'preview__pager');
+      const back = iconButton('chevronLeft', {
+        title: 'Предыдущий кадр',
+        onClick: () => {
+          previewFrame -= 1;
+          renderPreview();
+        },
+      });
+      const next = iconButton('chevronRight', {
+        title: 'Следующий кадр',
+        onClick: () => {
+          previewFrame += 1;
+          renderPreview();
+        },
+      });
+      back.disabled = previewFrame === 0;
+      next.disabled = previewFrame === frames.length - 1;
+      const what = format.series ? 'сторис' : 'кадр';
+      pager.append(back, el('span', 'preview__pager-label', `${what} ${previewFrame + 1} из ${frames.length}`), next);
+      right.append(pager);
+    }
 
     right.append(limitsPanel(spec, format));
   }
 
   function limitsPanel(spec, format) {
-    const p = panel('Ограничения площадки');
+    const p = panel(`Ограничения · ${format.title}`);
     const list = el('div', 'limits');
-    const hasMedia = (post.media || []).length > 0;
+    const target = post.targets.find((t) => keyOf(t) === previewKey);
+    const hasMedia = mediaOf(target).length > 0;
+    // Лимиты раскладки, уже сведённые с площадкой на сервере (mediaRulesFor).
+    const rules = format.media || spec.media;
+    const mb = (bytes) => (bytes >= 1024 * 1024 * 1024 ? `${bytes / 1024 / 1024 / 1024} ГБ` : `${Math.round(bytes / 1024 / 1024)} МБ`);
+    const kinds = rules.kinds || ['image', 'video'];
 
     addLimit(list, 'Кадр', `${format.w}×${format.h}`);
-    addLimit(list, 'Текст', `до ${hasMedia ? spec.text.limitWithMedia : spec.text.limit} знаков`);
-    addLimit(list, 'Картинки', spec.media.image.types.map((t) => t.toUpperCase()).join(', '));
+    addLimit(list, 'Текст', format.noText ? 'не уходит' : `до ${hasMedia ? spec.text.limitWithMedia : spec.text.limit} знаков`);
+    if (kinds.includes('image')) {
+      const img = [rules.image.types.map((t) => t.toUpperCase()).join(', ')];
+      if (rules.image.maxBytes) img.push(`до ${mb(rules.image.maxBytes)}`);
+      if (rules.image.aspectMin) img.push(`от 4:5 до 1.91:1`);
+      addLimit(list, 'Картинки', img.join(' · '));
+    } else {
+      addLimit(list, 'Картинки', 'не принимает');
+    }
+    const v = rules.video;
+    const sec = (s) => (s >= 60 && s % 60 === 0 ? `${s / 60} мин` : `${s} с`);
+    const length =
+      v.minSeconds && v.maxSeconds
+        ? `${sec(v.minSeconds)} – ${sec(v.maxSeconds)}`
+        : v.maxSeconds
+        ? `до ${sec(v.maxSeconds)}`
+        : 'без предела длины';
+    const vid = [length];
+    if (v.maxBytes) vid.push(`до ${mb(v.maxBytes)}`);
+    if (v.codecs) vid.push(v.codecs.map((c) => ({ h264: 'H.264', hevc: 'HEVC', vp9: 'VP9', av1: 'AV1' })[c] || c).join('/'));
+    addLimit(list, 'Видео', vid.join(' · '));
     addLimit(
       list,
-      'Видео',
-      spec.media.video.maxSeconds ? `до ${spec.media.video.maxSeconds} с` : 'без предела длины'
+      format.series ? 'Кадров в серии' : 'Файлов за раз',
+      format.series ? `до ${rules.groupMax}, каждый — отдельная сторис` : String(rules.groupMax)
     );
-    addLimit(list, 'Файлов за раз', String(spec.media.groupMax));
     if (format.gridCrop) addLimit(list, 'В сетке профиля', format.gridCrop.note);
     p.append(list);
 
@@ -1024,4 +1321,9 @@ export function composerView(ctx, postId) {
 
 function keyOf(target) {
   return target ? `${target.platform}:${target.format_id}` : null;
+}
+
+/** Раскладка площадки по id; неизвестная — первая, как на сервере (specs.js → formatOf). */
+function formatOf(spec, formatId) {
+  return spec?.formats.find((f) => f.id === formatId) || spec?.formats[0] || null;
 }
