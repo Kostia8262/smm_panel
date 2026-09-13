@@ -371,12 +371,17 @@ export function composerView(ctx, postId) {
       const hasMedia = mediaOf(t).length > 0;
       const limit = hasMedia ? spec.text.limitWithMedia : spec.text.limit;
       const text = finalText(t);
-      const over = text.length > limit;
-      const near = !over && text.length > limit * 0.9;
+      // Telegram длинный текст не отвергает, а досылает сообщениями — это
+      // предупреждение, а не красный отказ.
+      const soft = Boolean(spec.text.splits);
+      const over = text.length > limit && !soft;
+      const near = !over && text.length > limit * (soft ? 1 : 0.9);
       const chip = el('span', `counter${over ? ' counter--over' : near ? ' counter--warn' : ''}`);
       chip.innerHTML = iconMarkup(t.platform, 12);
       chip.append(el('span', null, `${text.length}/${limit}`));
-      chip.title = `${spec.title}: предел ${limit} символов`;
+      chip.title = soft
+        ? `${spec.title}: ${limit} символов в ${hasMedia ? 'подписи' : 'сообщении'}, длиннее — продолжение уйдёт следом`
+        : `${spec.title}: предел ${limit} символов`;
       host.append(chip);
     }
   }
@@ -1507,7 +1512,12 @@ export function composerView(ctx, postId) {
     const kinds = rules.kinds || ['image', 'video'];
 
     addLimit(list, 'Кадр', `${format.w}×${format.h}`);
-    addLimit(list, 'Текст', format.noText ? 'не уходит' : `до ${hasMedia ? spec.text.limitWithMedia : spec.text.limit} знаков`);
+    const textLimit = hasMedia ? spec.text.limitWithMedia : spec.text.limit;
+    addLimit(
+      list,
+      'Текст',
+      format.noText ? 'не уходит' : spec.text.splits ? `${textLimit} в сообщении, дальше — следом` : `до ${textLimit} знаков`
+    );
     if (kinds.includes('image')) {
       const img = [rules.image.types.map((t) => t.toUpperCase()).join(', ')];
       if (rules.image.maxBytes) img.push(`до ${mb(rules.image.maxBytes)}`);

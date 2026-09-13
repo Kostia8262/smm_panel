@@ -44,8 +44,11 @@ if (!adapter.isConfigured(creds)) {
 try {
   const res = await adapter.check(creds);
   console.log(`${project.title} · ${platform}: связь есть — ${res.account || res.chat || res.bot || 'ок'}${res.bot ? ` (бот @${res.bot})` : ''}`);
-  const warning = idMismatch(creds, res);
-  if (warning) console.log(`  внимание: ${warning}`);
+  // Замечание самого адаптера (Telegram: бот публикует, но удалять не может)
+  // и расхождение id — разные вещи, печатаем оба.
+  for (const warning of [res.warning, idMismatch(creds, res)].filter(Boolean)) {
+    console.log(`  внимание: ${warning}`);
+  }
 } catch (err) {
   console.log(`${project.title} · ${platform}: НЕТ связи — ${err.message}`);
   process.exit(2);

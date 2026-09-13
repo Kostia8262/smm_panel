@@ -35,6 +35,7 @@ const linksDb = await import('./links.js');
 const collector = await import('./trends/collector.js');
 const observed = await import('./trends/observed.js');
 const { signatureFor, withSignature } = await import('./signature.js');
+const { parseOwnDomains } = await import('./shortlink.js');
 const tokensDb = await import('./tokens.js');
 const threadsOauth = await import('./oauth/threads.js');
 const facebookOauth = await import('./oauth/facebook.js');
@@ -914,7 +915,7 @@ app.post('/api/posts/:id/schedule', (req, res) => {
   const post = getPost(id);
   if (!post) return res.status(404).json({ error: 'Пост не найден' });
 
-  const check = validatePost(post);
+  const check = checkPost(post);
   if (!check.ok) return res.status(422).json({ error: 'Пост не проходит проверку', ...check });
   if (!post.scheduled_at) return res.status(422).json({ error: 'Не указано время публикации' });
 
@@ -941,7 +942,7 @@ app.post('/api/posts/:id/approve', requireAccess('platforms'), (req, res) => {
   const id = Number(req.params.id);
   const post = getPost(id);
   if (!post) return res.status(404).json({ error: 'Пост не найден' });
-  const check = validatePost(post);
+  const check = checkPost(post);
   if (!check.ok) return res.status(422).json({ error: 'Пост не проходит проверку', ...check });
 
   db.prepare(
@@ -990,7 +991,7 @@ app.post('/api/posts/:id/publish-now', (req, res) => {
   if (staffDb.requireApproval() && req.user.role !== 'owner' && post.status !== 'scheduled') {
     return res.status(403).json({ error: 'Пока включено согласование, публикует владелец' });
   }
-  const check = validatePost(post);
+  const check = checkPost(post);
   if (!check.ok) return res.status(422).json({ error: 'Пост не проходит проверку', ...check });
 
   db.prepare(
@@ -1727,6 +1728,26 @@ function publicBase() {
   return (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 }
 
+/**
+ * Проверка поста так, как он уйдёт: с подписью проекта и короткими ссылками.
+ *
+ * До 13.09.2026 постановка в очередь проверяла голый пост из базы — без
+ * подписи (её добавлял только decorate) и с исходными ссылками. Композер
+ * показывал одно, очередь пропускала другое, площадка отказывала третьему.
+ */
+function checkPost(post) {
+  if (post.signature === undefined) {
+    const project = post.project_id ? projectsDb.getProject(post.project_id) : null;
+    post.signature = signatureFor(post, project);
+  }
+  return validatePost(post, {
+    shortLink: {
+      baseUrl: publicBase(),
+      ownDomains: parseOwnDomains(staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school')),
+    },
+  });
+}
+
 /** Пост + всё, что нужно интерфейсу: ссылки на файлы, кропы, итог проверки. */
 function decorate(post) {
   if (!post) return post;
@@ -1763,7 +1784,7 @@ function decorate(post) {
       })
     ),
   }));
-  post.validation = validatePost(post);
+  post.validation = checkPost(post);
   return post;
 }
 

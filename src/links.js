@@ -13,6 +13,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { db, log } from './db.js';
+import { replaceOwnLinks, CODE_LENGTH } from './shortlink.js';
 
 /** Соответствие площадки и utm_source. Меняется только вместе с отчётами. */
 const SOURCES = {
@@ -23,8 +24,6 @@ const SOURCES = {
   tiktok: 'tiktok',
 };
 
-const URL_RE = /https?:\/\/[^\s<>"')]+/g;
-
 export function campaignFor(post) {
   // Метка должна читаться человеком в отчёте по заявкам, а не быть хешем.
   const date = (post.scheduled_at || '').slice(0, 10).replaceAll('-', '') || 'now';
@@ -32,7 +31,10 @@ export function campaignFor(post) {
 }
 
 function newCode() {
-  return randomBytes(5).toString('base64url');
+  const code = randomBytes(5).toString('base64url');
+  // Проверка поста считает длину текста по CODE_LENGTH — разойтись им нельзя.
+  if (code.length !== CODE_LENGTH) throw new Error('длина кода короткой ссылки разошлась с shortlink.js');
+  return code;
 }
 
 /** Добавить метки к целевому адресу, не затирая уже проставленные вручную. */
@@ -67,29 +69,16 @@ export function shortenLinks(text, { post, platform, baseUrl, ownDomains }) {
   const campaign = campaignFor(post);
   const source = SOURCES[platform] || platform;
 
-  return text.replace(URL_RE, (match) => {
-    // Хвостовая пунктуация в текст не входит: «…сайт: https://x.ua.» — точка
-    // принадлежит предложению, а не адресу.
-    const trailing = match.match(/[.,;:!?)]+$/)?.[0] || '';
-    const clean = trailing ? match.slice(0, -trailing.length) : match;
-
-    let host;
-    try {
-      host = new URL(clean).hostname.replace(/^www\./, '');
-    } catch {
-      return match;
-    }
-    if (!ownDomains.some((d) => host === d || host.endsWith(`.${d}`))) return match;
-
+  return replaceOwnLinks(text, ownDomains, (clean) => {
     const target = withUtm(clean, { source, campaign, content: platform });
-    if (!target) return match;
+    if (!target) return null;
 
     const code = newCode();
     db.prepare(
       'INSERT INTO links (code, project_id, post_id, platform, target_url, campaign) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(code, post.project_id, post.id, platform, target, campaign);
 
-    return `${baseUrl}/r/${code}${trailing}`;
+    return `${baseUrl}/r/${code}`;
   });
 }
 

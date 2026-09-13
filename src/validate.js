@@ -18,6 +18,8 @@
 
 import { PLATFORMS, formatOf, mediaRulesFor } from './platforms/specs.js';
 import { withSignature } from './signature.js';
+import { withShortLinks } from './shortlink.js';
+import { splitText, CAPTION_LIMIT, TEXT_LIMIT } from './platforms/telegram.js';
 import { parseAudio, audioAllowed, audioLabel } from './audio.js';
 
 const mimeToType = {
@@ -114,10 +116,12 @@ export function targetLabel(target) {
 }
 
 /**
- * @param {{body: string, media: Array, targets: Array}} post
+ * @param {{body: string, media: Array, targets: Array, signature?: string}} post
+ * @param {{shortLink?: {baseUrl: string, ownDomains: string[]}}} [ctx] — без
+ *   `shortLink` длина считается по написанному тексту, без подмены ссылок
  * @returns {{blockers: Array, warnings: Array, byTarget: Object, ok: boolean}}
  */
-export function validatePost(post) {
+export function validatePost(post, ctx = {}) {
   const blockers = [];
   const warnings = [];
   const byTarget = {};
@@ -144,7 +148,7 @@ export function validatePost(post) {
     const media = mediaFor(post, target);
     const hasMedia = media.length > 0;
 
-    checkText(post, target, spec, format, hasMedia, issues);
+    checkText(post, target, spec, format, hasMedia, issues, ctx);
     checkMediaSet(post, target, spec, format, rules, media, issues);
     for (const m of media) checkFile(m, spec, format, rules, issues);
     checkSound(post, target, spec, format, media, issues);
@@ -228,28 +232,38 @@ export function derivedIsFresh(post, m) {
   });
 }
 
-function checkText(post, target, spec, format, hasMedia, issues) {
+function checkText(post, target, spec, format, hasMedia, issues, ctx) {
   // Сторис текста не показывает, и он не уходит вовсе — считать его лимиты
   // значит блокировать сторис за длинный текст ленты того же поста.
   if (format.noText) return;
 
   // Подпись — часть поста, а не довесок при отправке: если её не считать,
   // пост пройдёт проверку в композере и отвалится у площадки.
-  const text = withSignature(target.text_override ?? post.body ?? '', post.signature).trim();
+  const written = withSignature(target.text_override ?? post.body ?? '', post.signature).trim();
+  // Считаем текст таким, каким он уйдёт: наши ссылки при отправке становятся
+  // короткими, и короткая обычно длиннее исходной.
+  const text = ctx.shortLink ? withShortLinks(written, ctx.shortLink) : written;
+  const viaLinks = text.length > written.length ? ' с учётом коротких ссылок' : '';
   const limit = hasMedia ? spec.text.limitWithMedia : spec.text.limit;
 
   if (!text && !hasMedia) {
     issues.blockers.push('Пусто: ни текста, ни медиа');
   }
-  if (text.length > limit) {
-    const over = text.length - limit;
-    if (spec.id === 'telegram' && hasMedia && text.length <= spec.text.limit) {
-      issues.warnings.push(`Подпись длиннее ${limit} символов на ${over} — Telegram разорвёт пост на два сообщения`);
-    } else {
-      issues.blockers.push(`Текст длиннее лимита на ${over} символов (можно ${limit})`);
+
+  // Telegram длинный пост не отвергает: адаптер досылает продолжение
+  // сообщениями, разрезая по абзацам и словам. Блокировать тут нечего.
+  if (spec.text.splits) {
+    const parts = splitText(text, hasMedia ? CAPTION_LIMIT : TEXT_LIMIT).length;
+    if (parts > 1) {
+      issues.warnings.push(
+        `Текст${viaLinks} — ${text.length} символов: Telegram получит его ${parts} сообщениями` +
+          (hasMedia ? ` (подпись к медиа — до ${CAPTION_LIMIT})` : '')
+      );
     }
+  } else if (text.length > limit) {
+    issues.blockers.push(`Текст${viaLinks} длиннее лимита на ${text.length - limit} символов (можно ${limit})`);
   } else if (text.length > limit * 0.9) {
-    issues.warnings.push(`Текст почти упёрся в лимит: ${text.length} из ${limit}`);
+    issues.warnings.push(`Текст${viaLinks} почти упёрся в лимит: ${text.length} из ${limit}`);
   }
 
   const tags = countHashtags(text);
@@ -365,6 +379,14 @@ function checkFile(m, spec, format, rules, issues) {
     }
     if (!video && r.aspectMax && ratio > r.aspectMax + 0.01) {
       issues.blockers.push(`${name}: кадр ${m.width}×${m.height} слишком широкий для ленты (можно до 1.91:1)`);
+    }
+    // Telegram отвергает фото с суммой сторон больше 10000 или вытянутое
+    // сильнее 1:20 — PHOTO_INVALID_DIMENSIONS, а не сжатие.
+    if (!video && r.sideSumMax && m.width + m.height > r.sideSumMax) {
+      issues.blockers.push(`${name}: кадр ${m.width}×${m.height} — сумма сторон больше ${r.sideSumMax}, площадка не примет фото`);
+    }
+    if (!video && r.stretchMax && Math.max(ratio, 1 / ratio) > r.stretchMax) {
+      issues.blockers.push(`${name}: кадр ${m.width}×${m.height} вытянут сильнее 1:${r.stretchMax} — площадка не примет фото`);
     }
     if (format.vertical && ratio > VERTICAL_MAX) {
       const what = ratio > 1 ? 'горизонтальный' : 'не вертикальный 9:16';
