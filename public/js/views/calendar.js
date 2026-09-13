@@ -202,9 +202,23 @@ export function calendarView(ctx) {
     const first = (post.media || [])[0];
     if (first) {
       const thumb = el('div', 'post__thumb');
-      // Снятый после публикации файл по ссылке не отдаётся — показываем знак
-      // «вышло», а не битую картинку.
-      if (first.purged_at) {
+      if (first.thumb_name) {
+        // Миниатюра — всегда, когда она есть: и для живого поста (незачем
+        // тянуть мегабайты оригинала ради карточки), и для вышедшего, чей
+        // оригинал уже снят с сервера. Видео тоже получает картинку кадра.
+        const img = el('img');
+        img.src = `/thumbs/${first.thumb_name}`;
+        img.alt = '';
+        img.loading = 'lazy';
+        thumb.append(img);
+        if (first.kind === 'video') {
+          const mark = el('span', 'post__play');
+          mark.innerHTML = iconMarkup('video', 12);
+          thumb.append(mark);
+        }
+      } else if (first.purged_at) {
+        // Снятый после публикации файл без миниатюры — знак «вышло», а не
+        // битая картинка.
         thumb.append(icon('check', { size: 20 }));
         thumb.title = 'Опубликован, файл снят с сервера';
       } else if (first.kind === 'video') {

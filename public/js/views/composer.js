@@ -12,6 +12,7 @@
 import { api } from '../api.js';
 import { icon, iconMarkup } from '../icons.js';
 import { el, button, iconButton, note, toast, panel, humanBytes } from '../ui.js';
+import { makeThumb } from '../thumbs.js';
 import { dateTimeField } from '../datetime.js';
 import { withSignature } from '../signature.js';
 
@@ -552,13 +553,32 @@ export function composerView(ctx, postId) {
       const list = el('div', 'media');
       for (const m of post.media) {
         const item = el('div', 'media__item');
-        // Файл опубликованного поста снимается с диска (retention.js):
-        // ссылки больше нет, и без заглушки здесь была бы битая картинка.
-        if (m.purged) {
+        // Файл опубликованного поста снимается с диска (retention.js). Есть
+        // миниатюра — показываем её с пометкой; нет (кадр загружен до
+        // миниатюр) — заглушку, а не битую картинку.
+        if (m.purged && m.thumbUrl) {
+          const img = el('img');
+          img.src = m.thumbUrl;
+          img.alt = m.original_name;
+          item.append(img);
+          item.append(el('span', 'media__badge', 'снят с сервера'));
+        } else if (m.purged) {
           const gone = el('div', 'media__gone');
           gone.append(icon('check', { size: 18 }));
           gone.append(el('span', null, 'снят после публикации'));
           item.append(gone);
+        } else if (m.thumbUrl) {
+          // Для карточки в сто пикселей хватает миниатюры: тянуть сюда
+          // многомегабайтный оригинал, а тем более видео, незачем.
+          const img = el('img');
+          img.src = m.thumbUrl;
+          img.alt = m.original_name;
+          item.append(img);
+          if (m.kind === 'video') {
+            const mark = el('span', 'media__play');
+            mark.innerHTML = iconMarkup('video', 14);
+            item.append(mark);
+          }
         } else if (m.kind === 'video') {
           const v = el('video');
           v.src = m.url;
@@ -592,9 +612,14 @@ export function composerView(ctx, postId) {
 
   async function upload(files) {
     if (!files.length) return;
+    files = [...files];
+    ctx.setSaveState('готовлю миниатюры…');
+    // Миниатюры — до загрузки и все разом: каждая занимает миллисекунды для
+    // картинки и до пары секунд для видео. Не получилась — файл уйдёт без неё.
+    const thumbs = await Promise.all(files.map((f) => makeThumb(f)));
     ctx.setSaveState('загружаю файлы…');
     try {
-      const data = await api.uploadMedia(post.id, files);
+      const data = await api.uploadMedia(post.id, files, thumbs);
       post = data.post;
       ctx.setSaveState('загружено');
       renderAll();
@@ -870,7 +895,16 @@ export function composerView(ctx, postId) {
     const crop = el('div', 'frame__crop focus-pick');
     crop.style.aspectRatio = `${format.w} / ${format.h}`;
 
-    if (media?.purged) {
+    if (media?.purged && media.thumbUrl) {
+      // Оригинал снят, но миниатюра осталась: кадр видно, хоть и в малом
+      // размере. Точку фокуса здесь не меняем — отправлять уже нечего.
+      const node = el('img', 'frame__media');
+      node.src = media.thumbUrl;
+      node.alt = '';
+      node.style.objectPosition = `${(media.focus_x ?? 0.5) * 100}% ${(media.focus_y ?? 0.5) * 100}%`;
+      crop.append(node);
+      crop.append(el('span', 'frame__note', 'Опубликован · файл снят с сервера, показана миниатюра'));
+    } else if (media?.purged) {
       // Пост ушёл во все сети, и кадр снят с диска, чтобы не занимать место
       // общего с сайтами сервера. Сам пост живёт в сетях — там его и смотреть.
       const holder = el('div', 'frame__empty');

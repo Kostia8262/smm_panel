@@ -20,12 +20,13 @@ const dir = mkdtempSync(join(tmpdir(), 'smm-retention-'));
 process.env.DB_PATH = join(dir, 'test.db');
 process.env.SECRET_KEY_PATH = join(dir, 'test.key');
 process.env.UPLOAD_DIR = join(dir, 'uploads');
+process.env.THUMB_DIR = join(dir, 'thumbs');
 process.env.UPLOAD_QUOTA_MB = '1';
 
 const { db } = await import('../src/db.js');
-const { verdict, releaseFile, purgePublishedMedia, usedBytes, quotaCheck, RETENTION, MINUTE } = await import(
-  '../src/retention.js'
-);
+const { verdict, releaseFile, releaseThumb, purgePublishedMedia, usedBytes, quotaCheck, RETENTION, MINUTE } =
+  await import('../src/retention.js');
+const { checkThumb, THUMB_LIMITS } = await import('../src/media.js');
 
 let projectId;
 let seq = 0;
@@ -52,10 +53,11 @@ function ago(ms) {
  * Пост с одним кадром на диске.
  * @param {{targets?: Array<{status: string, publishedAgo?: number}>, kind?: string, file?: string, deletedAgo?: number}} o
  */
-function makePost({ targets = [], kind = 'image', file = null, deletedAgo = null, bytes = 1000 } = {}) {
+function makePost({ targets = [], kind = 'image', file = null, deletedAgo = null, bytes = 1000, thumb = null, thumbBytes = 40 } = {}) {
   seq += 1;
   const name = file || `f${seq}.${kind === 'video' ? 'mp4' : 'jpg'}`;
   if (!existsSync(join(process.env.UPLOAD_DIR, name))) writeFileSync(join(process.env.UPLOAD_DIR, name), 'x');
+  if (thumb && !existsSync(join(process.env.THUMB_DIR, thumb))) writeFileSync(join(process.env.THUMB_DIR, thumb), 'x');
 
   const postId = db
     .prepare("INSERT INTO posts (title, body, status, project_id, deleted_at) VALUES ('т', 'т', 'draft', ?, ?)")
@@ -68,14 +70,25 @@ function makePost({ targets = [], kind = 'image', file = null, deletedAgo = null
   });
 
   db.prepare(
-    `INSERT INTO media (post_id, kind, original_name, stored_name, mime, bytes, position)
-     VALUES (?, ?, 'кадр', ?, ?, ?, 0)`
-  ).run(postId, kind, name, kind === 'video' ? 'video/mp4' : 'image/jpeg', bytes);
+    `INSERT INTO media (post_id, kind, original_name, stored_name, mime, bytes, position, thumb_name, thumb_bytes)
+     VALUES (?, ?, 'кадр', ?, ?, ?, 0, ?, ?)`
+  ).run(postId, kind, name, kind === 'video' ? 'video/mp4' : 'image/jpeg', bytes, thumb, thumb ? thumbBytes : null);
 
   return { postId, name };
 }
 
 const onDisk = (name) => existsSync(join(process.env.UPLOAD_DIR, name));
+const thumbOnDisk = (name) => existsSync(join(process.env.THUMB_DIR, name));
+
+/**
+ * Минимальный JPEG-заголовок: сигнатура и маркер SOF0 с размерами. Настоящий
+ * кодер тесту не нужен — сервер проверяет ровно сигнатуру и размеры.
+ */
+function fakeJpeg(width, height, padTo = 0) {
+  const head = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, height >> 8, height & 0xff, width >> 8, width & 0xff, 0x03]);
+  const body = Buffer.alloc(Math.max(0, padTo - head.length - 2));
+  return Buffer.concat([head, Buffer.alloc(9), body, Buffer.from([0xff, 0xd9])]);
+}
 
 /* -------------------------------- вердикт -------------------------------- */
 
@@ -218,4 +231,71 @@ test('квота отказывает до записи, а не после', ()
   // Квота в этом тесте — 1 МБ.
   assert.equal(quotaCheck(100).ok, true);
   assert.equal(quotaCheck(2 * 1024 * 1024).ok, false);
+});
+
+/* ------------------------------- миниатюры ------------------------------- */
+
+test('публикация снимает оригинал, но миниатюру оставляет', () => {
+  // Ради этого миниатюры и заведены: история в календаре остаётся с картинкой.
+  const { name } = makePost({
+    thumb: 'keep-me.jpg',
+    targets: [{ status: 'published', publishedAgo: RETENTION.image + MINUTE }],
+  });
+
+  purgePublishedMedia();
+
+  assert.equal(onDisk(name), false, 'оригинал уходит');
+  assert.equal(thumbOnDisk('keep-me.jpg'), true, 'миниатюра остаётся');
+});
+
+test('миниатюра уходит вместе с последней записью о кадре', () => {
+  const { postId } = makePost({ thumb: 'last.jpg', targets: [{ status: 'draft' }] });
+  db.prepare('DELETE FROM media WHERE post_id = ?').run(postId);
+
+  assert.equal(releaseThumb('last.jpg'), true);
+  assert.equal(thumbOnDisk('last.jpg'), false);
+});
+
+test('миниатюру вечнозелёной копии не стирает снятие кадра с оригинала', () => {
+  const original = makePost({ file: 'eg-src.jpg', thumb: 'eg-thumb.jpg', targets: [{ status: 'draft' }] });
+  makePost({ file: 'eg-src.jpg', thumb: 'eg-thumb.jpg', targets: [{ status: 'scheduled' }] });
+
+  db.prepare('DELETE FROM media WHERE post_id = ?').run(original.postId);
+  releaseThumb('eg-thumb.jpg');
+
+  assert.equal(thumbOnDisk('eg-thumb.jpg'), true);
+});
+
+test('миниатюры учитываются в занятом месте, по файлу, а не по строке', () => {
+  const before = usedBytes();
+  makePost({ file: 'q.jpg', bytes: 100, thumb: 'q-thumb.jpg', thumbBytes: 30, targets: [{ status: 'scheduled' }] });
+  makePost({ file: 'q.jpg', bytes: 100, thumb: 'q-thumb.jpg', thumbBytes: 30, targets: [{ status: 'scheduled' }] });
+  assert.equal(usedBytes() - before, 130);
+});
+
+test('проверка миниатюры: годный JPEG проходит', () => {
+  const path = join(dir, 'ok-thumb.jpg');
+  writeFileSync(path, fakeJpeg(480, 270, 2000));
+  const v = checkThumb(path, 2000);
+  assert.equal(v.ok, true);
+  assert.equal(v.width, 480);
+});
+
+test('проверка миниатюры: не-JPEG под этим именем отвергается', () => {
+  // Браузер делает миниатюру сам, а значит прислать под этим полем можно
+  // что угодно. Проверяем содержимое, а не заявленный тип.
+  const path = join(dir, 'fake-thumb.jpg');
+  writeFileSync(path, Buffer.from('<svg onload="alert(1)"></svg>'));
+  const v = checkThumb(path, 30);
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /не JPEG/);
+});
+
+test('проверка миниатюры: полноразмерный кадр под видом миниатюры отвергается', () => {
+  // Иначе на диск ляжет оригинал, который никогда не снимется: миниатюры
+  // после публикации не удаляются.
+  const path = join(dir, 'huge-thumb.jpg');
+  writeFileSync(path, fakeJpeg(4000, 3000, 2000));
+  assert.match(checkThumb(path, 2000).reason, /сторона/);
+  assert.match(checkThumb(path, THUMB_LIMITS.maxBytes + 1).reason, /КБ/);
 });

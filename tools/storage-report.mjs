@@ -19,7 +19,7 @@ const envFile = resolve(here, '../.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const { db } = await import('../src/db.js');
-const { UPLOAD_DIR } = await import('../src/media.js');
+const { UPLOAD_DIR, THUMB_DIR } = await import('../src/media.js');
 const { usedBytes, QUOTA_BYTES, RETENTION, MINUTE } = await import('../src/retention.js');
 
 const mb = (n) => `${(n / 1048576).toFixed(1)} МБ`;
@@ -48,6 +48,22 @@ console.log(`  живых по базе:      ${live} шт., ${mb(usedBytes())} 
 console.log(`  снято после публикации (история): ${purged} шт.`);
 console.log(`  сирот без записи в базе: ${orphans} шт. (уходят сами через 3 часа)`);
 console.log(`  окна: картинка ${RETENTION.image / MINUTE} мин, видео ${RETENTION.video / MINUTE} мин после публикации`);
+
+let thumbFiles = 0;
+let thumbBytes = 0;
+for (const name of readdirSync(THUMB_DIR)) {
+  try {
+    const st = statSync(join(THUMB_DIR, name));
+    if (!st.isFile()) continue;
+    thumbFiles += 1;
+    thumbBytes += st.size;
+  } catch {
+    // Сняли между чтением каталога и stat.
+  }
+}
+const withThumb = db.prepare('SELECT COUNT(DISTINCT thumb_name) n FROM media WHERE thumb_name IS NOT NULL').get().n;
+console.log('\n=== Миниатюры (история, после публикации не снимаются) ===');
+console.log(`  на диске: ${thumbFiles} шт., ${mb(thumbBytes)} · в базе: ${withThumb} шт.`);
 
 try {
   const fs = statfsSync(UPLOAD_DIR);

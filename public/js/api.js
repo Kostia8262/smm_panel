@@ -142,9 +142,19 @@ export const api = {
   unschedule: (id) => request(`/api/posts/${id}/unschedule`, { method: 'POST' }),
   publishNow: (id) => request(`/api/posts/${id}/publish-now`, { method: 'POST' }),
 
-  uploadMedia: (postId, files) => {
+  /**
+   * @param {File[]} files
+   * @param {Array<Blob|null>} [thumbs] — миниатюры по тем же номерам, что файлы;
+   *   null там, где браузер сделать её не сумел
+   */
+  uploadMedia: (postId, files, thumbs = []) => {
     const form = new FormData();
     for (const f of files) form.append('files', f);
+    // Номер в имени, а не порядок полей: пропуск одной миниатюры не должен
+    // сдвинуть остальные на чужие файлы.
+    thumbs.forEach((blob, i) => {
+      if (blob) form.append('thumbs', blob, `thumb-${i}.jpg`);
+    });
     return request(`/api/posts/${postId}/media`, { method: 'POST', raw: form });
   },
   setFocus: (mediaId, x, y) =>

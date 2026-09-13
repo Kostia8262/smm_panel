@@ -19,6 +19,23 @@ export const UPLOAD_DIR = process.env.UPLOAD_DIR || resolve(here, '../data/uploa
 mkdirSync(UPLOAD_DIR, { recursive: true });
 
 /**
+ * Миниатюры — отдельно от оригиналов, и это не формальность.
+ *
+ * Оригиналы раздаются без входа (их качают площадки) и снимаются с диска после
+ * публикации. Миниатюры живут, пока жива запись о посте, — это история в
+ * календаре, — и площадкам не нужны вовсе, поэтому отдаются только вошедшим.
+ * В общем каталоге уборка сирот оригиналов снесла бы и их.
+ */
+export const THUMB_DIR = process.env.THUMB_DIR || resolve(here, '../data/thumbs');
+mkdirSync(THUMB_DIR, { recursive: true });
+
+/**
+ * Пределы для миниатюры. Её делает браузер, а значит прислать под этим именем
+ * можно что угодно — от полноразмерного кадра до не-картинки. Проверяем сами.
+ */
+export const THUMB_LIMITS = { maxBytes: 300 * 1024, maxSide: 640 };
+
+/**
  * Что панель вообще берёт на хранение.
  *
  * Список закрытый, и это не формальность. Каталог загрузок раздаётся наружу
@@ -59,10 +76,10 @@ export function storedName(mime) {
  * Имя берём только из базы и сверяем с каталогом: путь, пришедший запросом,
  * до диска добираться не должен вовсе.
  */
-export function removeStored(name) {
+export function removeStored(name, dir = UPLOAD_DIR) {
   if (!name) return false;
-  const target = resolve(UPLOAD_DIR, name);
-  if (dirname(target) !== resolve(UPLOAD_DIR)) return false;
+  const target = resolve(dir, name);
+  if (dirname(target) !== resolve(dir)) return false;
   try {
     unlinkSync(target);
     return true;
@@ -83,18 +100,53 @@ export function removeStored(name) {
  *
  * @param {Set<string>} keep — имена, живые по базе
  */
-export function sweepOrphans(keep, { olderThanMs = 24 * 3600 * 1000, now = Date.now() } = {}) {
+export function sweepOrphans(keep, { olderThanMs = 24 * 3600 * 1000, now = Date.now(), dir = UPLOAD_DIR } = {}) {
   let removed = 0;
-  for (const name of readdirSync(UPLOAD_DIR)) {
+  for (const name of readdirSync(dir)) {
     if (keep.has(name)) continue;
     try {
-      if (now - statSync(join(UPLOAD_DIR, name)).mtimeMs < olderThanMs) continue;
+      const st = statSync(join(dir, name));
+      if (!st.isFile()) continue;
+      if (now - st.mtimeMs < olderThanMs) continue;
     } catch {
       continue;
     }
-    if (removeStored(name)) removed += 1;
+    if (removeStored(name, dir)) removed += 1;
   }
   return removed;
+}
+
+/**
+ * Годится ли присланная браузером миниатюра.
+ *
+ * Проверяем по содержимому, а не по заявленному типу: JPEG по сигнатуре,
+ * размер файла и сторон — чтобы под видом миниатюры не лёг полноразмерный
+ * кадр, который не снимется с диска никогда.
+ *
+ * @returns {{ok: true, width: number, height: number} | {ok: false, reason: string}}
+ */
+export function checkThumb(path, bytes) {
+  if (bytes > THUMB_LIMITS.maxBytes) return { ok: false, reason: `больше ${THUMB_LIMITS.maxBytes / 1024} КБ` };
+
+  let head;
+  let fd;
+  try {
+    fd = openSync(path, 'r');
+    head = Buffer.alloc(3);
+    readSync(fd, head, 0, 3, 0);
+  } catch {
+    return { ok: false, reason: 'файл не читается' };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  if (!(head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff)) return { ok: false, reason: 'не JPEG' };
+
+  const { width, height } = imageSize(path);
+  if (!width || !height) return { ok: false, reason: 'размеры не читаются' };
+  if (Math.max(width, height) > THUMB_LIMITS.maxSide) {
+    return { ok: false, reason: `сторона больше ${THUMB_LIMITS.maxSide} px` };
+  }
+  return { ok: true, width, height };
 }
 
 export function kindOf(mime) {

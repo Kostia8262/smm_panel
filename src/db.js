@@ -756,6 +756,22 @@ const MIGRATIONS = [
       CREATE INDEX idx_media_stored ON media(stored_name);
     `,
   },
+  {
+    /*
+     * Миниатюра кадра, сделанная браузером при загрузке.
+     *
+     * Оригинал снимается с диска после публикации, а история в календаре
+     * должна остаться с картинкой. Миниатюру делает браузер, а не сервер:
+     * на VPS нет ни sharp (нативная сборка), ни права грузить единственное
+     * ядро обработкой, а браузер уже держит файл в руках.
+     */
+    name: '019-media-thumb',
+    sql: `
+      ALTER TABLE media ADD COLUMN thumb_name TEXT;
+      ALTER TABLE media ADD COLUMN thumb_bytes INTEGER;
+      CREATE INDEX idx_media_thumb ON media(thumb_name);
+    `,
+  },
 ];
 
 function migrate() {
@@ -822,7 +838,9 @@ export function listPosts({ from = null, to = null, projectId = null } = {}) {
   sql += ' ORDER BY scheduled_at IS NULL, scheduled_at';
   const posts = db.prepare(sql).all(...params);
   const targets = db.prepare('SELECT * FROM post_targets').all();
-  const media = db.prepare('SELECT id, post_id, kind, stored_name, mime, purged_at FROM media ORDER BY position').all();
+  const media = db
+    .prepare('SELECT id, post_id, kind, stored_name, mime, purged_at, thumb_name FROM media ORDER BY position')
+    .all();
   for (const p of posts) {
     p.targets = targets.filter((t) => t.post_id === p.id);
     p.media = media.filter((m) => m.post_id === p.id);

@@ -28,7 +28,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { db, log } from './db.js';
-import { UPLOAD_DIR, removeStored } from './media.js';
+import { UPLOAD_DIR, THUMB_DIR, removeStored } from './media.js';
 
 export const MINUTE = 60 * 1000;
 
@@ -120,6 +120,21 @@ export function releaseFile(storedName, now = Date.now()) {
 }
 
 /**
+ * Снять миниатюру, если на неё не осталось ни одной записи.
+ *
+ * Правило другое, чем у оригинала: миниатюра — это история, и живёт она ровно
+ * столько, сколько запись о кадре. Публикация её не снимает — ради этого она и
+ * заведена. Уходит, когда кадр сняли с поста или пост стёрли целиком, — и
+ * тоже с оглядкой на вечнозелёную копию с той же миниатюрой.
+ */
+export function releaseThumb(thumbName) {
+  if (!thumbName) return false;
+  const still = db.prepare('SELECT 1 FROM media WHERE thumb_name = ? LIMIT 1').get(thumbName);
+  if (still) return false;
+  return removeStored(thumbName, THUMB_DIR);
+}
+
+/**
  * Обход: снять всё, чему вышло время. Зовёт воркер.
  *
  * Идёт только по файлам, у которых нет живых постов, — это отсекается одним
@@ -155,17 +170,29 @@ export function purgePublishedMedia(now = Date.now()) {
   return { removed, bytes };
 }
 
-/** Сколько занято файлами, которые ещё лежат на диске. */
+/**
+ * Сколько занято файлами, которые ещё лежат на диске: живые оригиналы плюс
+ * миниатюры. Миниатюры копятся с историей и не снимаются после публикации —
+ * мелкие, но предохранитель диска обязан видеть и их.
+ */
 export function usedBytes() {
-  return (
+  const originals =
     db
       .prepare(
         `SELECT COALESCE(SUM(bytes), 0) AS total FROM (
            SELECT stored_name, MAX(bytes) AS bytes FROM media WHERE purged_at IS NULL GROUP BY stored_name
          )`
       )
-      .get().total || 0
-  );
+      .get().total || 0;
+  const thumbs =
+    db
+      .prepare(
+        `SELECT COALESCE(SUM(bytes), 0) AS total FROM (
+           SELECT thumb_name, MAX(thumb_bytes) AS bytes FROM media WHERE thumb_name IS NOT NULL GROUP BY thumb_name
+         )`
+      )
+      .get().total || 0;
+  return originals + thumbs;
 }
 
 /**

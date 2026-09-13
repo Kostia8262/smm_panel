@@ -20,7 +20,7 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 const { db, log } = await import('../db.js');
 const { publishPost } = await import('./publish.js');
 const { recoverStuck, dueQuery } = await import('./recover.js');
-const { sweepOrphans } = await import('../media.js');
+const { sweepOrphans, THUMB_DIR } = await import('../media.js');
 const { sweepTokens } = await import('../tokens.js');
 const { purgePublishedMedia, quotaCheck } = await import('../retention.js');
 
@@ -56,6 +56,14 @@ function sweep() {
     );
     const removed = sweepOrphans(keep, { olderThanMs: ORPHAN_AGE_MS });
     if (removed) log('info', `убрано файлов без поста: ${removed}`);
+
+    // Миниатюры: своя папка, свой список живых. Сирота здесь — миниатюра,
+    // чья загрузка оборвалась, или отклонённая, которую не успели снять.
+    const keepThumbs = new Set(
+      db.prepare('SELECT thumb_name FROM media WHERE thumb_name IS NOT NULL').all().map((r) => r.thumb_name)
+    );
+    const removedThumbs = sweepOrphans(keepThumbs, { olderThanMs: ORPHAN_AGE_MS, dir: THUMB_DIR });
+    if (removedThumbs) log('info', `убрано миниатюр без поста: ${removedThumbs}`);
   } catch (err) {
     log('warn', `не удалось подмести каталог загрузок: ${err.message}`);
   }

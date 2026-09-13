@@ -241,12 +241,14 @@ export function requeueEvergreen(postId) {
   for (const t of targets) insert.run(copyId, t.platform, t.format_id, t.text_override);
 
   const media = db.prepare('SELECT * FROM media WHERE post_id = ? ORDER BY position').all(postId);
+  // Копия ссылается на те же файлы — и оригинал, и миниатюру. Снимать их с
+  // диска можно только через retention.js, который считает все ссылки.
   const copyMedia = db.prepare(
-    `INSERT INTO media (post_id, kind, original_name, stored_name, mime, bytes, width, height, duration, focus_x, focus_y, position)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO media (post_id, kind, original_name, stored_name, mime, bytes, width, height, duration, focus_x, focus_y, position, thumb_name, thumb_bytes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   for (const m of media) {
-    copyMedia.run(copyId, m.kind, m.original_name, m.stored_name, m.mime, m.bytes, m.width, m.height, m.duration, m.focus_x, m.focus_y, m.position);
+    copyMedia.run(copyId, m.kind, m.original_name, m.stored_name, m.mime, m.bytes, m.width, m.height, m.duration, m.focus_x, m.focus_y, m.position, m.thumb_name, m.thumb_bytes);
   }
 
   log('info', `вечнозелёный повтор: пост #${postId} вернулся копией #${copyId} на ${when}`, { postId: copyId });

@@ -20,7 +20,8 @@ const { db, getPost, listPosts, touchPost, log } = await import('./db.js');
 const { PLATFORMS, PLATFORM_LIST, safeZonesFor } = await import('./platforms/specs.js');
 const { connectionStatus, getAdapter, idMismatch } = await import('./platforms/index.js');
 const { validatePost } = await import('./validate.js');
-const { UPLOAD_DIR, storedName, kindOf, imageSize, cropFor, isAllowedMedia } = await import('./media.js');
+const { UPLOAD_DIR, THUMB_DIR, storedName, kindOf, imageSize, cropFor, isAllowedMedia, checkThumb, removeStored } =
+  await import('./media.js');
 const retention = await import('./retention.js');
 const { publishPost } = await import('./queue/publish.js');
 const { installAuth, requireAccess } = await import('./auth.js');
@@ -151,6 +152,28 @@ installAuth(app, {
 
 app.use(express.static(PUBLIC_DIR));
 
+/*
+ * Миниатюры — только вошедшим, в отличие от оригиналов в /media.
+ *
+ * Оригинал обязан быть открыт: его качает площадка. Миниатюра площадке не
+ * нужна, а живёт она дольше оригинала — всю историю поста. Открыть её наружу
+ * значило бы, что снятый после публикации кадр всё равно висит по ссылке,
+ * пусть и уменьшенным. Поэтому раздача стоит после входа.
+ */
+app.use(
+  '/thumbs',
+  express.static(THUMB_DIR, {
+    maxAge: '30d',
+    setHeaders(res) {
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    },
+  })
+);
+app.use('/thumbs', (_req, res) => {
+  res.status(404).type('text/plain').send('Миниатюры нет');
+});
+
 // Первый запуск: без владельца в панель не войти вовсе.
 staffDb.ensureOwner(resolve(here, '../data/owner-token.txt'), writeFileSync);
 
@@ -184,12 +207,20 @@ function currentProjectId(req) {
 
 const upload = multer({
   storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+    // Миниатюры — в свой каталог: у них другая раздача и другой срок жизни.
+    destination: (_req, file, cb) => cb(null, file.fieldname === 'thumbs' ? THUMB_DIR : UPLOAD_DIR),
     // Расширение — из типа файла, а не из присланного имени: см. media.js.
     filename: (_req, file, cb) => cb(null, storedName(file.mimetype)),
   }),
   limits: { fileSize: 512 * 1024 * 1024 },
+  // Имя файла из формы multer по умолчанию читает как latin1, и «фото.jpg»
+  // ложилось в базу как «ÑÐ¾ÑÐ¾.jpg» — у школы все имена файлов кириллицей.
+  // Найдено 13.09.2026 при проверке миниатюр.
+  defParamCharset: 'utf8',
   fileFilter: (_req, file, cb) => {
+    // Миниатюру делает canvas панели, и это всегда JPEG. Другой тип под этим
+    // полем — не наша миниатюра; молча пропускаем, а не роняем всю загрузку.
+    if (file.fieldname === 'thumbs') return cb(null, file.mimetype === 'image/jpeg');
     if (isAllowedMedia(file.mimetype)) return cb(null, true);
     cb(new Error(`Такой тип файла панель не принимает: ${file.mimetype || 'неизвестный'}`));
   },
@@ -407,8 +438,10 @@ app.delete('/api/posts/:id', (req, res) => {
   // этого они лежали сиротами до суточной уборки. Снимаем через retention —
   // у вечнозелёной копии может оказаться тот же файл.
   const files = post.media.map((m) => m.stored_name);
+  const thumbs = post.media.map((m) => m.thumb_name).filter(Boolean);
   db.prepare('DELETE FROM posts WHERE id = ?').run(id);
   for (const name of files) retention.releaseFile(name);
+  for (const name of thumbs) retention.releaseThumb(name);
   res.json({ ok: true, soft: false });
 });
 
@@ -432,18 +465,49 @@ function uploadQuota(req, res, next) {
   });
 }
 
-app.post('/api/posts/:id/media', uploadQuota, upload.array('files', 20), (req, res) => {
+const mediaUpload = upload.fields([
+  { name: 'files', maxCount: 20 },
+  { name: 'thumbs', maxCount: 20 },
+]);
+
+app.post('/api/posts/:id/media', uploadQuota, mediaUpload, (req, res) => {
   const id = Number(req.params.id);
-  if (!getPost(id)) return res.status(404).json({ error: 'Пост не найден' });
+  const files = req.files?.files || [];
+  const thumbs = req.files?.thumbs || [];
+  if (!getPost(id)) {
+    for (const f of files) removeStored(f.filename);
+    for (const t of thumbs) removeStored(t.filename, THUMB_DIR);
+    return res.status(404).json({ error: 'Пост не найден' });
+  }
+
+  // Миниатюра привязана к файлу по номеру в имени (`thumb-3.jpg` — к четвёртому
+  // файлу), а не по порядку: браузер не для всякого файла сумеет её сделать
+  // (видео в кодеке, которого он не знает), и порядок бы съехал.
+  const thumbByIndex = new Map();
+  for (const t of thumbs) {
+    const index = Number(/^thumb-(\d+)\.jpg$/.exec(t.originalname)?.[1]);
+    const verdict = checkThumb(t.path, t.size);
+    if (Number.isInteger(index) && index < files.length && verdict.ok && !thumbByIndex.has(index)) {
+      thumbByIndex.set(index, t);
+    } else {
+      if (!verdict.ok) log('warn', `миниатюра отклонена: ${verdict.reason}`, { postId: id });
+      removeStored(t.filename, THUMB_DIR);
+    }
+  }
+
   const insert = db.prepare(`INSERT INTO media
-    (post_id, kind, original_name, stored_name, mime, bytes, width, height, position)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    (post_id, kind, original_name, stored_name, mime, bytes, width, height, position, thumb_name, thumb_bytes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const start = db.prepare('SELECT COUNT(*) n FROM media WHERE post_id = ?').get(id).n;
 
-  for (const [i, file] of (req.files || []).entries()) {
+  for (const [i, file] of files.entries()) {
     const kind = kindOf(file.mimetype);
     const { width, height } = kind === 'image' ? imageSize(file.path) : { width: null, height: null };
-    insert.run(id, kind, file.originalname, file.filename, file.mimetype, file.size, width, height, start + i);
+    const thumb = thumbByIndex.get(i);
+    insert.run(
+      id, kind, file.originalname, file.filename, file.mimetype, file.size, width, height, start + i,
+      thumb?.filename || null, thumb?.size || null
+    );
   }
   touchPost(id);
   res.json({ post: decorate(getPost(id)) });
@@ -468,9 +532,12 @@ app.delete('/api/media/:id', (req, res) => {
   // Но не всегда: вечнозелёная копия ссылается на тот же файл, и прямое
   // удаление стирало кадр у поста, который ещё ждёт своей очереди. Решает
   // retention — файл уходит, только если больше никому не нужен.
-  const row = db.prepare('SELECT stored_name FROM media WHERE id = ?').get(id);
+  const row = db.prepare('SELECT stored_name, thumb_name FROM media WHERE id = ?').get(id);
   db.prepare('DELETE FROM media WHERE id = ?').run(id);
-  if (row) retention.releaseFile(row.stored_name);
+  if (row) {
+    retention.releaseFile(row.stored_name);
+    retention.releaseThumb(row.thumb_name);
+  }
   res.json({ ok: true });
 });
 
@@ -1043,6 +1110,9 @@ function decorate(post) {
     // интерфейс рисует вместо него заглушку, а не битую картинку.
     purged: Boolean(m.purged_at),
     url: m.purged_at ? null : `${base}/media/${m.stored_name}`,
+    // Относительный адрес: миниатюра только для вошедших и открывается из
+    // самой панели, внешний адрес ей ни к чему.
+    thumbUrl: m.thumb_name ? `/thumbs/${m.thumb_name}` : null,
     crops: Object.fromEntries(
       (post.targets || []).map((t) => {
         const format = PLATFORMS[t.platform]?.formats.find((f) => f.id === t.format_id);
