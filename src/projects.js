@@ -30,7 +30,11 @@ export const ACCOUNT_FIELDS = {
     // Подсказка про ID приложения — не лишняя: генератор токена показывает его
     // рядом с токеном, и в это поле он попадал дважды.
     { key: 'userId', title: 'ID аккаунта', hint: 'Можно оставить пустым — подставится по токену. Не ID приложения', secret: false },
-    { key: 'accessToken', title: 'Токен доступа', hint: 'Живёт 60 дней, продлевается сам', secret: true, token: true },
+    { key: 'accessToken', title: 'Токен доступа', hint: 'Проще — кнопкой «Подключить через Threads». Продлевается сам', secret: true, token: true },
+    // Нужны только кнопке подключения, публикации — нет. Поле «ID приложения»
+    // заодно даёт законное место числу, которое дважды попадало в «ID аккаунта».
+    { key: 'appId', title: 'ID приложения Threads', hint: 'Кабинет Meta → Threads API → Настройки', secret: false },
+    { key: 'appSecret', title: 'Секрет приложения Threads', hint: 'Там же. Нужен только для кнопки подключения', secret: true },
   ],
   instagram: [
     { key: 'userId', title: 'ID аккаунта', hint: 'Business или Creator', secret: false },
@@ -241,7 +245,11 @@ export function accountStatus(projectId, platform) {
 
 /** Не всё обязательно: приватность и флаг домена у TikTok имеют значения по умолчанию. */
 function isOptional(platform, key) {
-  return platform === 'tiktok' && (key === 'privacy' || key === 'domainVerified');
+  if (platform === 'tiktok') return key === 'privacy' || key === 'domainVerified';
+  // Приложение Threads нужно только для кнопки подключения: токен, вписанный
+  // руками, публикует и без него.
+  if (platform === 'threads') return key === 'appId' || key === 'appSecret';
+  return false;
 }
 
 export function projectAccounts(projectId) {

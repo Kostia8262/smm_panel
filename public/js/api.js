@@ -123,6 +123,7 @@ export const api = {
     request(`/api/projects/${id}/accounts/${platform}`, { method: 'DELETE' }),
   checkAccount: (id, platform) =>
     request(`/api/projects/${id}/accounts/${platform}/check`, { method: 'POST' }),
+  startThreadsOauth: (id) => request(`/api/projects/${id}/oauth/threads/start`, { method: 'POST' }),
 
   // Сроки жизни токенов: их пишет сторож в воркере, панель только читает.
   tokens: (id) => request(`/api/tokens?project=${id}`),

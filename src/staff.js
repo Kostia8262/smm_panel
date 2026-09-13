@@ -7,11 +7,11 @@
  * смысла не имеет, а токен можно отозвать одним нажатием.
  *
  * Отличие от школьной панели: токен не ходит в каждом запросе заголовком, а
- * обменивается на сессию в httpOnly-cookie. Токен всплывает ровно один раз —
- * при входе, и не лежит в localStorage, откуда его забирает любой XSS.
+ * обменивается на сессию в httpOnly-cookie. В каждом запросе токен не ходит
+ * и не лежит в localStorage, откуда его забирает любой XSS.
  *
  * В базе открытого токена нет (миграция 015): по sha256 его ищет вход, а
- * шифротекст нужен ровно для одного — показать человеку его собственный ключ.
+ * шифротекст нужен, чтобы показать ключ — человеку свой, владельцу все.
  * Дамп базы без файла `data/secret.key` внутрь не пускает.
  */
 
@@ -95,10 +95,19 @@ function tokenFrom(row) {
   }
 }
 
+/**
+ * Список сотрудников вместе с их токенами. Отдаётся только владельцу
+ * (`ACCESS.staff`): решение владельца 13.09.2026 — ключ сотрудника должен
+ * быть под рукой всегда, а не «один раз при выдаче». Владелец и так может
+ * перевыпустить любой токен, так что лишней власти это ему не даёт.
+ */
 export function list() {
   // Одинарные кавычки обязательны: в двойных SQLite видит имя столбца,
   // а не строку, и запрос падает на «no such column: owner».
-  return db.prepare("SELECT * FROM staff ORDER BY (role = 'owner') DESC, id").all().map((r) => fromRow(r));
+  return db
+    .prepare("SELECT * FROM staff ORDER BY (role = 'owner') DESC, id")
+    .all()
+    .map((r) => fromRow(r, { withToken: true }));
 }
 
 export function getById(id) {
@@ -125,8 +134,6 @@ export function create({ name, role = 'smm', note = '' }) {
     )
     .run(clean, role, cols.hash, cols.enc, cols.tail, String(note).slice(0, 300));
   log('info', `заведён сотрудник ${clean} (${ROLES[role].title})`);
-  // Токен отдаём целиком ровно здесь: второй раз его показать будет негде,
-  // в базе он лежит, но интерфейс покажет только хвост.
   return fromRow(db.prepare('SELECT * FROM staff WHERE id = ?').get(info.lastInsertRowid), {
     withToken: true,
   });

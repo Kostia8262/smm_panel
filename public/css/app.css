@@ -158,6 +158,34 @@
 
 .token-value--hidden { color: var(--ink-3); border-color: var(--line); letter-spacing: 0.1em; }
 
+/* Сотрудники: строка «имя — роль — токен — статус — был — действия». */
+.staff-name {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--gold-bright);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.staff-name:hover { color: var(--ink); }
+.staff-token { display: flex; align-items: center; gap: var(--sp-1); }
+.staff-token__value {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--fs-micro);
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 3px 8px;
+  white-space: nowrap;
+  user-select: all;
+}
+.staff-token__value--lost { color: var(--ink-3); user-select: none; }
+.table td.table__middle { vertical-align: middle; }
+
 /* Статус поста в шапке композера */
 .state {
   display: inline-flex;

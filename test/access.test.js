@@ -68,10 +68,10 @@ test('перевыпуск закрывает старый токен и отк�
   smm = fresh;
 });
 
-test('в списке сотрудников виден хвост, но не ключ', () => {
+test('в списке сотрудников виден ключ целиком — список отдаётся только владельцу', () => {
   const row = staff.list().find((s) => s.id === smm.id);
   assert.equal(row.tokenTail, smm.token.slice(-6));
-  assert.equal(row.token, undefined);
+  assert.equal(row.token, smm.token);
 });
 
 /* --------------------------- приём файлов --------------------------- */

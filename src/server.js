@@ -35,6 +35,7 @@ const collector = await import('./trends/collector.js');
 const observed = await import('./trends/observed.js');
 const { signatureFor, withSignature } = await import('./signature.js');
 const tokensDb = await import('./tokens.js');
+const threadsOauth = await import('./oauth/threads.js');
 const { writeFileSync } = await import('node:fs');
 const { encrypt: encryptSecret, decrypt: decryptSecret } = await import('./secrets.js');
 
@@ -331,6 +332,83 @@ app.post('/api/projects/:id/accounts/:platform/check', requireAccess('platforms'
     res.json(warning ? { ...result, warning } : result);
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+/* --------------------------- подключение Threads --------------------------- */
+
+/** Адрес возврата. Должен до символа совпадать с вписанным в настройки приложения Threads. */
+function threadsRedirectUri() {
+  return `${publicBase()}/oauth/threads`;
+}
+
+/**
+ * Начать подключение: ссылка на окно согласия Threads.
+ *
+ * Отдаётся ссылкой, а не редиректом: интерфейс сперва проверяет, заполнены ли
+ * ID и секрет приложения, и объясняет по-человечески, если нет, — вместо
+ * страницы ошибки Threads с «invalid client_id».
+ */
+app.post('/api/projects/:id/oauth/threads/start', requireAccess('platforms'), (req, res) => {
+  const projectId = Number(req.params.id);
+  if (!projectsDb.getProject(projectId)) return res.status(404).json({ error: 'Проект не найден' });
+
+  const creds = projectsDb.credentialsFor(projectId, 'threads');
+  if (!creds.appId || !creds.appSecret) {
+    return res.status(422).json({
+      error: 'Сначала впишите в карточку ID и секрет приложения Threads — они в кабинете Meta: Threads API → Настройки',
+    });
+  }
+
+  const state = threadsOauth.makeState({ projectId, staffId: req.user.id });
+  res.json({ url: threadsOauth.authorizeUrl({ appId: creds.appId, redirectUri: threadsRedirectUri(), state }) });
+});
+
+/**
+ * Возврат из окна согласия Threads.
+ *
+ * Страница, а не API: сюда приходит браузер человека. Поэтому и результат —
+ * редиректом обратно в карточку проекта с сообщением, а не JSON.
+ */
+app.get('/oauth/threads', async (req, res) => {
+  const back = (params) => res.redirect(`/?${new URLSearchParams({ oauth: 'threads', ...params })}#/projects`);
+
+  if (req.user?.role !== 'owner') return back({ result: 'error', message: 'подключать площадки может только владелец' });
+  if (req.query.error) {
+    // Человек нажал «Отмена» в окне Threads — это не сбой, так и скажем.
+    const reason = req.query.error_reason === 'user_denied' ? 'в окне Threads нажали «Отмена»' : String(req.query.error_description || req.query.error);
+    return back({ result: 'error', message: reason });
+  }
+
+  let projectId;
+  try {
+    ({ projectId } = threadsOauth.readState(String(req.query.state || ''), { staffId: req.user.id }));
+  } catch (err) {
+    log('warn', `подключение Threads отклонено: ${err.message}`);
+    return back({ result: 'error', message: err.message });
+  }
+
+  const creds = projectsDb.credentialsFor(projectId, 'threads');
+  try {
+    const out = await threadsOauth.exchangeCode({
+      appId: creds.appId,
+      appSecret: creds.appSecret,
+      redirectUri: threadsRedirectUri(),
+      code: req.query.code,
+    });
+    projectsDb.saveAccount(projectId, 'threads', { accessToken: out.accessToken, userId: out.userId });
+    log('info', `Threads подключён кнопкой: @${out.username}, права: ${out.scopes.join(', ') || 'не прочитаны'}`, {
+      platform: 'threads',
+    });
+    return back({
+      result: 'ok',
+      project: String(projectId),
+      user: out.username,
+      missing: out.missing.join(','),
+    });
+  } catch (err) {
+    log('error', `подключение Threads не удалось: ${err.message}`, { platform: 'threads' });
+    return back({ result: 'error', message: err.message });
   }
 });
 

@@ -40,7 +40,31 @@ export function projectsView(ctx) {
   list.append(loading);
 
   load();
+  reportOauthReturn();
   return root;
+
+  /**
+   * Возврат из окна согласия Threads: сервер кладёт итог в адрес страницы.
+   * Показываем и сразу убираем из адреса — иначе обновление страницы
+   * повторяло бы всплывашку, а ссылка с ошибкой гуляла бы по истории.
+   */
+  function reportOauthReturn() {
+    const params = new URLSearchParams(location.search);
+    if (params.get('oauth') !== 'threads') return;
+    history.replaceState(null, '', `${location.pathname}${location.hash}`);
+
+    if (params.get('result') === 'ok') {
+      const missing = (params.get('missing') || '').split(',').filter(Boolean);
+      toast(`Threads подключён: @${params.get('user') || '—'}`, 'ok');
+      // Галочку права можно снять в окне согласия — и узнать об этом лучше
+      // сейчас, чем при первой неудачной попытке снять пост.
+      if (missing.length) toast(`Threads выдал не все права: нет ${missing.join(', ')}. Переподключите и не снимайте галочки.`, 'warn');
+      const id = Number(params.get('project'));
+      if (id) openId = id;
+    } else {
+      toast(`Threads не подключён: ${params.get('message') || 'неизвестная ошибка'}`, 'danger');
+    }
+  }
 
   async function load() {
     try {
@@ -277,6 +301,35 @@ export function projectsView(ctx) {
       },
     });
     foot.append(check);
+
+    // Подключение кнопкой — у Threads. Генератор токенов в кабинете Meta
+    // выдаёт фиксированный набор прав без удаления, а здесь права просим
+    // явно, и токен с ID ложатся в карточку сами (13.09.2026).
+    if (account.platform === 'threads') {
+      const ready = account.fields.some((f) => f.key === 'appId' && f.filled) &&
+        account.fields.some((f) => f.key === 'appSecret' && f.filled);
+      const connect = button(account.configured ? 'Переподключить через Threads' : 'Подключить через Threads', {
+        // Главной кнопка становится, только когда ей есть чем работать: пока
+        // приложение не вписано, главное действие здесь — «Сохранить», и две
+        // золотые кнопки подряд спорили бы за внимание.
+        variant: ready && !account.configured ? 'primary' : '',
+        iconName: 'threads',
+        title: ready ? 'Откроется окно Threads — войдите под аккаунтом школы' : 'Сначала сохраните ID и секрет приложения Threads',
+        onClick: async () => {
+          connect.disabled = true;
+          try {
+            const { url } = await api.startThreadsOauth(project.id);
+            // Уходим в Threads в этой же вкладке: окно согласия открывается
+            // в сессии браузера, и отдельная вкладка ничего не меняет.
+            location.href = url;
+          } catch (err) {
+            toast(err.message, 'danger');
+            connect.disabled = false;
+          }
+        },
+      });
+      foot.append(connect);
+    }
 
     // Продление руками — только там, где площадка это умеет. У Facebook и
     // Instagram кнопки нет намеренно: их токен страницы меняется не здесь,
