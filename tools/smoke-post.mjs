@@ -27,8 +27,9 @@
  * что именно снимать руками.
  */
 
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { existsSync, writeFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { resolve, dirname, join, basename } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -61,6 +62,27 @@ const media = [
   ...(video ? [{ kind: 'video', url: video }] : []),
   ...images.map((url) => ({ kind: 'image', url })),
 ];
+
+// Telegram шлёт кадр файлом, а не ссылкой: пробные кадры скачиваем во
+// временную папку. Размеры ролика читаем тем же разбором, что и при загрузке.
+if (platforms.includes('telegram') && media.length) {
+  const { probeVideo } = await import('../src/video-probe.js');
+  const dir = mkdtempSync(join(tmpdir(), 'smoke-'));
+  for (const [i, m] of media.entries()) {
+    const res = await fetch(m.url);
+    if (!res.ok) {
+      console.error(`Не скачался ${m.url}: ${res.status}`);
+      process.exit(1);
+    }
+    m.path = join(dir, `f${i}.${m.kind === 'video' ? 'mp4' : 'jpg'}`);
+    writeFileSync(m.path, Buffer.from(await res.arrayBuffer()));
+    m.original_name = basename(m.path);
+    if (m.kind === 'video') {
+      const { width, height, duration } = probeVideo(m.path);
+      Object.assign(m, { width, height, duration });
+    }
+  }
+}
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const text = flag('text') || `Технічна перевірка публікації, ${new Date().toLocaleString('uk-UA')}. Пост буде видалено автоматично.`;
@@ -127,6 +149,7 @@ for (const platform of platforms) {
     published.push({ platform, externalId: out.externalId, url: out.url });
     results.push({ platform, step: 'публикация', ok: true, externalId: out.externalId });
     console.log(`${platform}: опубликовано — ${out.externalId}${out.url ? ` · ${out.url}` : ''}`);
+    if (out.warning) console.log(`${platform}: ЗАМЕЧАНИЕ — ${out.warning}`);
   } catch (err) {
     results.push({ platform, step: 'публикация', ok: false, error: err.message });
     console.log(`${platform}: НЕ опубликовано — ${err.message}`);
