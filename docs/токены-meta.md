@@ -137,20 +137,55 @@ curl "https://graph.facebook.com/v21.0/debug_token?input_token=PAGE_TOKEN&access
 
 ## 3. Threads: отдельный токен, другой домен
 
-Threads **не выдаётся через Graph API Explorer** — только полноценный OAuth.
-И домен API у него свой: `graph.threads.net`.
+Threads **не выдаётся через Graph API Explorer** — другой домен
+(`graph.threads.net`) и своя цепочка авторизации.
+
+### Какие права нужны
+
+| Право | Зачем |
+|---|---|
+| `threads_basic` | без него не отвечает ни один вызов |
+| `threads_content_publish` | публикация |
+| `threads_delete` | **снять пост** — без него проба форматов оставляет посты висеть, снимать приходится руками |
+
+`threads_delete` добавили 13.09.2026: первая боевая проба опубликовала, а
+удалить не смогла — «Application does not have permission for this action».
+
+### 3А. Основной путь — «Генератор маркеров пользователя»
+
+Так токен и выпускали в сентябре 2026.
+
+1. `developers.facebook.com` → приложение → **Сценарии использования** →
+   **Threads API** → **Персонализировать** → раздел разрешений →
+   **«Добавить»** напротив каждого права из таблицы выше.
+   Право, не добавленное в сценарий, в токен не попадёт, как ни жми дальше.
+2. **Главная ловушка — сессия браузера.** Генератор открывает авторизацию в
+   сессии Threads **текущего окна**. developers.facebook.com и threads.com
+   должны быть открыты **в одном окне под аккаунтом академии**. Иначе ошибка
+   **1349245 «The user has not accepted the invite»** — Meta проверяет не тот
+   аккаунт, под которым принимали приглашение тестировщика.
+3. Там же, в настройках сценария Threads, — **«Генератор маркеров
+   пользователя»** → выпустить токен для аккаунта академии. В окне авторизации
+   должны быть перечислены все права, включая удаление, — подтвердить.
+4. Вписать токен в панель (раздел 4). Долгий токен живёт 60 дней.
+
+### 3Б. Запасной путь — OAuth-ссылка
+
+Если генератор недоступен.
 
 1. В приложении → продукт **Threads API** → Настройки:
    - **Redirect Callback URL**: `https://smm.mycomputer.education/oauth/threads`
      (должен быть https и совпадать до символа с адресом в шаге 3; принимать
      этот адрес панели не обязательно — код виден прямо в адресной строке),
-   - скоупы: `threads_basic`, `threads_content_publish`.
+   - права — все три из таблицы выше.
+   Threads **не сохраняет настройки, пока не заполнены все три адреса**:
+   возврат, удаление приложения, удаление данных.
 2. В приложении Threads под аккаунтом «Мой компьютер»: Настройки → Аккаунт →
    **Доступ к Threads API** — включить.
 3. Открыть в браузере, войдя под аккаунтом «Мой компьютер»:
 
 ```
-https://threads.net/oauth/authorize?client_id=THREADS_APP_ID&redirect_uri=https://smm.mycomputer.education/oauth/threads&scope=threads_basic,threads_content_publish&response_type=code
+https://threads.net/oauth/authorize?client_id=THREADS_APP_ID&redirect_uri=https://smm.mycomputer.education/oauth/threads&scope=threads_basic,threads_content_publish,threads_delete&response_type=code
 ```
 
    Разрешить → браузер уйдёт на адрес возврата, и **в строке адреса будет
@@ -175,18 +210,31 @@ curl "https://graph.threads.net/access_token?grant_type=th_exchange_token&client
 curl "https://graph.threads.net/v1.0/me?fields=id,username&access_token=ДОЛГИЙ_ТОКЕН"
 ```
 
-7. **Продление** (делать между 25-м и 55-м днём; раньше суток от выдачи Threads
-   продлевать отказывается):
+   **Это не ID приложения.** В сентябре 2026 в поле «ID аккаунта» попал ID
+   приложения Threads — проверка связи при этом проходила (она ходит на `me`),
+   а публикация падала с «Object with ID … does not exist». Теперь «Проверить
+   связь» сверяет ID и предупреждает жёлтым, если он не тот.
+
+7. **Продление делать не нужно** — сторож панели продлевает токен Threads сам
+   за две недели до смерти. Руками — только если сторож написал в журнал, что
+   продлить не смог. Истёкший токен продлить уже нельзя, только выпустить заново.
 
 ```
 curl "https://graph.threads.net/refresh_access_token?grant_type=th_refresh_token&access_token=ДОЛГИЙ_ТОКЕН"
 ```
 
+### Проверить, что права попали в токен
+
+У Threads нет `debug_token`: список прав токена площадка не отдаёт. Право на
+публикацию видно по тому, создаётся ли черновик
+(`node tools/diagnose-post.mjs --project 1 …`), право на удаление — только
+пробой с удалением (`tools/smoke-post.mjs --platforms threads`).
+
 ---
 
 ## 4. Вписать в панель
 
-`https://smm.mycomputer.education` → **Площадки** → проект → карточка площадки.
+`https://smm.mycomputer.education` → **Проекты** → проект → карточка площадки.
 Поля ровно эти:
 
 **Facebook**
@@ -200,8 +248,12 @@ curl "https://graph.threads.net/refresh_access_token?grant_type=th_refresh_token
 - `Токен страницы` — **тот же самый**, что у Facebook
 
 **Threads**
-- `ID аккаунта` — из `GET /me`
-- `Токен доступа` — долгий токен из шага 3.5
+- `ID аккаунта` — из `GET /me` (у академии `29062313960036757`); **не ID приложения**
+- `Токен доступа` — токен из генератора (3А) или долгий из шага 3Б.5
+
+Смена токена сама выставляет дату его выпуска на сегодня — от неё сторож
+считает срок. Если токен выпущен раньше, чем вписан, дату надо поправить:
+`node tools/set-account.mjs --project 1 --platform threads --token-issued <ISO>`.
 
 Дальше в каждой карточке — **«Проверить связь»**. Успех выглядит так: Facebook
 показывает название страницы, Instagram — имя пользователя, Threads — имя
