@@ -1314,6 +1314,28 @@ const MIGRATIONS = [
       CREATE INDEX idx_mail_signups_ip ON mail_signups(ip_hash, created_at);
     `,
   },
+  {
+    /*
+     * Подписка с сайтов: доказательство согласия и источник (14.09.2026, мост
+     * «CRM школы ↔ панель»; 029 уже выкачена, поэтому отдельной миграцией).
+     *
+     * `consent_version` — код текста согласия, который человек видел рядом с
+     * формой: закон о персональных данных и п. 7.2 политики требуют отдельного
+     * согласия на маркетинг, а текст у формы со временем меняется. `lang` —
+     * язык страницы подписки. utm — откуда пришёл: замыкает отчёт «пост или
+     * реклама → подписка».
+     */
+    name: '030-mail-signup-consent',
+    sql: `
+      ALTER TABLE mail_signups ADD COLUMN consent_version TEXT NOT NULL DEFAULT '';
+      ALTER TABLE mail_signups ADD COLUMN lang TEXT NOT NULL DEFAULT 'uk';
+      ALTER TABLE mail_signups ADD COLUMN utm_source TEXT NOT NULL DEFAULT '';
+      ALTER TABLE mail_signups ADD COLUMN utm_medium TEXT NOT NULL DEFAULT '';
+      ALTER TABLE mail_signups ADD COLUMN utm_campaign TEXT NOT NULL DEFAULT '';
+      ALTER TABLE mail_signups ADD COLUMN referrer TEXT NOT NULL DEFAULT '';
+      ALTER TABLE mail_signups ADD COLUMN landing_path TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ];
 
 function migrate() {
