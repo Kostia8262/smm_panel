@@ -164,6 +164,12 @@ test('всплеск: сверх суточного предела школы п
   assert.ok(db.prepare("SELECT 1 FROM publish_log WHERE message LIKE '%всплеск подписок%'").get(), 'тревога в журнале');
 });
 
+test('доверенный прокси сайта передаёт адрес посетителя и сайт; чужому заголовкам не верим', () => {
+  const headers = { 'x-subscribe-client-ip': '203.0.113.7', 'x-subscribe-origin': 'https://child.mycomputer.education' };
+  assert.deepEqual(signups.requestSource({ ip: '127.0.0.1', origin: null, headers }), { ip: '203.0.113.7', origin: 'https://child.mycomputer.education' });
+  assert.deepEqual(signups.requestSource({ ip: '198.51.100.1', origin: 'https://evil.example', headers }), { ip: '198.51.100.1', origin: 'https://evil.example' });
+});
+
 test('частые попытки с одного адреса закрываются', async () => {
   resetAll();
   db.prepare('DELETE FROM mail_signups').run();

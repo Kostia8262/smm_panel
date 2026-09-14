@@ -75,6 +75,24 @@ export function siteOf(origin) {
   return own.some((d) => host === d || host.endsWith(`.${d}`)) ? host : null;
 }
 
+/**
+ * Откуда пришла форма и чей это адрес.
+ *
+ * Сайт, чья CSP не пускает fetch на панель (child — строка в конфиге
+ * LiteSpeed вне репозитория), шлёт форму через свой сервер. Тогда у панели
+ * все подписчики такого сайта оказались бы с одним адресом — сервера сети, и
+ * лимит «5 попыток в час» закрыл бы форму для всех разом. Доверенному прокси
+ * (запрос пришёл с адреса из `signup_proxy_ips`) панель верит в заголовках
+ * `X-Subscribe-Client-Ip` и `X-Subscribe-Origin`; всем остальным — нет.
+ */
+export function requestSource({ ip, origin, headers = {} }) {
+  const trusted = parseOwnDomains(getSetting('signup_proxy_ips', '62.72.21.71,127.0.0.1,::1,::ffff:127.0.0.1'));
+  const clientIp = String(headers['x-subscribe-client-ip'] || '').trim();
+  const proxiedOrigin = String(headers['x-subscribe-origin'] || '').trim();
+  if (trusted.includes(String(ip)) && clientIp && proxiedOrigin) return { ip: clientIp.slice(0, 64), origin: proxiedOrigin };
+  return { ip, origin };
+}
+
 /** База «Подписка с сайта» школы — заводится при первой подписке. */
 function signupList(projectId) {
   const key = `mail_signup_list_${projectId}`;

@@ -827,8 +827,7 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
         utm: { source: req.body?.utm_source, medium: req.body?.utm_medium, campaign: req.body?.utm_campaign },
         referrer: req.body?.referrer,
         landingPath: req.body?.landing_path,
-        origin: formOrigin(req),
-        ip: req.ip,
+        ...signups.requestSource({ ip: req.ip, origin: formOrigin(req), headers: req.headers }),
         publicBase: publicBase(),
       });
     } catch (err) {
