@@ -100,22 +100,22 @@ function confirmLetter({ project, url }) {
  */
 export async function subscribe({ email, school, origin, page = '', honeypot = '', ip = '', publicBase, fetchImpl, now = Date.now() }) {
   const site = siteOf(origin);
-  if (!site) return { status: 403, ok: false, message: 'Форма працює лише на наших сайтах.' };
+  if (!site) return { status: 403, ok: false, code: 'foreign_site', message: 'Форма працює лише на наших сайтах.' };
   const project = projectBySlug(school);
-  if (!project) return { status: 400, ok: false, message: 'Не вдалося визначити школу. Оновіть сторінку.' };
+  if (!project) return { status: 400, ok: false, code: 'unknown_school', message: 'Не вдалося визначити школу. Оновіть сторінку.' };
 
   // Ловушка: поле, которого человек не видит. Роботу отвечаем как человеку.
-  if (String(honeypot || '').trim()) return { status: 200, ok: true, message: ACCEPTED };
+  if (String(honeypot || '').trim()) return { status: 200, ok: true, code: 'accepted', message: ACCEPTED };
 
   const ipH = ipHash(ip);
   if (tooManyAttempts(`signup:${ipH}`, { limit: SIGNUP_LIMITS.perIpPerHour, windowMs: 3600000, blockMs: 3600000, now })) {
-    return { status: 429, ok: false, message: 'Забагато спроб. Спробуйте за годину.' };
+    return { status: 429, ok: false, code: 'too_many', message: 'Забагато спроб. Спробуйте за годину.' };
   }
 
   const check = checkAddress(email);
-  if (check.verdict === 'invalid') return { status: 400, ok: false, message: 'Схоже, в адресі помилка. Перевірте, будь ласка.' };
+  if (check.verdict === 'invalid') return { status: 400, ok: false, code: 'invalid_email', message: 'Схоже, в адресі помилка. Перевірте, будь ласка.' };
   if (check.verdict === 'fixable' && check.suggestion) {
-    return { status: 400, ok: false, message: `Можливо, ви мали на увазі ${check.suggestion}?`, suggestion: check.suggestion };
+    return { status: 400, ok: false, code: 'typo', message: `Можливо, ви мали на увазі ${check.suggestion}?`, suggestion: check.suggestion };
   }
   const address = check.email;
 
@@ -128,13 +128,13 @@ export async function subscribe({ email, school, origin, page = '', honeypot = '
     db.prepare('SELECT 1 FROM mail_list_members WHERE contact_id = ? AND removed_at IS NULL').get(contact.id);
   const tooSoon = recent.last && now - Date.parse(recent.last) < SIGNUP_LIMITS.resendAfterMinutes * 60000;
   if (alreadyActive || tooSoon || recent.n >= SIGNUP_LIMITS.perEmailPerDay) {
-    return { status: 200, ok: true, message: ACCEPTED };
+    return { status: 200, ok: true, code: 'accepted', message: ACCEPTED };
   }
 
   const sender = senders.listSenders().find((s) => !['dead', 'disconnected'].includes(s.state));
   if (!sender) {
     log('error', `рассылка: подписка с ${site} не принята — нет живого ящика для письма-подтверждения`);
-    return { status: 503, ok: false, message: 'Підписка тимчасово не працює. Спробуйте пізніше.' };
+    return { status: 503, ok: false, code: 'unavailable', message: 'Підписка тимчасово не працює. Спробуйте пізніше.' };
   }
 
   const token = randomBytes(24).toString('base64url');
@@ -161,9 +161,9 @@ export async function subscribe({ email, school, origin, page = '', honeypot = '
   } catch (err) {
     db.prepare("UPDATE mail_signups SET status = 'failed', error = ? WHERE id = ?").run(String(err.message).slice(0, 300), info.lastInsertRowid);
     log('warn', `рассылка: письмо-подтверждение подписки (${maskEmail(address)}) не ушло: ${err.message}`);
-    return { status: 503, ok: false, message: 'Не вдалося надіслати лист. Спробуйте пізніше.' };
+    return { status: 503, ok: false, code: 'send_failed', message: 'Не вдалося надіслати лист. Спробуйте пізніше.' };
   }
-  return { status: 200, ok: true, message: ACCEPTED };
+  return { status: 200, ok: true, code: 'accepted', message: ACCEPTED };
 }
 
 /**

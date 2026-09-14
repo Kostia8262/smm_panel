@@ -791,9 +791,15 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
    * своих доменов разрешено его прочитать (CORS). Форма без скриптов получает
    * страницу с тем же текстом.
    */
+  // Встроенные браузеры Instagram и ChatGPT присылают `Origin: null` — тогда
+  // сайт узнаём по Referer, а разрешение даём на тот же `null`.
+  const formOrigin = (req) => {
+    const origin = req.get('origin');
+    return origin && origin !== 'null' ? origin : req.get('referer');
+  };
   const corsFor = (req, res) => {
     const origin = req.get('origin');
-    if (origin && signups.siteOf(origin)) {
+    if (origin && signups.siteOf(formOrigin(req))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -815,13 +821,13 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
         school: req.body?.school,
         page: req.body?.page,
         honeypot: req.body?.website,
-        origin: req.get('origin') || req.get('referer'),
+        origin: formOrigin(req),
         ip: req.ip,
         publicBase: publicBase(),
       });
     } catch (err) {
       log('error', `рассылка: сбой приёма подписки: ${err.message}`);
-      out = { status: 500, ok: false, message: 'Щось пішло не так. Спробуйте пізніше.' };
+      out = { status: 500, ok: false, code: 'error', message: 'Щось пішло не так. Спробуйте пізніше.' };
     }
     const wantsJson = (req.get('accept') || '').includes('application/json') || req.is('application/json');
     if (wantsJson) return res.status(out.status).json(out);

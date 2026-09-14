@@ -68,6 +68,7 @@ test('чужой сайт, неизвестная школа, робот в ло
   assert.equal((await signups.subscribe({ ...BASE, email: 'не адрес', ip: '1.1.1.2', fetchImpl, now: NOW })).status, 400);
   const typo = await signups.subscribe({ ...BASE, email: 'ivan@gmial.com', ip: '1.1.1.3', fetchImpl, now: NOW });
   assert.equal(typo.suggestion, 'ivan@gmail.com');
+  assert.equal(typo.code, 'typo', 'по коду сайт выбирает текст на своём языке');
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mail_signups').get().n, 0);
 });
 
