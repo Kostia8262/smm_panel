@@ -29,6 +29,7 @@ import { makeState, readState } from '../oauth/threads.js';
 import { getProject } from '../projects.js';
 import { tooManyAttempts } from '../ratelimit.js';
 import { pingLeads } from '../links.js';
+import { pingFeed } from './crm-feed.js';
 
 const { MailError } = store;
 
@@ -861,6 +862,19 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
     handle(async (_req, res) => {
       try {
         res.json({ ok: true, ...(await pingLeads()) });
+      } catch (err) {
+        res.status(422).json({ error: err.message });
+      }
+    })
+  );
+
+  /** «Проверить ленту»: второй ключ интеграции, право mail:feed. */
+  router.post(
+    '/api/settings/leads/feed-check',
+    requireAccess('platforms'),
+    handle(async (_req, res) => {
+      try {
+        res.json({ ok: true, ...(await pingFeed()) });
       } catch (err) {
         res.status(422).json({ error: err.message });
       }

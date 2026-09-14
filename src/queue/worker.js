@@ -286,8 +286,34 @@ async function mailTick() {
   }
 }
 
+/**
+ * Лента согласий CRM школы (src/mail/crm-feed.js) — раз в минуту, своим
+ * флагом: медленная админка не держит ни посты, ни отправку писем. Без ключа
+ * ленты заход ничего не делает.
+ */
+const FEED_TICK_MS = Number(process.env.CRM_FEED_TICK_MS || 60000);
+let feedBusy = false;
+let feedError = { text: '', at: 0 };
+async function feedTick() {
+  if (feedBusy) return;
+  feedBusy = true;
+  try {
+    const { pullFeed } = await import('../mail/crm-feed.js');
+    await pullFeed();
+    feedError = { text: '', at: 0 };
+  } catch (err) {
+    if (err.message !== feedError.text || Date.now() - feedError.at > 60 * 60 * 1000) {
+      log('warn', `рассылка: лента CRM школы не прочиталась: ${err.message}`);
+      feedError = { text: err.message, at: Date.now() };
+    }
+  } finally {
+    feedBusy = false;
+  }
+}
+
 log('info', `воркер запущен, тик ${TICK_MS / 1000} с`);
 recoverStuck(db, log);
 tick();
 setInterval(tick, TICK_MS);
 setInterval(mailTick, MAIL_TICK_MS);
+setInterval(feedTick, FEED_TICK_MS);

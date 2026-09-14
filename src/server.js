@@ -45,6 +45,7 @@ const facebookOauth = await import('./oauth/facebook.js');
 const { randomBytes } = await import('node:crypto');
 const { writeFileSync } = await import('node:fs');
 const { encrypt: encryptSecret, decrypt: decryptSecret } = await import('./secrets.js');
+const { feedState } = await import('./mail/crm-feed.js');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3210);
@@ -1726,6 +1727,8 @@ app.put('/api/settings/leads', requireAccess('platforms'), (req, res) => {
   const { url, token } = req.body || {};
   if (url !== undefined) staffDb.setSetting('leads_api_url', String(url).trim());
   if (token) staffDb.setSetting('leads_api_token', encryptSecret(String(token).trim()));
+  // Ключ ленты согласий — второй ключ интеграции, со своим правом mail:feed.
+  if (req.body?.feedToken) staffDb.setSetting('crm_feed_token', encryptSecret(String(req.body.feedToken).trim()));
   if (req.body?.ownDomains !== undefined) {
     staffDb.setSetting('own_domains', String(req.body.ownDomains).trim());
   }
@@ -1734,6 +1737,7 @@ app.put('/api/settings/leads', requireAccess('platforms'), (req, res) => {
     url: staffDb.getSetting('leads_api_url', ''),
     hasToken: Boolean(staffDb.getSetting('leads_api_token', '')),
     ownDomains: staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school'),
+    feed: feedState(),
   });
 });
 
@@ -1742,6 +1746,7 @@ app.get('/api/settings/leads', requireAccess('platforms'), (_req, res) => {
     url: staffDb.getSetting('leads_api_url', 'https://mycomputer.education'),
     hasToken: Boolean(staffDb.getSetting('leads_api_token', '')),
     ownDomains: staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school'),
+    feed: feedState(),
   });
 });
 

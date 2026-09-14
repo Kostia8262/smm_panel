@@ -469,6 +469,16 @@ export function schedulePanel() {
  * Доступ к заявкам школы. Ради этого отчёта панель и делалась своими руками:
  * сервисы планирования не знают, сколько учеников пришло с поста.
  */
+/** Как прошёл последний заход ленты — чтобы тишина не выглядела как «всё хорошо». */
+function feedStatus(feed) {
+  if (feed.lastError) return note('danger', 'Лента согласий не читается', feed.lastError);
+  if (!feed.lastAt) return el('p', 'field__hint', 'Лента ещё ни разу не прочиталась — воркер заходит раз в минуту.');
+  const at = new Date(feed.lastAt).toLocaleString('ru-RU', { timeZone: 'Europe/Kyiv', dateStyle: 'short', timeStyle: 'short' });
+  const s = feed.lastStats;
+  const last = s ? ` Последние изменения: новых ${s.added || 0}, снято согласие ${s.removed || 0}, не взято ${(s.refused || 0) + (s.invalid || 0) + (s.unknown_site || 0)}.` : '';
+  return el('p', 'field__hint', `Лента прочитана ${at}.${last}`);
+}
+
 export function leadsPanel() {
   const p = panel('Связь с заявками школы');
   const body = el('div');
@@ -494,6 +504,14 @@ export function leadsPanel() {
       token.input.autocomplete = 'new-password';
       token.input.placeholder = cfg.hasToken ? 'сохранён — пустое поле не меняет' : 'mcai_…';
       token.wrap.append(el('span', 'field__hint', 'Админка школы → «Співробітники» → «Інтеграції» → «Випустити ключ», право leads:read. Ключ показывается один раз.'));
+      // Второй ключ: лента согласий CRM (право mail:feed) — почта и согласие, отдельно от заявок.
+      const feedToken = field('Ключ ленты согласий', '');
+      feedToken.input.type = 'password';
+      feedToken.input.autocomplete = 'new-password';
+      feedToken.input.placeholder = cfg.feed?.hasToken ? 'сохранён — пустое поле не меняет' : 'mcai_…';
+      feedToken.wrap.append(
+        el('span', 'field__hint', 'Отдельный ключ «SMM-панель — стрічка» с правом mail:feed. Люди с согласием на письма сами попадают в базы «CRM школы».')
+      );
       const domains = field('Наши домены', cfg.ownDomains || '');
       domains.wrap.append(el('span', 'field__hint', 'Через запятую. Ссылки на чужие сайты не трогаем.'));
 
@@ -515,9 +533,26 @@ export function leadsPanel() {
           }
         },
       });
-      foot.append(save, check);
+      const checkFeed = button('Проверить ленту', {
+        variant: 'quiet',
+        onClick: async () => {
+          checkFeed.disabled = true;
+          try {
+            const out = await api.checkFeed();
+            toast(`Лента доступна${out.name ? `: ключ «${out.name}»` : ''}`, 'ok');
+          } catch (err) {
+            toast(err.message, 'danger');
+          } finally {
+            checkFeed.disabled = false;
+          }
+        },
+      });
+      foot.append(save, check, checkFeed);
 
-      form.append(url.wrap, token.wrap, domains.wrap, foot);
+      if (cfg.feed?.hasToken) feedToken.wrap.append(feedStatus(cfg.feed));
+      // Сетка растягивает только третье поле, а доменам тоже нужна вся ширина.
+      domains.wrap.style.gridColumn = '1 / -1';
+      form.append(url.wrap, token.wrap, feedToken.wrap, domains.wrap, foot);
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         save.disabled = true;
@@ -525,10 +560,12 @@ export function leadsPanel() {
           await api.saveLeadsSettings({
             url: url.input.value,
             token: token.input.value,
+            feedToken: feedToken.input.value,
             ownDomains: domains.input.value,
           });
           toast('Сохранено', 'ok');
           token.input.value = '';
+          feedToken.input.value = '';
         } catch (err) {
           toast(err.message, 'danger');
         } finally {

@@ -118,6 +118,7 @@ export const api = {
   leadsSettings: () => request('/api/settings/leads'),
   saveLeadsSettings: (body) => request('/api/settings/leads', { method: 'PUT', body }),
   checkLeads: () => request('/api/settings/leads/check', { method: 'POST' }),
+  checkFeed: () => request('/api/settings/leads/feed-check', { method: 'POST' }),
 
   settings: () => request('/api/settings'),
   saveSettings: (body) => request('/api/settings', { method: 'PUT', body }),
