@@ -117,6 +117,7 @@ export const api = {
   report: (id) => request(`/api/posts/${id}/report`),
   leadsSettings: () => request('/api/settings/leads'),
   saveLeadsSettings: (body) => request('/api/settings/leads', { method: 'PUT', body }),
+  checkLeads: () => request('/api/settings/leads/check', { method: 'POST' }),
 
   settings: () => request('/api/settings'),
   saveSettings: (body) => request('/api/settings', { method: 'PUT', body }),

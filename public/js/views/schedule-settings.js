@@ -488,9 +488,12 @@ export function leadsPanel() {
 
       const form = el('form', 'plan-form__grid');
       const url = field('Адрес админки', cfg.url || 'https://mycomputer.education');
-      const token = field('Админ-токен', '');
+      // С 14.09.2026 — ключ интеграции с правом leads:read, а не полный админ-токен.
+      const token = field('Ключ интеграции', '');
       token.input.type = 'password';
-      token.input.placeholder = cfg.hasToken ? 'сохранён — пустое поле не меняет' : 'нужен для чтения заявок';
+      token.input.autocomplete = 'new-password';
+      token.input.placeholder = cfg.hasToken ? 'сохранён — пустое поле не меняет' : 'mcai_…';
+      token.wrap.append(el('span', 'field__hint', 'Админка школы → «Співробітники» → «Інтеграції» → «Випустити ключ», право leads:read. Ключ показывается один раз.'));
       const domains = field('Наши домены', cfg.ownDomains || '');
       domains.wrap.append(el('span', 'field__hint', 'Через запятую. Ссылки на чужие сайты не трогаем.'));
 
@@ -498,7 +501,21 @@ export function leadsPanel() {
       foot.style.justifyContent = 'flex-start';
       const save = button('Сохранить', { variant: 'primary' });
       save.type = 'submit';
-      foot.append(save);
+      const check = button('Проверить связь', {
+        variant: 'quiet',
+        onClick: async () => {
+          check.disabled = true;
+          try {
+            const out = await api.checkLeads();
+            toast(`Связь есть${out.name ? `: ключ «${out.name}»` : ''}`, 'ok');
+          } catch (err) {
+            toast(err.message, 'danger');
+          } finally {
+            check.disabled = false;
+          }
+        },
+      });
+      foot.append(save, check);
 
       form.append(url.wrap, token.wrap, domains.wrap, foot);
       form.addEventListener('submit', async (e) => {

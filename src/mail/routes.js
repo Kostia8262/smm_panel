@@ -28,6 +28,7 @@ import * as signups from './signups.js';
 import { makeState, readState } from '../oauth/threads.js';
 import { getProject } from '../projects.js';
 import { tooManyAttempts } from '../ratelimit.js';
+import { pingLeads } from '../links.js';
 
 const { MailError } = store;
 
@@ -850,6 +851,22 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
   };
   router.get('/s/confirm/:token', confirmHandler);
   router.post('/s/confirm/:token', express.urlencoded({ extended: false, limit: '4kb' }), confirmHandler);
+
+  /**
+   * «Проверить связь» с заявками школы. Маршрут общий для постов и писем, а
+   * живёт здесь, потому что ключ интеграции появился вместе с отчётом рассылки.
+   */
+  router.post(
+    '/api/settings/leads/check',
+    requireAccess('platforms'),
+    handle(async (_req, res) => {
+      try {
+        res.json({ ok: true, ...(await pingLeads()) });
+      } catch (err) {
+        res.status(422).json({ error: err.message });
+      }
+    })
+  );
 
   router.get(
     '/api/mail/signups/stats',

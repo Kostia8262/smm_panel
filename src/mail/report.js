@@ -12,26 +12,11 @@
  */
 
 import { db, log } from '../db.js';
-import { getSetting } from '../staff.js';
-import { decrypt } from '../secrets.js';
-import { leadsForCampaign } from '../links.js';
+import { leadsForCampaign, leadsAccess } from '../links.js';
 import { MailError } from './store.js';
 import * as campaigns from './campaigns.js';
 
 const nowIso = (now = Date.now()) => new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z');
-
-function leadsAccess() {
-  const stored = getSetting('leads_api_token', '');
-  let apiToken = process.env.LEADS_API_TOKEN || '';
-  if (stored) {
-    try {
-      apiToken = decrypt(stored);
-    } catch {
-      apiToken = '';
-    }
-  }
-  return { apiUrl: getSetting('leads_api_url', 'https://mycomputer.education'), apiToken };
-}
 
 /** Подпись ссылки для отчёта: не адрес, а то, на что человек нажимал. */
 function linkLabels(blocks) {

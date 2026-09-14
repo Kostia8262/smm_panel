@@ -13,6 +13,8 @@
 
 import { randomBytes } from 'node:crypto';
 import { db, log } from './db.js';
+import { getSetting } from './staff.js';
+import { decrypt } from './secrets.js';
 import { replaceOwnLinks, CODE_LENGTH } from './shortlink.js';
 
 /** Соответствие площадки и utm_source. Меняется только вместе с отчётами. */
@@ -128,25 +130,67 @@ export function campaignOfPost(postId) {
 }
 
 /**
- * Заявки, пришедшие по метке поста.
+ * Доступ к заявкам школы: адрес админки и ключ интеграции.
+ *
+ * С 14.09.2026 — ключ интеграции со скоупом `leads:read` (админка →
+ * «Співробітники» → «Інтеграції»), а не полный админ-токен: тот открывал всю
+ * админку и уезжал в бэкапы базы панели. Хранится в той же настройке
+ * `leads_api_token`, шифротекстом.
+ */
+export function leadsAccess() {
+  const stored = getSetting('leads_api_token', '');
+  let apiKey = process.env.LEADS_API_TOKEN || '';
+  if (stored) {
+    try {
+      apiKey = decrypt(stored);
+    } catch {
+      apiKey = '';
+    }
+  }
+  return { apiUrl: getSetting('leads_api_url', 'https://mycomputer.education'), apiKey };
+}
+
+/** Запрос к API интеграции админки: 401 и 403 — разные беды, и человеку нужно знать какая. */
+async function integrationGet(path, { apiUrl, apiKey, apiToken, fetchImpl = globalThis.fetch }) {
+  const key = apiKey || apiToken;
+  if (!apiUrl || !key) throw new Error('Не вписан ключ интеграции с админкой школы');
+  let res;
+  try {
+    res = await fetchImpl(`${apiUrl.replace(/\/$/, '')}${path}`, {
+      headers: { 'x-integration-key': key },
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    throw new Error(`Админка школы не ответила: ${err.message}`);
+  }
+  if (res.status === 401) throw new Error('Админка не узнала ключ — вставьте ключ из «Інтеграції» (mcai_…), а не старый админ-токен');
+  if (res.status === 403) throw new Error('Ключ интеграции отозван или без права leads:read — выпустите новый в админке');
+  if (!res.ok) throw new Error(`Админка школы ответила ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Заявки, пришедшие по метке поста или письма.
  *
  * Панель тянет их из админки школы: заявки живут там, и дублировать их к
  * себе значит завести второй источник правды о клиентах — худшее, что можно
- * сделать с базой учеников.
+ * сделать с базой учеников. Фильтр по метке — на стороне админки.
  */
-export async function leadsForCampaign(campaign, { apiUrl, apiToken }) {
-  if (!apiUrl || !apiToken) throw new Error('Не настроен доступ к заявкам школы');
-  const res = await fetch(`${apiUrl.replace(/\/$/, '')}/api/leads`, {
-    headers: { 'x-admin-token': apiToken },
-  });
-  if (!res.ok) throw new Error(`Админка школы ответила ${res.status}`);
-  const data = await res.json();
-  const leads = Array.isArray(data.leads) ? data.leads : [];
-  return leads.filter((l) => (l.utmCampaign || l.utm_campaign) === campaign);
+export async function leadsForCampaign(campaign, access = leadsAccess()) {
+  const data = await integrationGet(`/api/integration/leads?utm_campaign=${encodeURIComponent(campaign)}`, access);
+  return Array.isArray(data.leads) ? data.leads : [];
+}
+
+/** «Проверить связь»: ключ жив и у него есть право читать заявки. */
+export async function pingLeads(access = leadsAccess()) {
+  const data = await integrationGet('/api/integration/ping', access);
+  const scopes = Array.isArray(data.scopes) ? data.scopes : [];
+  if (!scopes.includes('leads:read')) throw new Error('У ключа нет права leads:read — выпустите ключ с этим правом');
+  return { name: data.name || '', scopes };
 }
 
 /** Сводка по посту: переходы, заявки и честная пометка, чего мы не знаем. */
-export async function postReport(post, { apiUrl, apiToken } = {}) {
+export async function postReport(post, access = leadsAccess()) {
   const clicks = clicksForPost(post.id);
   const campaign = campaignOfPost(post.id);
   const report = { campaign, clicks, leads: null, leadsError: null };
@@ -156,7 +200,7 @@ export async function postReport(post, { apiUrl, apiToken } = {}) {
     return report;
   }
   try {
-    const leads = await leadsForCampaign(campaign, { apiUrl, apiToken });
+    const leads = await leadsForCampaign(campaign, access);
     report.leads = {
       count: leads.length,
       items: leads.slice(0, 20).map((l) => ({
