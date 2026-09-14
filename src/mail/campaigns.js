@@ -18,7 +18,9 @@ import { BLOCK_TYPES, renderLetter, sampleBlocks, safeUrl } from './compose/rend
 import { brandFor, IMAGE_SLOTS } from './compose/brand.js';
 import * as media from './compose/media.js';
 
-const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+// С аргументом: до 14.09.2026 он молча игнорировался, и «с какого момента» для
+// частоты писем всегда было «сейчас» — недавно получавшие письмо не пропускались.
+const nowIso = (at = Date.now()) => new Date(at).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 export const CAMPAIGN_STATUS = {
   draft: 'черновик',
