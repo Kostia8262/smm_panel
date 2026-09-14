@@ -18,6 +18,7 @@ import { withSignature } from '../signature.js';
 import { emojiButton } from '../emoji.js';
 import { audioField } from '../audio.js';
 import { reelBuilder, reelPhotos } from '../reel-builder.js';
+import { tiktokOptions } from '../tiktok-options.js';
 // Общие с сервером: так счётчик и превью делят текст ровно как отправка.
 import { withShortLinks } from '../shared/shortlink.js';
 import { splitText, TEXT_LIMIT, CAPTION_LIMIT } from '../shared/text-split.js';
@@ -540,6 +541,11 @@ export function composerView(ctx, postId) {
 
       if (spec.id === 'instagram' && on) row.append(...soundBlocks(mine));
       if (spec.id === 'telegram' && on) row.append(telegramOptions(mine[0]));
+      if (spec.id === 'tiktok' && on) {
+        for (const t of mine) {
+          row.append(tiktokOptions({ post, target: t, media: mediaOf(t), onChange: () => save({ quiet: true }) }));
+        }
+      }
 
       list.append(row);
     }

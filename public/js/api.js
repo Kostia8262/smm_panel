@@ -167,6 +167,8 @@ export const api = {
   checkAccount: (id, platform) =>
     request(`/api/projects/${id}/accounts/${platform}/check`, { method: 'POST' }),
   startThreadsOauth: (id) => request(`/api/projects/${id}/oauth/threads/start`, { method: 'POST' }),
+  startTiktokOauth: (id) => request(`/api/projects/${id}/oauth/tiktok/start`, { method: 'POST' }),
+  tiktokCreator: (id) => request(`/api/projects/${id}/tiktok/creator`),
   startFacebookOauth: (id) => request(`/api/projects/${id}/oauth/facebook/start`, { method: 'POST' }),
   facebookPending: (id, pid) => request(`/api/projects/${id}/oauth/facebook/pending/${pid}`),
   applyFacebookPending: (id, pid, body) =>

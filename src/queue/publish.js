@@ -19,7 +19,8 @@ import { resolve } from 'node:path';
 import { db, getPost, log } from '../db.js';
 import { getAdapter } from '../platforms/index.js';
 import { formatOf } from '../platforms/specs.js';
-import { credentialsFor, getProject } from '../projects.js';
+import { getProject } from '../projects.js';
+import { liveCredentials } from '../live-creds.js';
 import { requeueEvergreen } from '../schedule.js';
 import { shortenLinks } from '../links.js';
 import { withSignature, signatureFor } from '../signature.js';
@@ -168,8 +169,16 @@ async function sendTarget({ post, project, publicUrl }, target) {
   }
 
   const adapter = getAdapter(target.platform);
-  const creds = credentialsFor(project.id, target.platform);
   db.prepare('UPDATE post_targets SET attempts = attempts + 1 WHERE id = ?').run(target.id);
+  // Доступы — свежие: у TikTok токен живёт сутки и обновляется прямо здесь.
+  // Не обновился — это поломка подключения, а не поста: говорим, что чинить.
+  let creds;
+  try {
+    creds = await liveCredentials(project.id, target.platform);
+  } catch (err) {
+    markFailed(target, err.message);
+    return { platform: target.platform, error: err.message };
+  }
 
   if (!adapter.isConfigured(creds)) {
     const missing = adapter.missingConfig(creds).join(', ');

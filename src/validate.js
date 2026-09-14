@@ -161,9 +161,6 @@ export function validatePost(post, ctx = {}) {
     if (!spec.ready) {
       issues.warnings.push('Адаптер ещё не подключён — пост встанет в очередь и будет ждать');
     }
-    if (spec.id === 'tiktok') {
-      issues.warnings.push('До аудита TikTok опубликует приватно (SELF_ONLY)');
-    }
     if (format.role === 'story') {
       issues.warnings.push('В сторис через API не будет ни ссылки, ни стикеров, ни опроса');
     }

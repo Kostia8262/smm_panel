@@ -49,13 +49,20 @@ export const ACCOUNT_FIELDS = {
     // рекомендует вход через конфигурацию; без неё кнопка просит права списком.
     { key: 'loginConfigId', title: 'ID конфигурации входа', hint: 'Facebook Login for Business → Конфигурации. Можно пусто', secret: false },
   ],
+  // Приватности здесь нет с 14.09.2026: правила TikTok требуют, чтобы её
+  // выбирал человек у каждого поста, без значения по умолчанию.
   tiktok: [
-    { key: 'clientKey', title: 'Client key', secret: false },
-    { key: 'clientSecret', title: 'Client secret', secret: true },
-    { key: 'accessToken', title: 'Токен доступа', secret: true, token: true },
-    { key: 'refreshToken', title: 'Refresh token', secret: true },
-    { key: 'privacy', title: 'Приватность', hint: 'SELF_ONLY до аудита, потом PUBLIC_TO_EVERYONE', secret: false },
-    { key: 'domainVerified', title: 'Домен подтверждён', hint: 'true или false', secret: false },
+    { key: 'clientKey', title: 'Client key', hint: 'TikTok for Developers → приложение → Credentials', secret: false },
+    { key: 'clientSecret', title: 'Client secret', hint: 'Там же. Нужен и для подключения, и для обновления токена', secret: true },
+    { key: 'accessToken', title: 'Токен доступа', hint: 'Кнопкой «Подключить через TikTok». Живёт сутки, обновляется сам', secret: true, token: true },
+    { key: 'refreshToken', title: 'Refresh token', hint: 'Ложится сам при подключении, живёт год', secret: true },
+    { key: 'openId', title: 'ID аккаунта TikTok', hint: 'Подставится при подключении', secret: false },
+    { key: 'domainVerified', title: 'Адрес панели подтверждён', hint: 'true — после подтверждения префикса /media/ в кабинете TikTok. Без этого нет фото-постов', secret: false },
+    { key: 'audited', title: 'Аудит TikTok пройден', hint: 'true — после одобрения заявки. До этого посты видны только вам', secret: false },
+    // Сроки и выданные права — служебные: пишет их панель, в карточке их нет.
+    { key: 'accessExpiresAt', hidden: true, secret: false },
+    { key: 'refreshExpiresAt', hidden: true, secret: false },
+    { key: 'scopes', hidden: true, secret: false },
   ],
 };
 
@@ -174,7 +181,11 @@ export function setTokenSavedAt(projectId, platform, when) {
   return at.toISOString();
 }
 
-export function saveAccount(projectId, platform, values) {
+/**
+ * @param {{quiet?: boolean}} [opts] — `quiet`: без записи в журнал. Суточное
+ *   обновление токена TikTok иначе засыпало бы журнал строкой в день.
+ */
+export function saveAccount(projectId, platform, values, { quiet = false } = {}) {
   if (!PLATFORMS[platform]) throw new Error(`Неизвестная площадка «${platform}»`);
   const fields = ACCOUNT_FIELDS[platform] || [];
   const current = credentialsFor(projectId, platform);
@@ -213,7 +224,7 @@ export function saveAccount(projectId, platform, values) {
   // над уже исправленным, незачем.
   db.prepare('DELETE FROM token_health WHERE project_id = ? AND platform = ?').run(projectId, platform);
 
-  log('info', `обновлены доступы ${platform} у проекта #${projectId}`);
+  if (!quiet) log('info', `обновлены доступы ${platform} у проекта #${projectId}`);
   return accountStatus(projectId, platform);
 }
 
@@ -301,7 +312,7 @@ export function accountStatus(projectId, platform) {
     configured: missing.length === 0,
     missing,
     notes: spec?.notes || [],
-    fields: fields.map((f) => ({
+    fields: fields.filter((f) => !f.hidden).map((f) => ({
       ...f,
       filled: Boolean(creds[f.key]),
       // Несекретные значения показываем целиком: id канала полезно видеть.
@@ -310,9 +321,12 @@ export function accountStatus(projectId, platform) {
   };
 }
 
-/** Не всё обязательно: приватность и флаг домена у TikTok имеют значения по умолчанию. */
+/**
+ * Не всё обязательно. У TikTok обязательны приложение и оба токена; ID
+ * аккаунта, сроки и флаги подтверждения и аудита пишет панель или владелец позже.
+ */
 function isOptional(platform, key) {
-  if (platform === 'tiktok') return key === 'privacy' || key === 'domainVerified';
+  if (platform === 'tiktok') return !['clientKey', 'clientSecret', 'accessToken', 'refreshToken'].includes(key);
   // Приложение Threads нужно только для кнопки подключения: токен, вписанный
   // руками, публикует и без него.
   if (platform === 'threads') return key === 'appId' || key === 'appSecret';
@@ -362,7 +376,6 @@ export function importEnvAccounts(projectId = 1) {
       clientSecret: process.env.TIKTOK_CLIENT_SECRET,
       accessToken: process.env.TIKTOK_ACCESS_TOKEN,
       refreshToken: process.env.TIKTOK_REFRESH_TOKEN,
-      privacy: process.env.TIKTOK_PRIVACY,
       domainVerified: process.env.TIKTOK_DOMAIN_VERIFIED,
     },
   };

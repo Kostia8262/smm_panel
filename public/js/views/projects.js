@@ -51,8 +51,21 @@ export function projectsView(ctx) {
   function reportOauthReturn() {
     const params = new URLSearchParams(location.search);
     const kind = params.get('oauth');
-    if (kind !== 'threads' && kind !== 'facebook') return;
+    if (kind !== 'threads' && kind !== 'facebook' && kind !== 'tiktok') return;
     history.replaceState(null, '', `${location.pathname}${location.hash}`);
+
+    if (kind === 'tiktok') {
+      const id = Number(params.get('project'));
+      if (id) openId = id;
+      if (params.get('result') !== 'ok') {
+        toast(`TikTok не подключён: ${params.get('message') || 'неизвестная ошибка'}`, 'danger');
+        return;
+      }
+      toast(`TikTok подключён${params.get('user') ? `: ${params.get('user')}` : ''}`, 'ok');
+      const missing = (params.get('missing') || '').split(',').filter(Boolean);
+      if (missing.length) toast(`TikTok выдал не все права: нет ${missing.join(', ')}. Переподключите и не снимайте галочки.`, 'warn');
+      return;
+    }
 
     if (kind === 'facebook') {
       const id = Number(params.get('project'));
@@ -434,6 +447,29 @@ export function projectsView(ctx) {
             const { url } = await api.startThreadsOauth(project.id);
             // Уходим в Threads в этой же вкладке: окно согласия открывается
             // в сессии браузера, и отдельная вкладка ничего не меняет.
+            location.href = url;
+          } catch (err) {
+            toast(err.message, 'danger');
+            connect.disabled = false;
+          }
+        },
+      });
+      foot.append(connect);
+    }
+
+    // TikTok — только кнопкой: токен живёт сутки, refresh token выдаётся лишь
+    // окном согласия, вписать их руками было бы бессмысленно (14.09.2026).
+    if (account.platform === 'tiktok') {
+      const ready = account.fields.some((f) => f.key === 'clientKey' && f.filled) &&
+        account.fields.some((f) => f.key === 'clientSecret' && f.filled);
+      const connect = button(account.configured ? 'Переподключить через TikTok' : 'Подключить через TikTok', {
+        variant: ready && !account.configured ? 'primary' : '',
+        iconName: 'tiktok',
+        title: ready ? 'Откроется окно TikTok — войдите под аккаунтом школы' : 'Сначала сохраните Client key и Client secret приложения TikTok',
+        onClick: async () => {
+          connect.disabled = true;
+          try {
+            const { url } = await api.startTiktokOauth(project.id);
             location.href = url;
           } catch (err) {
             toast(err.message, 'danger');

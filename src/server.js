@@ -39,6 +39,8 @@ const { parseOwnDomains } = await import('./shortlink.js');
 const { parseOptions, storeOptions } = await import('./target-options.js');
 const tokensDb = await import('./tokens.js');
 const threadsOauth = await import('./oauth/threads.js');
+const tiktokOauth = await import('./oauth/tiktok.js');
+const liveCreds = await import('./live-creds.js');
 const facebookOauth = await import('./oauth/facebook.js');
 const { randomBytes } = await import('node:crypto');
 const { writeFileSync } = await import('node:fs');
@@ -339,9 +341,10 @@ app.put('/api/projects/:id/accounts/:platform', requireAccess('platforms'), asyn
   // Сохранение от этого не зависит — площадка не ответила, значит не ответила.
   let notice = null;
   const adapter = getAdapter(platform);
-  const creds = projectsDb.credentialsFor(projectId, platform);
+  let creds = projectsDb.credentialsFor(projectId, platform);
   if (adapter.isConfigured(creds) || (creds.accessToken && platform === 'threads')) {
     try {
+      creds = await liveCreds.liveCredentials(projectId, platform);
       const result = await adapter.check({ ...creds, userId: creds.userId || 'me' });
       const fixed = accountIdFix(creds, result);
       if (fixed) {
@@ -367,11 +370,13 @@ app.delete('/api/projects/:id/accounts/:platform', requireAccess('platforms'), (
 app.post('/api/projects/:id/accounts/:platform/check', requireAccess('platforms'), async (req, res) => {
   const projectId = Number(req.params.id);
   const adapter = getAdapter(req.params.platform);
-  const creds = projectsDb.credentialsFor(projectId, req.params.platform);
+  let creds = projectsDb.credentialsFor(projectId, req.params.platform);
   if (!adapter.isConfigured(creds)) {
     return res.status(400).json({ ok: false, missing: adapter.missingConfig(creds) });
   }
   try {
+    // Свежие доступы: суточный токен TikTok иначе давал бы ложное «нет связи».
+    creds = await liveCreds.liveCredentials(projectId, req.params.platform);
     const result = await adapter.check(creds);
     // Связь есть — но это ещё не значит, что пост уйдёт: публикация идёт на
     // вписанный id, а проверка связи у Threads на `me`.
@@ -456,6 +461,97 @@ app.get('/oauth/threads', async (req, res) => {
   } catch (err) {
     log('error', `подключение Threads не удалось: ${err.message}`, { platform: 'threads' });
     return back({ result: 'error', message: err.message });
+  }
+});
+
+/* --------------------------- подключение TikTok --------------------------- */
+
+/** Адрес возврата. Должен до символа совпадать с вписанным в приложение TikTok (Login Kit → Redirect URI). */
+function tiktokRedirectUri() {
+  return `${publicBase()}/oauth/tiktok`;
+}
+
+app.post('/api/projects/:id/oauth/tiktok/start', requireAccess('platforms'), (req, res) => {
+  const projectId = Number(req.params.id);
+  if (!projectsDb.getProject(projectId)) return res.status(404).json({ error: 'Проект не найден' });
+
+  const creds = projectsDb.credentialsFor(projectId, 'tiktok');
+  if (!creds.clientKey || !creds.clientSecret) {
+    return res.status(422).json({
+      error: 'Сначала впишите в карточку Client key и Client secret — они в TikTok for Developers: ваше приложение → Credentials',
+    });
+  }
+  const state = threadsOauth.makeState({ projectId, staffId: req.user.id, platform: 'tiktok' });
+  res.json({ url: tiktokOauth.authorizeUrl({ clientKey: creds.clientKey, redirectUri: tiktokRedirectUri(), state }) });
+});
+
+/** Возврат из окна согласия TikTok — страница: результат редиректом в карточку проекта. */
+app.get('/oauth/tiktok', async (req, res) => {
+  const back = (params) => res.redirect(`/?${new URLSearchParams({ oauth: 'tiktok', ...params })}#/projects`);
+
+  if (req.user?.role !== 'owner') return back({ result: 'error', message: 'подключать площадки может только владелец' });
+  if (req.query.error) {
+    const reason = req.query.error === 'access_denied' ? 'в окне TikTok нажали «Отмена»' : String(req.query.error_description || req.query.error);
+    return back({ result: 'error', message: reason });
+  }
+
+  let projectId;
+  try {
+    ({ projectId } = threadsOauth.readState(String(req.query.state || ''), { staffId: req.user.id, platform: 'tiktok' }));
+  } catch (err) {
+    log('warn', `подключение TikTok отклонено: ${err.message}`, { platform: 'tiktok' });
+    return back({ result: 'error', message: err.message });
+  }
+
+  const creds = projectsDb.credentialsFor(projectId, 'tiktok');
+  try {
+    const out = await tiktokOauth.exchangeCode({
+      clientKey: creds.clientKey,
+      clientSecret: creds.clientSecret,
+      redirectUri: tiktokRedirectUri(),
+      code: req.query.code,
+    });
+    // Прежние доступы — в резервную копию: переподключение другим аккаунтом
+    // иначе стирало бы рабочий токен без возврата.
+    if (creds.accessToken) projectsDb.backupAccount(projectId, 'tiktok', 'перед подключением TikTok кнопкой');
+    projectsDb.saveAccount(projectId, 'tiktok', out.values);
+
+    let user = '';
+    try {
+      const info = await getAdapter('tiktok').creatorInfo({ ...creds, ...out.values });
+      user = info.username ? `@${info.username}` : info.nickname;
+    } catch {
+      user = '';
+    }
+    log('info', `TikTok подключён кнопкой: ${user || 'аккаунт не прочитан'}, права: ${out.scopes.join(', ') || 'не прочитаны'}`, {
+      platform: 'tiktok',
+    });
+    return back({ result: 'ok', project: String(projectId), user, missing: out.missing.join(',') });
+  } catch (err) {
+    log('error', `подключение TikTok не удалось: ${err.message}`, { platform: 'tiktok' });
+    return back({ result: 'error', message: err.message });
+  }
+});
+
+/**
+ * Автор для композера: в чей аккаунт уйдёт пост и какие настройки ему доступны.
+ * Правила аудита TikTok требуют брать это свежим при каждом показе формы.
+ */
+app.get('/api/projects/:id/tiktok/creator', async (req, res) => {
+  const projectId = Number(req.params.id);
+  const adapter = getAdapter('tiktok');
+  let creds = projectsDb.credentialsFor(projectId, 'tiktok');
+  if (!adapter.isConfigured(creds)) return res.status(422).json({ error: 'TikTok у проекта не подключён' });
+  try {
+    creds = await liveCreds.liveCredentials(projectId, 'tiktok');
+    const info = await adapter.creatorInfo(creds);
+    res.json({
+      creator: { ...info, avatarUrl: undefined },
+      audited: String(creds.audited) === 'true',
+      domainVerified: String(creds.domainVerified) === 'true',
+    });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
   }
 });
 

@@ -28,6 +28,7 @@ import { getAdapter } from './platforms/index.js';
 import * as facebook from './platforms/facebook.js';
 import * as threadsAdapter from './platforms/threads.js';
 import { listProjects, credentialsFor, tokenSavedAt, saveAccount } from './projects.js';
+import { liveCredentials } from './live-creds.js';
 
 /**
  * Что известно про срок жизни у каждой площадки.
@@ -75,7 +76,16 @@ export const TOKEN_POLICY = {
     renew: null,
     reconnect: 'Подключить через Facebook',
   },
-  tiktok: { kind: 'unknown', why: 'Площадка ещё не подключена' },
+  tiktok: {
+    // Токен доступа живёт сутки и обновляется сам перед каждым обращением
+    // (src/live-creds.js). Смерть подключения — это конец refresh token через
+    // год: его срок и сторожим (14.09.2026).
+    kind: 'read',
+    dataAccess: false,
+    why: 'Токен доступа живёт сутки и обновляется сам; сторож следит за годовым refresh token',
+    renew: 'Обновляется сам перед каждой публикацией',
+    reconnect: 'Подключить через TikTok',
+  },
 };
 
 /**
@@ -171,6 +181,11 @@ export async function readExpiry(projectId, platform, creds) {
     return { expiresAt: null, estimated: false, dataAccessAt: null };
   }
 
+  if (platform === 'tiktok') {
+    // Срок refresh token площадка назвала при выдаче — он и лежит в карточке.
+    return { expiresAt: creds.refreshExpiresAt || null, estimated: false, dataAccessAt: null };
+  }
+
   if (platform === 'threads') {
     // Сперва — факт от площадки. Сетевой сбой или молчание debug_token не
     // повод остаться без срока вовсе: тогда прежний расчёт, честно помеченный.
@@ -231,12 +246,15 @@ function pickAppKeys(creds = {}) {
  */
 export async function inspectToken(projectId, platform) {
   const adapter = getAdapter(platform);
-  const creds = credentialsFor(projectId, platform);
+  let creds = credentialsFor(projectId, platform);
   if (!adapter.isConfigured(creds)) return null; // не подключено — и сторожить нечего
 
   const out = { projectId, platform, account: '', error: null, expiresAt: null, estimated: false, dataAccessAt: null };
 
   try {
+    // У TikTok проверять связь суточным токеном, умершим ночью, — значит
+    // поднять ложную тревогу: сперва обновляем.
+    creds = await liveCredentials(projectId, platform);
     const res = await adapter.check(creds);
     out.account = res.account || res.chat || res.bot || '';
   } catch (err) {
