@@ -159,6 +159,10 @@ installAuth(app, {
     '/u/', // отписка по ссылке из письма: у получателя нет входа в панель
     '/s/', // подписка с формы на сайтах и её подтверждение по письму
     '/api/ingest/observed', // расширение ходит с ключом, а не с сессией
+    // Страница приложения, политика и условия — открыты: их требует аудит
+    // TikTok, и проверяющий заходит без входа. Точные пути, без «/» на конце:
+    // «/» в этом списке открыл бы всю панель.
+    '/about', '/privacy', '/terms',
   ],
   secureCookies: String(process.env.PUBLIC_BASE_URL || '').startsWith('https://'),
   // Файл нужен до первого входа. После — это ключ от панели, лежащий на
@@ -166,11 +170,17 @@ installAuth(app, {
   ownerTokenFile: resolve(here, '../data/owner-token.txt'),
 });
 
+/** Публичные страницы панели: о приложении, политика конфиденциальности, условия. */
+for (const page of ['about', 'privacy', 'terms']) {
+  app.get(`/${page}`, (_req, res) => res.sendFile(join(PUBLIC_DIR, 'site', `${page}.html`)));
+}
+
 /*
  * Модули без зависимостей, общие у сервера и браузера: деление текста на
  * сообщения и подмена ссылок короткими. Отдаются из src, а не копией в public —
  * копия однажды разошлась бы с тем, что реально уходит в сеть.
  */
+
 const SHARED_MODULES = { 'text-split.js': 'text-split.js', 'shortlink.js': 'shortlink.js' };
 app.get('/js/shared/:file', (req, res, next) => {
   const file = SHARED_MODULES[req.params.file];
@@ -362,8 +372,22 @@ app.put('/api/projects/:id/accounts/:platform', requireAccess('platforms'), asyn
   res.json({ account: status, notice });
 });
 
-app.delete('/api/projects/:id/accounts/:platform', requireAccess('platforms'), (req, res) => {
-  projectsDb.clearAccount(Number(req.params.id), req.params.platform);
+app.delete('/api/projects/:id/accounts/:platform', requireAccess('platforms'), async (req, res) => {
+  const projectId = Number(req.params.id);
+  // TikTok — отзываем доступ и у самой площадки: иначе стёртый у нас токен
+  // продолжал бы действовать до конца срока, а политика конфиденциальности
+  // обещает, что после «Снять доступ» он силу теряет (14.09.2026).
+  if (req.params.platform === 'tiktok') {
+    const creds = projectsDb.credentialsFor(projectId, 'tiktok');
+    if (creds.accessToken && creds.clientKey && creds.clientSecret) {
+      try {
+        await tiktokOauth.revoke(creds);
+      } catch (err) {
+        log('warn', `TikTok не подтвердил отзыв доступа: ${err.message}`, { platform: 'tiktok' });
+      }
+    }
+  }
+  projectsDb.clearAccount(projectId, req.params.platform);
   res.json({ ok: true });
 });
 
