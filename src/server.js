@@ -160,6 +160,7 @@ installAuth(app, {
     '/u/', // отписка по ссылке из письма: у получателя нет входа в панель
     '/s/', // подписка с формы на сайтах и её подтверждение по письму
     '/api/ingest/observed', // расширение ходит с ключом, а не с сессией
+    '/api/integration/crm/', // админка школы читает подписчиков со своего сервера по ключу (src/mail/crm-access.js)
     // Страница приложения, политика и условия — открыты: их требует аудит
     // TikTok, и проверяющий заходит без входа. Точные пути, без «/» на конце:
     // «/» в этом списке открыл бы всю панель.
@@ -1895,6 +1896,8 @@ app.put('/api/settings', requireAccess('platforms'), (req, res) => {
 // Базы адресов, загрузка с распознаванием (docs/рассылка.md, фаза 1).
 const { mountMailRoutes } = await import('./mail/routes.js');
 mountMailRoutes(app, { requireAccess, currentProjectId, can: staffDb.can, publicBase });
+const { mountCrmAccess } = await import('./mail/crm-access.js');
+mountCrmAccess(app, { requireAccess });
 
 /* --------------------------------- служебное --------------------------------- */
 

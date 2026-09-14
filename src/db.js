@@ -1342,6 +1342,29 @@ const MIGRATIONS = [
       ALTER TABLE mail_signups ADD COLUMN landing_path TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    /*
+     * Ключи доступа админки школы к панели (14.09.2026, мост «CRM ↔ панель»,
+     * фаза 4): админка читает подписчиков и статусы для карточки клиента.
+     * Только чтение. Открытого ключа в базе нет — sha256, ключ показывается
+     * один раз. Отзыв вместо удаления: видно, кто и когда ходил.
+     * Буква в номере — чтобы не столкнуться с миграцией соседней вкладки.
+     */
+    name: '031c-crm-access-keys',
+    sql: `
+      CREATE TABLE crm_access_keys (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        name         TEXT NOT NULL,
+        key_hash     TEXT NOT NULL UNIQUE,
+        tail         TEXT NOT NULL,
+        created_by   INTEGER REFERENCES staff(id) ON DELETE SET NULL,
+        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        revoked_at   TEXT,
+        last_used_at TEXT,
+        last_ip      TEXT
+      );
+    `,
+  },
 ];
 
 function migrate() {
