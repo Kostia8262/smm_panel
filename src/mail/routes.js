@@ -24,6 +24,7 @@ import * as mailMedia from './compose/media.js';
 import * as runner from './runner.js';
 import * as report from './report.js';
 import * as bounces from './bounces.js';
+import * as signups from './signups.js';
 import { makeState, readState } from '../oauth/threads.js';
 import { getProject } from '../projects.js';
 import { tooManyAttempts } from '../ratelimit.js';
@@ -782,6 +783,68 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
   };
   router.get('/u/:token', unsubscribeHandler);
   router.post('/u/:token', express.urlencoded({ extended: false, limit: '10kb' }), unsubscribeHandler);
+
+  /* ------------------------------ подписка с сайтов: наружу ------------------------------ */
+
+  /**
+   * Форма в подвале сайта шлёт сюда адрес. Ответ — JSON для fetch; сайтам
+   * своих доменов разрешено его прочитать (CORS). Форма без скриптов получает
+   * страницу с тем же текстом.
+   */
+  const corsFor = (req, res) => {
+    const origin = req.get('origin');
+    if (origin && signups.siteOf(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Max-Age', '86400');
+    }
+  };
+  router.options('/s/subscribe', (req, res) => {
+    corsFor(req, res);
+    res.status(204).end();
+  });
+  router.post('/s/subscribe', express.urlencoded({ extended: false, limit: '4kb' }), express.json({ limit: '4kb' }), async (req, res) => {
+    corsFor(req, res);
+    res.setHeader('Cache-Control', 'no-store');
+    let out;
+    try {
+      out = await signups.subscribe({
+        email: req.body?.email,
+        school: req.body?.school,
+        page: req.body?.page,
+        honeypot: req.body?.website,
+        origin: req.get('origin') || req.get('referer'),
+        ip: req.ip,
+        publicBase: publicBase(),
+      });
+    } catch (err) {
+      log('error', `рассылка: сбой приёма подписки: ${err.message}`);
+      out = { status: 500, ok: false, message: 'Щось пішло не так. Спробуйте пізніше.' };
+    }
+    const wantsJson = (req.get('accept') || '').includes('application/json') || req.is('application/json');
+    if (wantsJson) return res.status(out.status).json(out);
+    res.status(out.status).type('html').send(unsubscribe.publicPage({ title: out.ok ? 'Перевірте пошту' : 'Не вдалося підписатися', text: out.message }));
+  });
+
+  const confirmHandler = (req, res) => {
+    if (tooManyAttempts(`signup-confirm:${req.ip}`, { limit: 60 })) {
+      return res.status(429).type('text/plain').send('Забагато спроб. Спробуйте за кілька хвилин.');
+    }
+    const out = signups.confirmPage({ token: req.params.token, method: req.method });
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Robots-Tag', 'noindex');
+    res.status(out.status).type('html').send(out.html);
+  };
+  router.get('/s/confirm/:token', confirmHandler);
+  router.post('/s/confirm/:token', express.urlencoded({ extended: false, limit: '4kb' }), confirmHandler);
+
+  router.get(
+    '/api/mail/signups/stats',
+    view,
+    handle((req, res) => res.json(signups.signupStats(projectOf(req))))
+  );
 
   app.use(router);
 }

@@ -353,7 +353,7 @@ export async function sendTest(id, { to = [], projectId, staffId = null, publicB
  * @param {{to?: string[], fromName: string, subject: string, html: string, text: string, inline?: object[],
  *   unsubscribe: string, campaignId?: number|null, contentHash?: string|null, staffId?: number|null}} message
  */
-export async function sendTestMessage(id, { to = [], fromName, subject, html, text, inline = [], unsubscribe, replyTo = '', campaignId = null, contentHash = null, staffId = null, fetchImpl = globalThis.fetch, now = Date.now() }) {
+export async function sendTestMessage(id, { to = [], fromName, subject, html, text, inline = [], unsubscribe, replyTo = '', campaignId = null, contentHash = null, staffId = null, label = 'пробное письмо', fetchImpl = globalThis.fetch, now = Date.now() }) {
   const row = rowOf(id);
   if (row.disconnected_at) throw new MailError('Ящик отключён — выберите другой или подключите заново');
 
@@ -385,7 +385,8 @@ export async function sendTestMessage(id, { to = [], fromName, subject, html, te
         html,
         inline,
         replyTo,
-        headers: unsubscribeHeaders(unsubscribe),
+        // У письма-подтверждения подписки отписываться не от чего — заголовка нет.
+        headers: unsubscribe ? unsubscribeHeaders(unsubscribe) : {},
         date: new Date(now),
       })
     );
@@ -405,7 +406,7 @@ export async function sendTestMessage(id, { to = [], fromName, subject, html, te
   }
   log(
     failed.length ? 'warn' : 'info',
-    `рассылка: пробное письмо${campaignId ? ` #${campaignId}` : ''} с ${row.email} — ушло ${sent.length}${failed.length ? `, не ушло ${failed.length}: ${failed[0].error}` : ''}`
+    `рассылка: ${label}${campaignId ? ` #${campaignId}` : ''} с ${row.email} — ушло ${sent.length}${failed.length ? `, не ушло ${failed.length}: ${failed[0].error}` : ''}`
   );
   return { sent, failed };
 }

@@ -155,6 +155,7 @@ installAuth(app, {
   publicPaths: [
     '/login', '/css/', '/js/', '/media/', '/healthz', '/favicon.ico', '/favicon.svg', '/r/',
     '/u/', // отписка по ссылке из письма: у получателя нет входа в панель
+    '/s/', // подписка с формы на сайтах и её подтверждение по письму
     '/api/ingest/observed', // расширение ходит с ключом, а не с сессией
   ],
   secureCookies: String(process.env.PUBLIC_BASE_URL || '').startsWith('https://'),

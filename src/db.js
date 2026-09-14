@@ -1280,6 +1280,40 @@ const MIGRATIONS = [
       ALTER TABLE links ADD COLUMN mail_campaign_id INTEGER REFERENCES mail_campaigns(id) ON DELETE SET NULL;
     `,
   },
+  {
+    /*
+     * Подписка с сайтов (docs/рассылка.md, фаза 6): форма в подвале сайта.
+     *
+     * Двойное подтверждение: адрес попадает в базу только после нажатия
+     * кнопки в письме. Иначе форму заполнит кто угодно чужим адресом, и
+     * рассылка начнёт слать тем, кто ни на что не подписывался, — прямая
+     * дорога в «Спам» для всех писем ящика.
+     *
+     * В строке — хеш токена, а не сам токен: утечка базы не даёт подтвердить
+     * чужие подписки. `ip_hash` — для ограничения частоты, без самого адреса.
+     */
+    name: '029-mail-signups',
+    sql: `
+      CREATE TABLE mail_signups (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        email           TEXT NOT NULL,
+        token_hash      TEXT NOT NULL UNIQUE,
+        status          TEXT NOT NULL DEFAULT 'pending',
+        site            TEXT NOT NULL DEFAULT '',
+        page            TEXT NOT NULL DEFAULT '',
+        ip_hash         TEXT,
+        error           TEXT,
+        contact_id      INTEGER REFERENCES mail_contacts(id) ON DELETE SET NULL,
+        created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        confirm_sent_at TEXT,
+        confirmed_at    TEXT
+      );
+
+      CREATE INDEX idx_mail_signups_email ON mail_signups(project_id, email, created_at);
+      CREATE INDEX idx_mail_signups_ip ON mail_signups(ip_hash, created_at);
+    `,
+  },
 ];
 
 function migrate() {
