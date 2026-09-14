@@ -32,11 +32,10 @@ function linkLabels(blocks) {
 }
 
 /**
- * @param {object} campaign — из campaigns.getCampaign
- * @param {{withPeople?: boolean, fetchLeads?: Function}} opts — withPeople: имена заявок только владельцу
+ * Переходы, метка и отписки письма — без похода в админку. Общее у отчёта
+ * в панели и у отчёта для админки школы (src/mail/crm-access.js).
  */
-export async function campaignReport(campaign, { withPeople = false, fetchLeads = leadsForCampaign } = {}) {
-  const progress = campaign.progress || { total: 0, queued: 0, sending: 0, sent: 0, failed: 0, skipped: 0, unknown: 0, cancelled: 0 };
+export function linkStats(campaign) {
   const row = campaigns.campaignRow(campaign.id);
   const map = row.link_map ? JSON.parse(row.link_map) : {};
   const labels = linkLabels(campaign.blocks);
@@ -54,14 +53,23 @@ export async function campaignReport(campaign, { withPeople = false, fetchLeads 
       return { label: labels[original] || original.replace(/^https?:\/\//, ''), url: original, clicks: l.clicks };
     });
   const clicks = links.reduce((sum, l) => sum + l.clicks, 0);
-
   const unsubscribed = db.prepare("SELECT COUNT(DISTINCT contact_id) AS n FROM mail_events WHERE campaign_id = ? AND type = 'unsubscribed'").get(campaign.id).n;
+  const tag = db.prepare('SELECT campaign FROM links WHERE mail_campaign_id = ? LIMIT 1').get(campaign.id)?.campaign || null;
+  return { tag, links, clicks, unsubscribed };
+}
+
+/**
+ * @param {object} campaign — из campaigns.getCampaign
+ * @param {{withPeople?: boolean, fetchLeads?: Function}} opts — withPeople: имена заявок только владельцу
+ */
+export async function campaignReport(campaign, { withPeople = false, fetchLeads = leadsForCampaign } = {}) {
+  const progress = campaign.progress || { total: 0, queued: 0, sending: 0, sent: 0, failed: 0, skipped: 0, unknown: 0, cancelled: 0 };
+  const { tag, links, clicks, unsubscribed } = linkStats(campaign);
   const resubscribed = db.prepare("SELECT COUNT(DISTINCT contact_id) AS n FROM mail_events WHERE campaign_id = ? AND type = 'resubscribed'").get(campaign.id).n;
   const failures = db
     .prepare("SELECT COALESCE(error, 'без объяснения') AS reason, COUNT(*) AS n FROM mail_sends WHERE campaign_id = ? AND status = 'failed' GROUP BY reason ORDER BY n DESC LIMIT 10")
     .all(campaign.id);
 
-  const tag = db.prepare('SELECT campaign FROM links WHERE mail_campaign_id = ? LIMIT 1').get(campaign.id)?.campaign || null;
   let leads = null;
   let leadsError = null;
   if (!tag) {

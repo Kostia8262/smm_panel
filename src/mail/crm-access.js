@@ -16,6 +16,12 @@
  *   GET  summary?project=
  *   GET  contacts?project=&q=&status=&source=&list=&page=&perPage=
  *   POST contacts/status { project, emails: [...] } — до 200 адресов
+ *   GET  campaigns?project=&page=&perPage=   — рассылки после постановки (фаза 5)
+ *   GET  campaigns/:id?project=              — то же + переходы по ссылкам
+ *
+ * Рассылки: письмо → отправлено → переходы. Заявки, записи и оплаты админка
+ * считает у себя по utmCampaign. Текста, блоков, получателей и адресов ссылок
+ * (в них utm) не отдаём.
  */
 
 import { randomBytes, createHash } from 'node:crypto';
@@ -24,6 +30,8 @@ import { db, log } from '../db.js';
 import { listProjects, getProjectBySlug } from '../projects.js';
 import { tooManyAttempts, clearAttempts } from '../ratelimit.js';
 import { CONTACT_STATUS } from './specs.js';
+import * as campaignsDb from './campaigns.js';
+import { linkStats } from './report.js';
 
 const KEY_PREFIX = 'smmk_';
 const STATUS_BATCH = 200;
@@ -272,6 +280,61 @@ export function statuses(project, emails) {
   return { statuses: out };
 }
 
+/** Состояния, в которых письмо уже ушло в отправку или было в ней. */
+export const CAMPAIGN_VISIBLE = ['scheduled', 'sending', 'paused', 'done', 'cancelled'];
+
+function campaignItem(row, { withLinks = false } = {}) {
+  const c = campaignsDb.getCampaign(row.id);
+  const stats = linkStats(c);
+  const p = c.progress || {};
+  const item = {
+    id: c.id,
+    title: c.title,
+    subject: c.subject,
+    status: c.status,
+    scheduledAt: c.scheduledAt || null,
+    startedAt: c.startedAt || null,
+    finishedAt: c.finishedAt || null,
+    utmCampaign: stats.tag,
+    audience: p.total || 0,
+    sent: p.sent || 0,
+    failed: p.failed || 0,
+    skipped: p.skipped || 0,
+    unknown: p.unknown || 0,
+    unsubscribed: stats.unsubscribed,
+    clicks: stats.clicks,
+  };
+  // Подпись ссылки без адреса: у ссылок без подписи — только домен и путь, без запроса с utm.
+  if (withLinks) item.links = stats.links.map((l) => ({ label: /^(Кнопка|Ссылка|Главная|Картинка)/.test(l.label) ? l.label : l.label.replace(/[?#].*$/, ''), clicks: l.clicks }));
+  return item;
+}
+
+export function campaignList(project, { page = 1, perPage = 50 } = {}) {
+  const marks = CAMPAIGN_VISIBLE.map(() => '?').join(',');
+  const where = `project_id = ? AND deleted_at IS NULL AND status IN (${marks})`;
+  const args = [project.id, ...CAMPAIGN_VISIBLE];
+  const size = Math.min(PER_PAGE_MAX, Math.max(1, Number(perPage) || 50));
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM mail_campaigns WHERE ${where}`).get(...args).n;
+  const pages = Math.max(1, Math.ceil(total / size));
+  const current = Math.min(pages, Math.max(1, Number(page) || 1));
+  const rows = db
+    .prepare(
+      `SELECT id FROM mail_campaigns WHERE ${where}
+        ORDER BY COALESCE(started_at, scheduled_at, updated_at) DESC, id DESC LIMIT ? OFFSET ?`
+    )
+    .all(...args, size, (current - 1) * size);
+  return { total, page: current, pages, campaigns: rows.map((r) => campaignItem(r)) };
+}
+
+/** @returns {object|null} null — нет такой рассылки у школы или она ещё черновик */
+export function campaignDetail(project, id) {
+  const marks = CAMPAIGN_VISIBLE.map(() => '?').join(',');
+  const row = db
+    .prepare(`SELECT id FROM mail_campaigns WHERE id = ? AND project_id = ? AND deleted_at IS NULL AND status IN (${marks})`)
+    .get(Number(id) || 0, project.id, ...CAMPAIGN_VISIBLE);
+  return row ? campaignItem(row, { withLinks: true }) : null;
+}
+
 /* --------------------------------- маршруты -------------------------------- */
 
 /**
@@ -299,7 +362,7 @@ export function mountCrmAccess(app, { requireAccess }) {
     try {
       res.json(fn(project, req));
     } catch (err) {
-      if (err.status === 400) return res.status(400).json({ error: err.message });
+      if (err.status === 400 || err.status === 404) return res.status(err.status).json({ error: err.message });
       log('error', `доступ админки школы: сбой на ${req.method} ${req.path}: ${err.message}`);
       res.status(500).json({ error: 'Сбой панели' });
     }
@@ -308,6 +371,19 @@ export function mountCrmAccess(app, { requireAccess }) {
   api.get('/projects', (_req, res) => res.json(projectsPayload()));
   api.get('/summary', withProject((project) => summary(project)));
   api.get('/contacts', withProject((project, req) => contacts(project, req.query)));
+  api.get('/campaigns', withProject((project, req) => campaignList(project, req.query)));
+  api.get(
+    '/campaigns/:id',
+    withProject((project, req) => {
+      const item = campaignDetail(project, req.params.id);
+      if (!item) {
+        const err = new Error('Рассылка не найдена');
+        err.status = 404;
+        throw err;
+      }
+      return item;
+    })
+  );
   api.post(
     '/contacts/status',
     withProject((project, req) => {

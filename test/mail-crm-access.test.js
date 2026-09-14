@@ -179,3 +179,43 @@ test('сводка, список контактов и статусы', async ()
   const tooMany = Array.from({ length: 201 }, (_, i) => `a${i}@example.com`);
   assert.equal((await call('/api/integration/crm/contacts/status', { key, method: 'POST', body: { project: 'education', emails: tooMany } })).status, 400);
 });
+
+test('рассылки для админки: без черновиков, метка, цифры и переходы без адресов', async () => {
+  resetAll();
+  const { key } = access.issueKey('Админка рассылок');
+  const campaign = db.prepare("SELECT id FROM mail_campaigns WHERE title = 'Осінь'").get().id;
+  const draft = Number(db.prepare("INSERT INTO mail_campaigns (project_id, title) VALUES (?, 'Черновик')").run(pid).lastInsertRowid);
+
+  let list = (await call('/api/integration/crm/campaigns?project=education', { key })).body;
+  assert.equal(list.total, 0, 'черновики не отдаются');
+
+  const blocks = JSON.stringify([{ id: 'b1', type: 'button', text: 'Записатися', href: 'https://mycomputer.education/python' }]);
+  db.prepare("UPDATE mail_campaigns SET status = 'done', subject = 'Осінній набір', blocks = ?, started_at = '2026-09-14T09:00:00Z', finished_at = '2026-09-14T09:30:00Z', link_map = ? WHERE id = ?").run(
+    blocks,
+    JSON.stringify({ 'https://mycomputer.education/python': 'https://smm.example/r/abc123' }),
+    campaign
+  );
+  const link = Number(
+    db.prepare("INSERT INTO links (code, project_id, target_url, campaign, mail_campaign_id) VALUES ('abc123', ?, 'https://mycomputer.education/python?utm_source=email&utm_campaign=mail-20260914-c1', 'mail-20260914-c1', ?)").run(pid, campaign).lastInsertRowid
+  );
+  db.prepare('INSERT INTO link_clicks (link_id) VALUES (?), (?)').run(link, link);
+  const ivan = db.prepare("SELECT id FROM mail_contacts WHERE email = 'ivan@example.com'").get().id;
+  db.prepare("INSERT INTO mail_events (project_id, campaign_id, contact_id, type, source) VALUES (?, ?, ?, 'unsubscribed', 'page')").run(pid, campaign, ivan);
+
+  list = (await call('/api/integration/crm/campaigns?project=education', { key })).body;
+  assert.equal(list.total, 1);
+  const item = list.campaigns[0];
+  assert.deepEqual(
+    { id: item.id, status: item.status, utmCampaign: item.utmCampaign, audience: item.audience, sent: item.sent, unsubscribed: item.unsubscribed, clicks: item.clicks, subject: item.subject },
+    { id: campaign, status: 'done', utmCampaign: 'mail-20260914-c1', audience: 1, sent: 1, unsubscribed: 1, clicks: 2, subject: 'Осінній набір' }
+  );
+  assert.equal('links' in item, false);
+
+  const detail = (await call(`/api/integration/crm/campaigns/${campaign}?project=education`, { key })).body;
+  assert.deepEqual(detail.links, [{ label: 'Кнопка «Записатися»', clicks: 2 }]);
+  assert.equal(JSON.stringify(detail).includes('utm_source'), false, 'адресов с utm нет');
+  assert.equal(JSON.stringify(detail).includes('blocks'), false);
+
+  assert.equal((await call(`/api/integration/crm/campaigns/${draft}?project=education`, { key })).status, 404);
+  assert.equal((await call(`/api/integration/crm/campaigns/${campaign}?project=school`, { key })).status, 404, 'чужая школа');
+});
