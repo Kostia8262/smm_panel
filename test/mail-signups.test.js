@@ -87,6 +87,23 @@ test('чужой сайт, неизвестная школа, нет кода с
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mail_signups').get().n, 0);
 });
 
+test('стенд dev и localhost: форма отвечает «принято», но ничего не пишет и писем не шлёт', async () => {
+  const fetchImpl = google();
+  for (const origin of ['https://dev.mycomputer.education', 'https://python-dev.mycomputer.education', 'http://localhost:3000', 'https://staging.mycomputer.school']) {
+    const out = await signups.subscribe({ ...BASE, email: 'tester@example.com', origin, ip: ip(), fetchImpl, now: NOW });
+    assert.equal(out.code, 'accepted', origin);
+    assert.equal(out.test, true, origin);
+  }
+  assert.equal((await signups.subscribe({ ...BASE, email: 'ivan@gmial.com', origin: 'https://dev.mycomputer.education', fetchImpl, now: NOW })).code, 'typo');
+  assert.equal((await signups.subscribe({ ...BASE, email: 'a@example.com', consentVersion: '', origin: 'https://dev.mycomputer.education', fetchImpl, now: NOW })).code, 'consent_missing');
+  assert.equal(signups.testSiteOf('https://mycomputer.education'), null, 'боевой сайт — не стенд');
+  assert.equal(signups.testSiteOf('https://developer.mycomputer.education'), null, 'dev только целым словом');
+  assert.equal(signups.testSiteOf('https://dev.evil.example'), null, 'чужой dev — не наш стенд');
+  assert.equal(fetchImpl.sent.length, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mail_signups').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mail_contacts').get().n, 0);
+});
+
 test('новый адрес — сразу в базу «Подписка с сайта», приветствие с отпиской, согласие и источник записаны', async () => {
   const fetchImpl = google();
   const out = await signups.subscribe({

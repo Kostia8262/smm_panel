@@ -63,6 +63,28 @@ const ACCEPTED = 'Дякуємо! Перевірте пошту — ми над�
 let ipKey = null;
 const ipHash = (ip) => createHash('sha256').update(ipKey ||= deriveKey('mail-signup-ip')).update(String(ip || '')).digest('hex').slice(0, 32);
 
+/**
+ * Тестовый стенд: dev-поддомен своего сайта или локальная машина.
+ *
+ * С 14.09.2026 подписка сразу пишет в базу и шлёт приветствие, а стенды
+ * смотрят в боевую панель — проверка формы на dev клала адрес в базу и тратила
+ * потолок ящика. Стенду отвечаем как настоящему сайту, но ничего не пишем.
+ */
+export function testSiteOf(origin) {
+  let host;
+  try {
+    host = new URL(String(origin || '')).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+  if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') return host;
+  const own = parseOwnDomains(getSetting('own_domains', 'mycomputer.education,mycomputer.school'));
+  const domain = own.find((d) => host.endsWith(`.${d}`));
+  if (!domain) return null;
+  const labels = host.slice(0, -(domain.length + 1)).split('.');
+  return labels.some((l) => /^(dev|staging|test)(-|$)|-(dev|staging|test)$/.test(l)) ? host : null;
+}
+
 /** Сайт, с которого пришла форма, — только свои домены. */
 export function siteOf(origin) {
   let host;
@@ -194,6 +216,16 @@ export async function subscribe({
   mxCheck = defaultMx,
   now = Date.now(),
 }) {
+  // Стенд: проверки формы те же, что на сайте, но без записи, писем и лимитов.
+  if (testSiteOf(origin)) {
+    if (!CONSENT_VERSION.test(String(consentVersion || '').trim())) return { status: 400, ok: false, code: 'consent_missing', message: 'Оновіть сторінку й спробуйте ще раз.' };
+    const check = checkAddress(email);
+    if (check.verdict === 'invalid') return { status: 400, ok: false, code: 'invalid_email', message: 'Схоже, в адресі помилка. Перевірте, будь ласка.' };
+    if (check.verdict === 'fixable' && check.suggestion) {
+      return { status: 400, ok: false, code: 'typo', message: `Можливо, ви мали на увазі ${check.suggestion}?`, suggestion: check.suggestion };
+    }
+    return { status: 200, ok: true, code: 'accepted', test: true, message: ACCEPTED };
+  }
   const site = siteOf(origin);
   if (!site) return { status: 403, ok: false, code: 'foreign_site', message: 'Форма працює лише на наших сайтах.' };
   const project = projectBySlug(school);

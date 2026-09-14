@@ -801,7 +801,7 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
   };
   const corsFor = (req, res) => {
     const origin = req.get('origin');
-    if (origin && signups.siteOf(formOrigin(req))) {
+    if (origin && (signups.siteOf(formOrigin(req)) || signups.testSiteOf(formOrigin(req)))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
