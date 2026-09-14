@@ -18,7 +18,7 @@
  *   GET /api/integration/mail/feed?after=<seq>&limit=500, x-integration-key со
  *   скоупом mail:feed (отдельный ключ, не leads:read) →
  *   { items: [{ seq, email, consent: {at, version, source}|null,
- *               person: {kind, id, name, status, course, site, lang}|null }],
+ *               person: {kind, id, childName, status, course, site, lang}|null }],
  *     next, hasMore }
  */
 
@@ -44,7 +44,7 @@ const LIST_NOTES = {
   client: 'Клиенты, согласие которых записал менеджер. Приходят из админки школы сами, снятое согласие убирает адрес из базы',
 };
 /** Колонки базы — для будущих сегментов. */
-const COLUMNS = ['CRM id', 'Кто', 'Статус', 'Курс', 'Сайт', 'Язык'];
+const COLUMNS = ['CRM id', 'Кто', 'Ребёнок', 'Статус', 'Курс', 'Сайт', 'Язык'];
 
 /** Ключ ленты — отдельный от ключа заявок: у него другое право. */
 export function feedAccess() {
@@ -176,12 +176,15 @@ export function applyItem(item) {
   const attrs = {
     'CRM id': String(person.id ?? ''),
     Кто: person.kind === 'client' ? 'клиент' : person.kind === 'lead' ? 'заявка' : '',
+    Ребёнок: String(person.childName || '').trim().slice(0, 100),
     Статус: String(person.status || ''),
     Курс: String(person.course || ''),
     Сайт: String(person.site || ''),
     Язык: person.lang === 'ru' || person.lang === 'uk' ? person.lang : '',
   };
-  const contactId = store.upsertContact(project.id, address, String(person.name || '').trim().slice(0, 200)).id;
+  // Имя в CRM — имя ребёнка, родителя там нет вовсе: в имя контакта его не кладём,
+  // иначе родитель Оли получит «Вітаємо, Оля». {{name}} уйдёт в запасное слово.
+  const contactId = store.upsertContact(project.id, address, '').id;
   if (store.addMembership(list.id, contactId, { attrs }) !== 'added') return 'updated';
   db.prepare("INSERT INTO mail_events (project_id, contact_id, type, source, note) VALUES (?, ?, 'subscribed', 'crm', ?)").run(
     project.id,

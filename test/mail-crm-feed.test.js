@@ -30,7 +30,7 @@ const feed = await import('../src/mail/crm-feed.js');
 
 const ACCESS = { apiUrl: 'https://crm.example', apiKey: 'mcai_test' };
 const consent = (source = 'thank_you') => ({ at: '2026-09-14T10:00:00Z', version: source === 'manager' ? 'manager-2026-09' : 'thankyou-2026-09-uk', source });
-const person = (over = {}) => ({ kind: 'lead', id: 7, name: 'Олена', status: 'new', course: 'python', site: 'python.mycomputer.education', lang: 'uk', ...over });
+const person = (over = {}) => ({ kind: 'lead', id: 7, childName: 'Оля', status: 'new', course: 'python', site: 'python.mycomputer.education', lang: 'uk', ...over });
 
 /** Админка-заглушка: отдаёт заранее заданные пачки по after. */
 function crm(pages) {
@@ -120,7 +120,8 @@ test('согласие → база своей школы, пачки до hasMo
   assert.deepEqual(active('CRM школы — заявки', 'school'), ['dizain@example.com']);
   assert.deepEqual(active('CRM школы — клиенты'), ['client@example.com']);
   const attrs = JSON.parse(members('CRM школы — заявки')[0].attrs);
-  assert.deepEqual(attrs, { 'CRM id': '7', Кто: 'заявка', Статус: 'new', Курс: 'python', Сайт: 'python.mycomputer.education', Язык: 'uk' });
+  assert.equal(db.prepare('SELECT name FROM mail_contacts WHERE email = ?').get('olena@example.com').name, '', 'имя ребёнка — не имя родителя');
+  assert.deepEqual(attrs, { 'CRM id': '7', Кто: 'заявка', Ребёнок: 'Оля', Статус: 'new', Курс: 'python', Сайт: 'python.mycomputer.education', Язык: 'uk' });
   const list = store.listLists(projectId('education')).find((l) => l.name === 'CRM школы — заявки');
   assert.equal(list.consentBasis, 'lead');
 
