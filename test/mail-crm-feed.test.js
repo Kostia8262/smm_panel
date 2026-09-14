@@ -37,6 +37,9 @@ function crm(pages) {
   const calls = [];
   const fn = async (url, init) => {
     calls.push({ url: String(url), key: init.headers['x-integration-key'] });
+    if (String(url).endsWith('/api/integration/mail/consent-texts')) {
+      return { ok: true, status: 200, json: async () => ({ success: true, versions: { 'thankyou-2026-09-uk': { source: 'thank_you', lang: 'uk', text: 'Погоджуюсь отримувати листи' } } }) };
+    }
     const after = new URL(url).searchParams.get('after');
     const page = pages[after];
     if (page instanceof Error) return { ok: false, status: 500, json: async () => ({}) };
@@ -122,6 +125,13 @@ test('согласие → база своей школы, пачки до hasMo
   const attrs = JSON.parse(members('CRM школы — заявки')[0].attrs);
   assert.equal(db.prepare('SELECT name FROM mail_contacts WHERE email = ?').get('olena@example.com').name, '', 'имя ребёнка — не имя родителя');
   assert.deepEqual(attrs, { 'CRM id': '7', Кто: 'заявка', Ребёнок: 'Оля', Статус: 'new', Курс: 'python', Сайт: 'python.mycomputer.education', Язык: 'uk' });
+  // Незнакомый код в пачке — тексты перечитаны; в карточке видно, откуда адрес и на что согласие.
+  assert.equal(fetchImpl.calls.filter((c) => c.url.endsWith('/consent-texts')).length, 1, 'тексты — один раз, не на каждую пачку');
+  const olena = db.prepare('SELECT id FROM mail_contacts WHERE email = ?').get('olena@example.com').id;
+  const membership = store.getContact(olena).memberships[0];
+  assert.equal(membership.source, 'лента CRM школы');
+  assert.equal(membership.consentText, 'Погоджуюсь отримувати листи');
+  assert.match(membership.consentNote, /^thankyou-2026-09-uk, согласие 2026-09-14$/);
   const list = store.listLists(projectId('education')).find((l) => l.name === 'CRM школы — заявки');
   assert.equal(list.consentBasis, 'lead');
 

@@ -334,8 +334,23 @@ export function getContact(id) {
         WHERE m.contact_id = ?
         ORDER BY m.removed_at IS NOT NULL, m.added_at DESC`
     )
-    .all(contact.id)
-    .map((m) => ({
+    .all(contact.id);
+  // Кто положил в базу без загрузки и сотрудника: форма сайта или лента CRM — с доказательством согласия.
+  const joined = db
+    .prepare("SELECT source, note, at FROM mail_events WHERE contact_id = ? AND type = 'subscribed' AND source IN ('form', 'crm') ORDER BY id DESC")
+    .all(contact.id);
+  const texts = parseJson(db.prepare("SELECT value FROM settings WHERE key = 'crm_consent_texts'").get()?.value, {}).versions || {};
+  const origin = (m) => {
+    if (m.source_name || m.added_by_name) return null;
+    const e = joined.find((x) => x.source === (m.consent_basis === 'form' ? 'form' : 'crm'));
+    if (!e) return null;
+    if (e.source === 'form') return { source: 'форма на сайте', consentText: null, consentNote: e.note };
+    const [, version = '', at = ''] = String(e.note || '').split(' · ');
+    return { source: 'лента CRM школы', consentText: texts[version]?.text || null, consentNote: `${version}${at ? `, согласие ${at.slice(0, 10)}` : ''}` };
+  };
+  contact.memberships = contact.memberships
+    .map((m) => ({ m, o: origin(m) }))
+    .map(({ m, o }) => ({
       listId: m.list_id,
       listName: m.name,
       listArchived: Boolean(m.archived_at),
@@ -343,7 +358,9 @@ export function getContact(id) {
       attrs: parseJson(m.attrs, {}),
       addedAt: m.added_at,
       removedAt: m.removed_at,
-      source: m.source_name ? `загрузка «${m.source_name}»` : m.added_by_name ? `вручную: ${m.added_by_name}` : 'вручную',
+      source: m.source_name ? `загрузка «${m.source_name}»` : m.added_by_name ? `вручную: ${m.added_by_name}` : o?.source || 'вручную',
+      consentText: o?.consentText || null,
+      consentNote: o?.consentNote || null,
     }));
   const suppression = db
     .prepare('SELECT reason, note, created_at FROM mail_suppressions WHERE project_id = ? AND email_hash = ?')

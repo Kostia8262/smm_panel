@@ -391,6 +391,8 @@ export function listView(ctx, listKey) {
       link.href = `#/mail/lists/${m.listId}`;
       item.append(link, el('span', 'dim small', m.consentTitle), el('span', 'dim small', `${m.source}, ${day(m.addedAt)}`));
       if (m.removedAt) item.append(el('span', 'tag', 'убран из базы'));
+      // Доказательство согласия: код текста и сам текст, на который человек согласился.
+      if (m.consentNote || m.consentText) item.append(el('div', 'mail-attrs', [m.consentNote, m.consentText ? `«${m.consentText}»` : ''].filter(Boolean).join(' — ')));
       const attrs = Object.entries(m.attrs || {});
       if (attrs.length) item.append(el('div', 'mail-attrs', attrs.map(([k, v]) => `${k}: ${v}`).join(' · ')));
       memberships.append(item);

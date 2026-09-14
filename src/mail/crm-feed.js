@@ -20,6 +20,9 @@
  *   { items: [{ seq, email, consent: {at, version, source}|null,
  *               person: {kind, id, childName, status, course, site, lang}|null }],
  *     next, hasMore }
+ *   GET /api/integration/mail/consent-texts → { versions: { код: {source, lang, text} } }
+ *   — коды не удаляются, новый текст = новый код; кэш в `crm_consent_texts`,
+ *   незнакомый код в ленте — повод перечитать (не чаще раза в 10 минут).
  */
 
 import { db, log } from '../db.js';
@@ -230,6 +233,39 @@ async function integrationFetch(path, { apiUrl, apiKey, fetchImpl = globalThis.f
   return res.json();
 }
 
+const TEXTS_RETRY_MS = 10 * 60 * 1000;
+
+/** Тексты согласий по коду версии — доказательство в карточке контакта. */
+export function consentTexts() {
+  try {
+    return JSON.parse(getSetting('crm_consent_texts', '') || '{}').versions || {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Перечитать тексты, если в пачке есть незнакомый код. Сбой текстов ленту не
+ * останавливает: адрес с согласием важнее цитаты в карточке.
+ */
+async function ensureConsentTexts(items, { access, fetchImpl, now }) {
+  const known = consentTexts();
+  const unknown = items.some((i) => i?.consent?.version && !known[i.consent.version]);
+  if (!unknown) return;
+  const tried = Number(getSetting('crm_consent_texts_tried', '0'));
+  if (now - tried < TEXTS_RETRY_MS) return;
+  setSetting('crm_consent_texts_tried', String(now));
+  try {
+    const data = await integrationFetch('/api/integration/mail/consent-texts', { ...access, fetchImpl });
+    if (data?.versions && typeof data.versions === 'object') {
+      // Старые коды не теряем, даже если админка их однажды не вернёт.
+      setSetting('crm_consent_texts', JSON.stringify({ at: new Date(now).toISOString(), versions: { ...known, ...data.versions } }));
+    }
+  } catch (err) {
+    log('warn', `рассылка: тексты согласий CRM не прочитались: ${err.message}`);
+  }
+}
+
 /** «Проверить ленту»: ключ жив и у него право mail:feed. */
 export async function pingFeed(access = feedAccess(), fetchImpl) {
   const data = await integrationFetch('/api/integration/ping', { ...access, fetchImpl });
@@ -252,6 +288,7 @@ export async function pullFeed({ access = feedAccess(), fetchImpl, now = Date.no
       const data = await integrationFetch(`/api/integration/mail/feed?after=${encodeURIComponent(after)}&limit=${FEED_PAGE}`, { ...access, fetchImpl });
       if (!Array.isArray(data?.items)) throw new Error('Лента пришла без списка items');
       pages++;
+      await ensureConsentTexts(data.items, { access, fetchImpl, now });
       const stats = applyPage(data.items, data.next);
       for (const [k, v] of Object.entries(stats)) total[k] = (total[k] || 0) + v;
       if (!data.hasMore || !data.items.length || String(data.next) === String(after)) break;
