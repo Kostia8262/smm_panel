@@ -1389,7 +1389,15 @@ function migrate() {
   const applied = new Set(db.prepare('SELECT name FROM migrations').all().map((r) => r.name));
   for (const m of MIGRATIONS) {
     if (applied.has(m.name)) continue;
-    db.exec('BEGIN');
+    // IMMEDIATE и повторная сверка под блокировкой: веб и воркер стартуют разом
+    // (`pm2 restart smm-web smm-worker`). 14.09.2026 оба увидели миграцию
+    // неприменённой, воркер успел первым, у веба ALTER упал на «duplicate
+    // column» — и сайт отдавал 503, пока его не перезапустили.
+    db.exec('BEGIN IMMEDIATE');
+    if (db.prepare('SELECT 1 FROM migrations WHERE name = ?').get(m.name)) {
+      db.exec('COMMIT');
+      continue;
+    }
     try {
       // Шаг бывает двух видов. Обычный — голый SQL. Второй появился, когда
       // понадобилось перешифровать уже лежащие в базе данные: такое SQL не
