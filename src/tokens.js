@@ -398,7 +398,7 @@ export async function sweepTokens({ now = new Date() } = {}) {
       // Доступ к данным лечится не продлением токена, а входом кнопкой — это и
       // пишем, иначе человек пойдёт перевыпускать токен, который в порядке.
       const reconnect = TOKEN_POLICY[platform]?.reconnect;
-      const cure = reconnect ? ` Продлевается входом: «Проекты» → «${reconnect}».` : '';
+      const cure = reconnect ? ` Продлевается входом: «Интеграции» → «${reconnect}».` : '';
 
       if (state === 'broken') {
         log('error', `${project.title}: ${platform} не отвечает на проверку — ${row.error}`, {
@@ -495,7 +495,7 @@ export function tokenHealth({ projectId = null } = {}) {
 }
 
 /**
- * Есть ли о чём кричать. Отсюда берётся точка у раздела «Проекты»: владелец
+ * Есть ли о чём кричать. Отсюда берётся точка у раздела «Интеграции»: владелец
  * сидит в календаре и о смерти токена иначе не узнает.
  */
 export function tokenAlerts() {

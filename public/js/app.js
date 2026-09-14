@@ -26,7 +26,7 @@ const NAV = [
   { id: 'plan', hash: '#/plan', title: 'Контент-план', icon: 'layers', group: 'Работа', area: 'plan' },
   { id: 'trends', hash: '#/trends', title: 'Тренды', icon: 'trend', group: 'Работа', area: 'trends' },
   { id: 'mail', hash: '#/mail', title: 'Рассылка', icon: 'mail', group: 'Работа', area: 'mail' },
-  { id: 'projects', hash: '#/projects', title: 'Проекты', icon: 'plug', group: 'Доступ', area: 'platforms' },
+  { id: 'projects', hash: '#/projects', title: 'Интеграции', icon: 'plug', group: 'Доступ', area: 'platforms' },
   { id: 'staff', hash: '#/staff', title: 'Сотрудники', icon: 'staff', group: 'Доступ', area: 'staff' },
   { id: 'journal', hash: '#/journal', title: 'Журнал', icon: 'journal', group: 'Служебное', area: 'journal' },
   { id: 'settings', hash: '#/settings', title: 'Настройки', icon: 'settings', group: 'Служебное', area: 'settings' },
@@ -97,7 +97,7 @@ async function boot() {
 }
 
 /**
- * Значок у раздела «Проекты», когда сторож нашёл беду с токенами.
+ * Значок у раздела «Интеграции», когда сторож нашёл беду с токенами.
  *
  * Без него о смерти токена узнаёшь, только зайдя в карточку проекта, а
  * заходят туда раз в месяц. Владелец же сидит в календаре — значит сказать
@@ -127,8 +127,8 @@ async function markTokenAlerts() {
 
   toast(
     alerts.worst === 'danger'
-      ? `Токены площадок: ${alerts.count} — не работают. Откройте «Проекты»`
-      : `Токены площадок: ${alerts.count} — скоро умрут. Откройте «Проекты»`,
+      ? `Токены площадок: ${alerts.count} — не работают. Откройте «Интеграции»`
+      : `Токены площадок: ${alerts.count} — скоро умрут. Откройте «Интеграции»`,
     alerts.worst
   );
 }

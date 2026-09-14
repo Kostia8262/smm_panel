@@ -25,7 +25,7 @@ export function projectsView(ctx) {
   const recheck = button('Проверить токены', { iconName: 'refresh', onClick: runWatch });
 
   ctx.setTopbar({
-    title: 'Проекты',
+    title: 'Интеграции',
     subtitle: 'Аккаунты и доступы каждой школы',
     actions: [recheck, button('Новый проект', { iconName: 'plus', onClick: openCreate })],
   });
