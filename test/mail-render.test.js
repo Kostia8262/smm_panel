@@ -33,8 +33,8 @@ test('ссылки только http(s), mailto и tel', () => {
 });
 
 test('подстановка имени с запасным словом', () => {
-  assert.equal(personalize('{{name|Друже}}, доброго дня!', { name: 'Ірина' }), 'Ірина, доброго дня!');
-  assert.equal(personalize('{{name|Друже}}, доброго дня!', {}), 'Друже, доброго дня!');
+  assert.equal(personalize('{{name|Дорогий підписнику}}, доброго дня!', { name: 'Ірина' }), 'Ірина, доброго дня!');
+  assert.equal(personalize('{{name|Дорогий підписнику}}, доброго дня!', {}), 'Дорогий підписнику, доброго дня!');
   assert.equal(personalize('{{ name }}!', { name: '  ' }), '!');
 });
 

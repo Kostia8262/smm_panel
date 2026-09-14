@@ -138,7 +138,7 @@ test('картинка: только JPEG/PNG по содержимому, пр�
     blocks: [
       { type: 'hero', mediaId: wrong.id, alt: 'Діти за ноутбуками' },
       { type: 'heading', text: 'Заголовок' },
-      { type: 'text', text: 'Текст для {{name|друже}}' },
+      { type: 'text', text: 'Текст для {{name|Дорогий підписнику}}' },
       { type: 'button', text: 'Записатися', href: 'https://mycomputer.education' },
     ],
     preheader: 'Прехедер',

@@ -89,7 +89,7 @@ function approvedCampaign({ title = 'Набір', include = [pupils.id, parents.
     blocks: blocks || [
       ...(withImage ? [{ type: 'hero', mediaId, alt: 'Діти' }] : []),
       { type: 'heading', text: 'Привіт' },
-      { type: 'text', text: '{{name|Друже}}, доброго дня! [Розклад](https://mycomputer.education/schedule)' },
+      { type: 'text', text: '{{name|Дорогий підписнику}}, доброго дня! [Розклад](https://mycomputer.education/schedule)' },
       { type: 'button', text: 'Записатися', href: 'https://mycomputer.education/trial' },
     ],
     lists: { include, exclude },

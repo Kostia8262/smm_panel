@@ -964,7 +964,7 @@ export function editorView(ctx, id) {
       case 'text': {
         const area = set('text')(textarea(block.text || '', 6));
         area.setAttribute('aria-label', 'Текст');
-        body.append(textBar(area), area, el('span', 'field__hint', '**жирный**, _курсив_, [текст ссылки](https://…). Пустая строка — новый абзац. {{name|Друже}} — имя получателя или «Друже», если имени нет.'));
+        body.append(textBar(area), area, el('span', 'field__hint', '**жирный**, _курсив_, [текст ссылки](https://…). Пустая строка — новый абзац. {{name|Дорогий підписнику}} — имя получателя или «Дорогий підписнику», если имени нет.'));
         break;
       }
       case 'bullets': {
@@ -1044,7 +1044,7 @@ export function editorView(ctx, id) {
       ['Ж', 'Жирный', () => wrap('**', '**', 'важне')],
       ['К', 'Курсив', () => wrap('_', '_', 'текст')],
       ['Ссылка', 'Ссылка: выделите слова и нажмите', () => wrap('[', '](https://)', 'текст посилання')],
-      ['Имя', 'Имя получателя; если имени нет — «Друже»', () => insert('{{name|Друже}}')],
+      ['Имя', 'Имя получателя; если имени нет — «Дорогий підписнику»', () => insert('{{name|Дорогий підписнику}}')],
     ]) {
       const b = button(label, { variant: 'quiet', title, onClick: action });
       b.classList.add('btn--sm', 'mail-textbar__btn');
