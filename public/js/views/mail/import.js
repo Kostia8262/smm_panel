@@ -166,7 +166,8 @@ function previewStep(ctx, id) {
   api
     .mailSummary(false)
     .then((summary) => {
-      lists = summary.lists.filter((l) => !l.archivedAt);
+      // В базу сегмента CRM не загружают: её состав ведёт админка.
+      lists = summary.lists.filter((l) => !l.archivedAt && !l.crmSegment);
       consentBases = summary.consentBases;
       if (data) renderDest();
     })

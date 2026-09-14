@@ -1365,6 +1365,20 @@ const MIGRATIONS = [
       );
     `,
   },
+  {
+    /*
+     * Сегменты CRM школы → базы (14.09.2026, фаза 6 моста «CRM ↔ панель»):
+     * база, у которой есть `crm_segment`, принадлежит синхронизации — её
+     * состав, имя и архив ведёт воркер, руками их не правят. Одна база на
+     * сегмент и школу. Буква в номере — чтобы не столкнуться с соседней вкладкой.
+     */
+    name: '032s-mail-crm-segments',
+    sql: `
+      ALTER TABLE mail_lists ADD COLUMN crm_segment TEXT;
+      ALTER TABLE mail_lists ADD COLUMN crm_synced_at TEXT;
+      CREATE UNIQUE INDEX idx_mail_lists_crm_segment ON mail_lists(project_id, crm_segment) WHERE crm_segment IS NOT NULL;
+    `,
+  },
 ];
 
 function migrate() {

@@ -65,6 +65,8 @@ function listFromRow(r) {
     createdAt: r.created_at,
     createdBy: r.created_by_name || null,
     archivedAt: r.archived_at,
+    crmSegment: r.crm_segment || null,
+    crmSyncedAt: r.crm_synced_at || null,
     counts: r.total === undefined
       ? undefined
       : {
@@ -76,6 +78,20 @@ function listFromRow(r) {
         },
     lastImportAt: r.last_import_at || null,
   };
+}
+
+/**
+ * База сегмента CRM ведётся синхронизацией (src/mail/crm-segments.js): ручная
+ * правка состава, имени или архива молча откатилась бы следующим заходом.
+ * Отписать человека можно — это стоп-лист школы, а не состав базы.
+ */
+export function assertEditable(list) {
+  if (list?.crmSegment) {
+    throw new MailError(
+      `База «${list.name}» приходит из CRM школы: состав ведёт админка, руками его не меняют. Нужна своя правка — скопируйте адреса в обычную базу`,
+      409
+    );
+  }
 }
 
 export function getList(id) {
@@ -182,6 +198,7 @@ export function createList(projectId, fields, staffId = null) {
 export function updateList(id, fields) {
   const list = getList(id);
   if (!list) throw new MailError('База не найдена', 404);
+  assertEditable(list);
   const clean = cleanListFields(fields, { partial: true });
   if (clean.name && clean.name !== list.name) {
     const taken = db
@@ -325,7 +342,7 @@ export function getContact(id) {
   const contact = contactFromRow(row);
   contact.memberships = db
     .prepare(
-      `SELECT m.list_id, m.attrs, m.added_at, m.removed_at, l.name, l.consent_basis, l.archived_at,
+      `SELECT m.list_id, m.attrs, m.added_at, m.removed_at, l.name, l.consent_basis, l.archived_at, l.crm_segment,
               i.source_name, s.name AS added_by_name
          FROM mail_list_members m
          JOIN mail_lists l ON l.id = m.list_id
@@ -342,6 +359,7 @@ export function getContact(id) {
   const texts = parseJson(db.prepare("SELECT value FROM settings WHERE key = 'crm_consent_texts'").get()?.value, {}).versions || {};
   const origin = (m) => {
     if (m.source_name || m.added_by_name) return null;
+    if (m.crm_segment) return { source: 'сегмент CRM школы', consentText: null, consentNote: null };
     const e = joined.find((x) => x.source === (m.consent_basis === 'form' ? 'form' : 'crm'));
     if (!e) return null;
     if (e.source === 'form') return { source: 'форма на сайте', consentText: null, consentNote: e.note };
@@ -446,6 +464,7 @@ export function addMembership(listId, contactId, { attrs = {}, importId = null, 
 export function addContactManually({ listId, email, name = '', staffId = null }) {
   const list = getList(listId);
   if (!list) throw new MailError('База не найдена', 404);
+  assertEditable(list);
   if (list.archivedAt) throw new MailError('База в архиве — верните её, чтобы добавлять адреса');
 
   const check = checkAddress(email);
@@ -498,6 +517,7 @@ export function updateContact(id, { name, email }) {
 }
 
 export function updateMemberAttrs(listId, contactId, attrs) {
+  assertEditable(getList(listId));
   const clean = Object.fromEntries(
     Object.entries(attrs || {}).map(([k, v]) => [String(k).slice(0, 80), String(v ?? '').slice(0, 500)])
   );
@@ -560,10 +580,13 @@ export function bulk({ projectId, ids, action, listId = null, targetListId = nul
   if (['copy', 'move'].includes(action)) {
     if (!target || target.projectId !== Number(projectId)) throw new MailError('Выберите базу этой школы');
     if (target.archivedAt) throw new MailError('База в архиве — верните её, чтобы добавлять адреса');
+    assertEditable(target);
   }
   const source = listId ? getList(listId) : null;
-  if (['remove', 'move'].includes(action) && (!source || source.projectId !== Number(projectId))) {
-    throw new MailError('Не указано, из какой базы убирать');
+  if (['remove', 'move'].includes(action)) {
+    if (!source || source.projectId !== Number(projectId)) throw new MailError('Не указано, из какой базы убирать');
+    // Скопировать из сегмента в свою базу можно, убрать из сегмента — нет.
+    assertEditable(source);
   }
 
   let done = 0;

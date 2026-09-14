@@ -479,6 +479,17 @@ function feedStatus(feed) {
   return el('p', 'field__hint', `Лента прочитана ${at}.${last}`);
 }
 
+/** Сегменты CRM ходят тем же ключом, но раз в 15 минут и своей ошибкой. */
+function segmentsStatus(seg) {
+  if (!seg) return null;
+  if (seg.lastError) return note('danger', 'Сегменты CRM не забираются', seg.lastError);
+  if (!seg.lastAt) return el('p', 'field__hint', 'Сегменты CRM ещё не забирались — воркер заходит раз в 15 минут.');
+  const at = new Date(seg.lastAt).toLocaleString('ru-RU', { timeZone: 'Europe/Kyiv', dateStyle: 'short', timeStyle: 'short' });
+  const s = seg.lastStats || {};
+  const count = s.segments ? `включено сегментов ${s.segments}` : 'включённых сегментов нет — их включают в админке, «Розсилки → Сегменти»';
+  return el('p', 'field__hint', `Сегменты CRM забраны ${at}: ${count}.`);
+}
+
 export function leadsPanel() {
   const p = panel('Связь с заявками школы');
   const body = el('div');
@@ -549,7 +560,7 @@ export function leadsPanel() {
       });
       foot.append(save, check, checkFeed);
 
-      if (cfg.feed?.hasToken) feedToken.wrap.append(feedStatus(cfg.feed));
+      if (cfg.feed?.hasToken) feedToken.wrap.append(...[feedStatus(cfg.feed), segmentsStatus(cfg.feed.segments)].filter(Boolean));
       // Сетка растягивает только третье поле, а доменам тоже нужна вся ширина.
       domains.wrap.style.gridColumn = '1 / -1';
       form.append(url.wrap, token.wrap, feedToken.wrap, domains.wrap, foot);

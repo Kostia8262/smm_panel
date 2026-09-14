@@ -311,9 +311,35 @@ async function feedTick() {
   }
 }
 
+/**
+ * Сегменты CRM школы (src/mail/crm-segments.js) — раз в 15 минут, своим
+ * флагом. Проверка раз в минуту, а время последнего захода лежит в базе:
+ * перезапуск воркера на выкатке не устраивает лишнего опроса админки.
+ */
+let segmentsBusy = false;
+let segmentsError = { text: '', at: 0 };
+async function segmentsTick() {
+  if (segmentsBusy) return;
+  segmentsBusy = true;
+  try {
+    const { pullSegments, segmentsDue } = await import('../mail/crm-segments.js');
+    if (!segmentsDue()) return;
+    await pullSegments();
+    segmentsError = { text: '', at: 0 };
+  } catch (err) {
+    if (err.message !== segmentsError.text || Date.now() - segmentsError.at > 60 * 60 * 1000) {
+      log('warn', `рассылка: ${err.message}`);
+      segmentsError = { text: err.message, at: Date.now() };
+    }
+  } finally {
+    segmentsBusy = false;
+  }
+}
+
 log('info', `воркер запущен, тик ${TICK_MS / 1000} с`);
 recoverStuck(db, log);
 tick();
 setInterval(tick, TICK_MS);
 setInterval(mailTick, MAIL_TICK_MS);
 setInterval(feedTick, FEED_TICK_MS);
+setInterval(segmentsTick, FEED_TICK_MS);

@@ -46,6 +46,7 @@ const { randomBytes } = await import('node:crypto');
 const { writeFileSync } = await import('node:fs');
 const { encrypt: encryptSecret, decrypt: decryptSecret } = await import('./secrets.js');
 const { feedState } = await import('./mail/crm-feed.js');
+const { segmentsState } = await import('./mail/crm-segments.js');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3210);
@@ -1738,7 +1739,7 @@ app.put('/api/settings/leads', requireAccess('platforms'), (req, res) => {
     url: staffDb.getSetting('leads_api_url', ''),
     hasToken: Boolean(staffDb.getSetting('leads_api_token', '')),
     ownDomains: staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school'),
-    feed: feedState(),
+    feed: { ...feedState(), segments: segmentsState() },
   });
 });
 
@@ -1747,7 +1748,7 @@ app.get('/api/settings/leads', requireAccess('platforms'), (_req, res) => {
     url: staffDb.getSetting('leads_api_url', 'https://mycomputer.education'),
     hasToken: Boolean(staffDb.getSetting('leads_api_token', '')),
     ownDomains: staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school'),
-    feed: feedState(),
+    feed: { ...feedState(), segments: segmentsState() },
   });
 });
 

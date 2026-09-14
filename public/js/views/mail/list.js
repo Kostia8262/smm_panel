@@ -40,6 +40,7 @@ export function listView(ctx, listKey) {
   let requestNo = 0;
   const selected = new Set();
 
+  const infoHost = el('div', 'mail-slot');
   const cardHost = el('div', 'stack mail-slot');
   const tools = el('div', 'jtools');
   const bulkHost = el('div', 'mail-slot');
@@ -48,7 +49,7 @@ export function listView(ctx, listKey) {
   const pagerHost = el('div', 'mail-pager');
   const host = panel(null, tools, bulkHost, tableHost, pagerHost);
 
-  root.append(backLink(), cardHost, host);
+  root.append(backLink(), infoHost, cardHost, host);
   setTopbar();
   loadMeta();
   load();
@@ -85,6 +86,7 @@ export function listView(ctx, listKey) {
     filters.page = data.page;
     for (const id of [...selected]) if (!data.contacts.some((c) => c.id === id)) selected.delete(id);
     setTopbar();
+    renderInfo();
     renderTools();
     renderBulk();
     renderTable();
@@ -118,15 +120,36 @@ export function listView(ctx, listKey) {
     exportLink.append(icon('download', { size: 16 }), el('span', null, 'Выгрузить CSV'));
 
     const actions = [];
-    if (listId && list && !list.archivedAt) {
+    const locked = Boolean(list?.crmSegment);
+    if (listId && list && !list.archivedAt && !locked) {
       actions.push(
         button('Добавить адрес', { variant: 'quiet', iconName: 'plus', onClick: () => openAddForm() }),
         button('Загрузить', { variant: 'quiet', iconName: 'upload', onClick: () => (location.hash = `#/mail/import/new?list=${listId}`) })
       );
     }
     actions.push(exportLink);
-    if (listId && list) actions.push(button('Изменить базу', { variant: 'quiet', iconName: 'settings', onClick: () => openListForm() }));
+    if (listId && list && !locked) actions.push(button('Изменить базу', { variant: 'quiet', iconName: 'settings', onClick: () => openListForm() }));
     ctx.setTopbar({ title, subtitle, actions });
+  }
+
+  /** База сегмента CRM: откуда состав и почему здесь нечего править. */
+  function renderInfo() {
+    infoHost.textContent = '';
+    const list = data?.list;
+    if (!list?.crmSegment) return;
+    const synced = list.crmSyncedAt
+      ? new Date(list.crmSyncedAt).toLocaleString('ru-RU', { timeZone: 'Europe/Kyiv', dateStyle: 'short', timeStyle: 'short' })
+      : '';
+    infoHost.append(
+      note(
+        'info',
+        list.archivedAt ? 'Сегмент CRM выключен в админке' : 'Состав ведёт CRM школы',
+        (list.archivedAt
+          ? 'База в архиве: новых адресов не будет. Включат сегмент снова — база вернётся сама.'
+          : 'Адреса приходят и уходят сами раз в 15 минут: руками их не добавляют и не убирают. Нужна своя правка — отметьте людей и скопируйте в обычную базу.') +
+          (synced ? ` Сверено ${synced}.` : '')
+      )
+    );
   }
 
   /* ----------------------------- фильтры ----------------------------- */
@@ -180,17 +203,19 @@ export function listView(ctx, listKey) {
     const bar = el('div', 'mail-bulk');
     bar.append(el('span', 'mail-bulk__count', `Отмечено: ${num(selected.size)}`));
 
-    const targets = lists.filter((l) => l.id !== listId && !l.archivedAt);
+    // Из сегмента CRM можно только копировать: убранный адрес следующая сверка вернула бы.
+    const locked = Boolean(data?.list?.crmSegment);
+    const targets = lists.filter((l) => l.id !== listId && !l.archivedAt && !l.crmSegment);
     if (targets.length) {
       const target = select([['', 'В базу…'], ...targets.map((l) => [String(l.id), l.name])], '');
       target.setAttribute('aria-label', 'База для копирования');
       bar.append(target);
       bar.append(small(button('Скопировать', { onClick: () => (target.value ? runBulk('copy', { targetListId: Number(target.value) }) : toast('Сначала выберите базу')) })));
-      if (listId) {
+      if (listId && !locked) {
         bar.append(small(button('Перенести', { onClick: () => (target.value ? runBulk('move', { targetListId: Number(target.value) }) : toast('Сначала выберите базу')) })));
       }
     }
-    if (listId) bar.append(small(button('Убрать из базы', { onClick: () => runBulk('remove') })));
+    if (listId && !locked) bar.append(small(button('Убрать из базы', { onClick: () => runBulk('remove') })));
     bar.append(
       small(
         button('Отписать', {
@@ -241,7 +266,9 @@ export function listView(ctx, listKey) {
       tableHost.append(
         filtered
           ? empty('search', 'Под фильтр никто не попал', 'Попробуйте другое состояние или слово.', button('Сбросить фильтр', { onClick: () => applyFilters({ q: '', status: '' }) }))
-          : empty(
+          : data.list?.crmSegment
+            ? empty('mail', 'В сегменте пока пусто', 'Адреса появятся, когда в CRM будут люди с согласием на письма, подходящие под сегмент.')
+            : empty(
               'mail',
               'В базе пока пусто',
               'Загрузите файл или добавьте адрес вручную.',

@@ -182,7 +182,9 @@ export function listsView(ctx) {
         row({
           list,
           name: list.name,
-          sub: [list.description, list.archivedAt ? 'в архиве' : ''].filter(Boolean).join(' · '),
+          sub: [list.crmSegment ? 'сегмент CRM школы, обновляется сам' : list.description, list.archivedAt ? (list.crmSegment ? 'выключен в админке' : 'в архиве') : '']
+            .filter(Boolean)
+            .join(' · '),
           href: `#/mail/lists/${list.id}`,
           consent: list.consentTitle,
           counts: list.counts,
@@ -226,7 +228,8 @@ export function listsView(ctx) {
     tr.append(tdUpdated);
 
     const tdActions = el('td');
-    if (canManage && list) {
+    // Базу сегмента CRM не загружают и не архивируют руками — это делает сверка с админкой.
+    if (canManage && list && !list.crmSegment) {
       const actions = el('div', 'mail-row-actions');
       if (!list.archivedAt) {
         actions.append(

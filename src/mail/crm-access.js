@@ -121,6 +121,8 @@ function sourceSql({ form, feed }) {
   const list = (set) => (set.size ? [...set].map(Number).join(',') : '-1');
   return `CASE WHEN m.import_id IS NOT NULL THEN 'import'
                WHEN m.list_id IN (${list(feed)}) THEN 'crm_feed'
+               -- Сегменты CRM (фаза 6) — тоже из CRM; своего значения в контракте админки пока нет.
+               WHEN m.list_id IN (SELECT id FROM mail_lists WHERE crm_segment IS NOT NULL) THEN 'crm_feed'
                WHEN m.list_id IN (${list(form)}) THEN 'form'
                ELSE 'manual' END`;
 }

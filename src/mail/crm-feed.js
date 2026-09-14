@@ -215,7 +215,11 @@ function applyPage(items, next) {
   return stats;
 }
 
-async function integrationFetch(path, { apiUrl, apiKey, fetchImpl = globalThis.fetch }) {
+/**
+ * Запрос к интеграции админки ключом ленты. `missing` — что вернуть на 404
+ * вместо ошибки (у сегментов 404 значит «выключен», а не «нет эндпоинта»).
+ */
+export async function integrationFetch(path, { apiUrl, apiKey, fetchImpl = globalThis.fetch, missing }) {
   if (!apiUrl || !apiKey) throw new Error('Не вписан ключ ленты согласий');
   let res;
   try {
@@ -226,9 +230,12 @@ async function integrationFetch(path, { apiUrl, apiKey, fetchImpl = globalThis.f
   } catch (err) {
     throw new Error(`Админка школы не ответила: ${err.message}`);
   }
-  if (res.status === 401) throw new Error('Админка не узнала ключ ленты — вставьте ключ из «Інтеграції» (mcai_…)');
-  if (res.status === 403) throw new Error(`Ключ ленты отозван или без права ${FEED_SCOPE} — выпустите новый в админке`);
-  if (res.status === 404) throw new Error('В админке ещё нет ленты согласий');
+  if (res.status === 401) throw Object.assign(new Error('Админка не узнала ключ ленты — вставьте ключ из «Інтеграції» (mcai_…)'), { status: 401 });
+  if (res.status === 403) throw Object.assign(new Error(`Ключ ленты отозван или без права ${FEED_SCOPE} — выпустите новый в админке`), { status: 403 });
+  if (res.status === 404) {
+    if (missing !== undefined) return missing;
+    throw new Error('В админке ещё нет ленты согласий');
+  }
   if (!res.ok) throw new Error(`Админка школы ответила ${res.status}`);
   return res.json();
 }

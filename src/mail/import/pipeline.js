@@ -650,6 +650,7 @@ export function commitImport(id, { projectId, staffId = null, listId = null, new
     if (listId) {
       list = store.getList(listId);
       if (!list || list.projectId !== row.project_id) throw new MailError('База не найдена', 404);
+      store.assertEditable(list);
       if (list.archivedAt) throw new MailError('База в архиве — верните её или выберите другую');
     } else if (newList) {
       list = store.createList(row.project_id, newList, staffId);
