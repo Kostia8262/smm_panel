@@ -11,8 +11,9 @@
 2. **Basic information**
    - App name: `MyComputer SMM` — должно совпадать с названием на сайте.
    - App icon: 1024×1024, фавикон панели или логотип академии.
-   - Description: «Internal publishing planner of My Computer Academy: staff schedule and
-     publish posts to the academy's TikTok account, directly or to drafts.»
+   - Description: «Content planner for social media teams: schedule posts, get them
+     approved and publish videos to TikTok directly or as drafts.»
+     Не писать «internal» и «личный инструмент» — TikTok отклоняет такие заявки.
    - Category: Business / Productivity.
    - Terms of Service URL: `https://smm.mycomputer.education/terms`
    - Privacy Policy URL: `https://smm.mycomputer.education/privacy`
@@ -35,7 +36,7 @@
    У песочницы свои настройки: в ней тоже добавить Login Kit (тот же Redirect URI),
    Content Posting API с Direct Post и те же три scope.
 2. Из песочницы взять **Client key** и **Client secret**.
-3. В панели: Проекты → Академия → карточка TikTok → вписать ключ и секрет →
+3. В панели: Интеграции → Комп'ютерна академія → карточка TikTok → вписать ключ и секрет →
    «Сохранить» → **«Подключить через TikTok»** → войти под @mycomputer.academy.
 4. Проверить: «Проверить связь», затем пост с роликом, видимость «Только я»
    (до аудита TikTok иначе не даст), и пост в режиме «В черновики TikTok».
