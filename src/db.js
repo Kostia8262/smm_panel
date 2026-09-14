@@ -22,6 +22,12 @@ mkdirSync(dirname(DB_PATH), { recursive: true });
 
 export const db = new DatabaseSync(DB_PATH);
 
+/*
+ * Веб-морда и воркер пишут в одну базу. Без ожидания чужая запись роняет свою
+ * сразу: 14.09.2026 при `pm2 restart smm-web smm-worker` веб упал на старте
+ * с «database is locked» и остался висеть без порта — сайт отдавал 503.
+ */
+db.exec('PRAGMA busy_timeout = 5000');
 db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA foreign_keys = ON');
 
