@@ -238,8 +238,18 @@ export function startDue(now = Date.now()) {
         db.exec('ROLLBACK');
         continue;
       }
-      const insert = db.prepare('INSERT OR IGNORE INTO mail_sends (campaign_id, sender_id, contact_id, email, name, via_list_id) VALUES (?, ?, ?, ?, ?, ?)');
-      for (const r of recipientsOf(campaign)) count += insert.run(id, campaign.sender.id, r.id, r.email, r.name || '', r.via).changes;
+      const insert = db.prepare(
+        'INSERT OR IGNORE INTO mail_sends (campaign_id, sender_id, contact_id, email, name, via_list_id, status, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      );
+      // Частота школы: недавно получавшие письмо остаются в снимке пропущенными — видно, кому и почему не ушло.
+      const gapDays = campaigns.frequencyGapDays(campaign.projectId);
+      const recent = gapDays ? db.prepare(`SELECT 1 FROM mail_contacts c WHERE c.id = ? AND ${campaigns.RECENT_SQL}`) : null;
+      const since = gapDays ? campaigns.recentSince(gapDays, now) : null;
+      for (const r of recipientsOf(campaign)) {
+        const skip = recent && recent.get(r.id, campaign.projectId, id, since);
+        const info = insert.run(id, campaign.sender.id, r.id, r.email, r.name || '', r.via, skip ? 'skipped' : 'queued', skip ? `получал письмо школы меньше ${gapDays} дн. назад` : null);
+        if (!skip) count += info.changes;
+      }
       db.prepare('UPDATE mail_campaigns SET link_map = ? WHERE id = ?').run(JSON.stringify(buildLinkMap(campaign, now)), id);
       db.exec('COMMIT');
     } catch (err) {

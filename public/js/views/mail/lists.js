@@ -8,7 +8,7 @@
 
 import { api } from '../../api.js';
 import { el, button, iconButton, panel, empty, skeleton, toast, note } from '../../ui.js';
-import { tile, num, day, plural, field, input, select, chip, mailTabs } from './common.js';
+import { tile, num, day, plural, field, input, select, chip, mailTabs, tag, ADDRESSES } from './common.js';
 
 export function listsView(ctx) {
   const root = el('div', 'view');
@@ -22,6 +22,7 @@ export function listsView(ctx) {
     subtitle: `Базы адресов · ${project?.title || ''}`,
     actions: canManage
       ? [
+          button('Возвраты писем', { variant: 'quiet', iconName: 'alert', onClick: () => openBounces() }),
           button('Новая база', { variant: 'quiet', iconName: 'plus', onClick: () => openForm() }),
           button('Загрузить базу', { variant: 'primary', iconName: 'upload', onClick: () => (location.hash = '#/mail/import/new') }),
         ]
@@ -264,6 +265,94 @@ export function listsView(ctx) {
     }
   }
 
+  /* ------------------------------- возвраты ------------------------------- */
+
+  /**
+   * «Адрес не найден» приходит письмом в ящик рассылки, а читать ящик панель
+   * не может. Владелец вставляет текст возвратов — панель находит адреса своих
+   * контактов и после подтверждения отмечает их «адреса нет».
+   */
+  function openBounces() {
+    root.querySelector('.mail-bounces')?.remove();
+    const box = panel('Возвраты писем');
+    box.classList.add('mail-bounces');
+    box.append(
+      el(
+        'p',
+        'field__hint',
+        'Откройте в Gmail письма «Адрес не найден» / «Delivery Status Notification», скопируйте их текст целиком и вставьте сюда — можно несколько писем подряд. Служебные адреса и ящик рассылки панель отбросит сама.'
+      )
+    );
+    const area = el('textarea', 'textarea mail-paste');
+    area.setAttribute('aria-label', 'Текст писем о недоставке');
+    area.placeholder = 'Адрес не найден. Письмо не доставлено на …';
+    const actions = el('div', 'mail-actions');
+    const find = button('Найти адреса', { variant: 'primary', iconName: 'search' });
+    actions.append(find, button('Закрыть', { variant: 'quiet', onClick: () => box.remove() }));
+    const resultHost = el('div', 'mail-bounces__list mail-slot');
+    box.append(area, actions, resultHost);
+
+    find.addEventListener('click', async () => {
+      find.disabled = true;
+      let data;
+      try {
+        data = await api.previewMailBounces(area.value);
+      } catch (err) {
+        toast(err.message, 'danger');
+        find.disabled = false;
+        return;
+      }
+      find.disabled = false;
+      renderBounces(resultHost, data, box);
+    });
+
+    tabs.after(box);
+    area.focus();
+  }
+
+  function renderBounces(host, data, box) {
+    host.textContent = '';
+    if (!data.found.length) {
+      host.append(note('info', 'Своих контактов в тексте не нашлось', data.notInBase.length ? `Нашлись чужие адреса: ${data.notInBase.slice(0, 5).join(', ')}${data.notInBase.length > 5 ? '…' : ''}` : 'Проверьте, что вставлен текст самого письма о недоставке.'));
+      return;
+    }
+    const checks = [];
+    for (const f of data.found) {
+      const row = el('label', 'mail-bounce check');
+      const box2 = el('input', 'mail-check');
+      box2.type = 'checkbox';
+      // По умолчанию отмечены те, кому уходили письма: возврат почти наверняка про них.
+      box2.checked = Boolean(f.lastLetter) && f.status === 'active';
+      checks.push([box2, f]);
+      row.append(box2, el('span', 'mail-name', f.email));
+      if (f.name) row.append(el('span', 'dim small', f.name));
+      if (f.status !== 'active') row.append(tag({ cls: 'tag--warn', text: 'уже не активен' }));
+      row.append(el('span', 'mail-sub', f.lastLetter ? `последнее письмо: «${f.lastLetter.title}», ${day(f.lastLetter.sentAt)}` : 'писем рассылки не получал — возможно, адрес попал в текст случайно'));
+      host.append(row);
+    }
+    if (data.notInBase.length) host.append(el('p', 'field__hint', `Не из баз школы, пропущены: ${plural(data.notInBase.length, ADDRESSES)}.`));
+    const actions = el('div', 'mail-actions');
+    const apply = button('Отметить «адреса нет»', {
+      variant: 'danger',
+      onClick: async () => {
+        const ids = checks.filter(([c]) => c.checked).map(([, f]) => f.contactId);
+        if (!ids.length) return toast('Отметьте хотя бы один адрес', 'danger');
+        apply.disabled = true;
+        try {
+          const { done } = await api.applyMailBounces(ids);
+          toast(`Отмечено «адреса нет»: ${done}. Письма рассылок им больше не уйдут`, 'ok');
+          box.remove();
+          load();
+        } catch (err) {
+          toast(err.message, 'danger');
+          apply.disabled = false;
+        }
+      },
+    });
+    actions.append(apply);
+    host.append(actions);
+  }
+
   /* ----------------------------- новая база ----------------------------- */
 
   function openForm() {
@@ -310,7 +399,7 @@ export function listsView(ctx) {
     });
 
     box.append(form);
-    root.prepend(box);
+    tabs.after(box);
     name.focus();
   }
 }

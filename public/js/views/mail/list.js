@@ -398,6 +398,24 @@ export function listView(ctx, listKey) {
     if (!contact.memberships.length) memberships.append(el('p', 'field__hint', 'Ни в одной базе — остался только в «Всех контактах».'));
     card.append(memberships);
 
+    // История писем: что человек получал — видно, от какого письма он отписался.
+    if (contact.letters?.length) {
+      card.append(el('div', 'eyebrow', 'Письма'));
+      const letters = el('div', 'mail-members');
+      const LETTER_TAG = { sent: 'tag--ok', failed: 'tag--danger', unknown: 'tag--warn', queued: 'tag--gold', sending: 'tag--gold' };
+      const LETTER_TEXT = { sent: 'ушло', failed: 'не ушло', unknown: 'судьба неизвестна', queued: 'в очереди', sending: 'отправляется', skipped: 'пропущено', cancelled: 'отменено' };
+      for (const l of contact.letters) {
+        const item = el('div', 'mail-member');
+        const link = el('a', 'mail-name', l.title || l.subject || 'Письмо');
+        link.href = `#/mail/letter/${l.campaignId}`;
+        item.append(link, el('span', `tag ${LETTER_TAG[l.status] || ''}`.trim(), LETTER_TEXT[l.status] || l.status), el('span', 'dim small', day(l.at)));
+        if (l.unsubscribedHere) item.append(el('span', 'tag tag--warn', 'отписался по этому письму'));
+        if (l.error && l.status !== 'sent') item.append(el('div', 'mail-attrs', l.error));
+        letters.append(item);
+      }
+      card.append(letters);
+    }
+
     const actions = el('div', 'mail-actions');
     const askHost = el('div');
     if (contact.status === 'active') {

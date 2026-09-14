@@ -8,7 +8,7 @@
 
 import { api } from '../../api.js';
 import { el, button, iconButton, panel, empty, skeleton, toast } from '../../ui.js';
-import { num, day, plural, mailTabs, CAMPAIGN_TAG, ADDRESSES } from './common.js';
+import { num, day, plural, input, mailTabs, CAMPAIGN_TAG, ADDRESSES } from './common.js';
 
 const time = (iso) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 
@@ -27,13 +27,47 @@ export function campaignsView(ctx) {
 
   async function load() {
     let data;
+    let settings = { gapDays: 0 };
     try {
-      data = await api.mailCampaigns();
+      [data, settings] = await Promise.all([api.mailCampaigns(), api.mailSettings()]);
     } catch (err) {
       toast(err.message, 'danger');
       return;
     }
     render(data.campaigns);
+    host.append(frequencyRow(settings.gapDays));
+  }
+
+  /**
+   * Частота писем школы: один человек в нескольких рассылках подряд — прямая
+   * дорога в «Спам». Меняет владелец; СММщик видит правило словами.
+   */
+  function frequencyRow(gapDays) {
+    const row = el('div', 'mail-frequency');
+    if (!ctx.can('mail_senders')) {
+      row.append(el('span', null, gapDays ? `Частота школы: одному человеку не чаще одного письма в ${plural(gapDays, ['день', 'дня', 'дней'])}.` : 'Частота писем школы не ограничена.'));
+      return row;
+    }
+    const days = input(String(gapDays), { type: 'number' });
+    days.min = '0';
+    days.max = '60';
+    days.setAttribute('aria-label', 'Дней между письмами одному человеку');
+    const save = button('Сохранить', {
+      variant: 'quiet',
+      onClick: async () => {
+        save.disabled = true;
+        try {
+          const out = await api.saveMailSettings({ gapDays: days.value === '' ? 0 : Number(days.value) });
+          toast(out.gapDays ? `Не чаще одного письма в ${plural(out.gapDays, ['день', 'дня', 'дней'])}` : 'Частота не ограничена', 'ok');
+        } catch (err) {
+          toast(err.message, 'danger');
+        }
+        save.disabled = false;
+      },
+    });
+    save.classList.add('btn--sm');
+    row.append(el('span', null, 'Одному человеку — не чаще одного письма школы в'), days, el('span', null, 'дней'), save, el('span', 'mail-sub', '0 — без ограничения. Недавно получавшие письмо пропускаются при старте рассылки.'));
+    return row;
   }
 
   function render(campaigns) {

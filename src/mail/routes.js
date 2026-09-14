@@ -22,6 +22,8 @@ import { brandFor } from './compose/brand.js';
 import * as campaigns from './campaigns.js';
 import * as mailMedia from './compose/media.js';
 import * as runner from './runner.js';
+import * as report from './report.js';
+import * as bounces from './bounces.js';
 import { makeState, readState } from '../oauth/threads.js';
 import { getProject } from '../projects.js';
 import { tooManyAttempts } from '../ratelimit.js';
@@ -706,6 +708,51 @@ export function mountMailRoutes(app, { requireAccess, currentProjectId, can, pub
       const page = Math.max(1, Number(req.query.page) || 1);
       res.json(campaigns.listSends(campaign.id, { status, page }));
     })
+  );
+
+  /* ------------------------------ результаты (фаза 5) ------------------------------ */
+
+  /** Отчёт: переходы, отписки, заявки. Имена из заявок — только владельцу. */
+  router.get(
+    '/api/mail/campaigns/:id/report',
+    view,
+    handle(async (req, res) => {
+      const campaign = campaignOf(req);
+      res.json(await report.campaignReport(campaign, { withPeople: can(req.user.role, 'mail_contacts') }));
+    })
+  );
+
+  /** Повтор писем с неизвестной судьбой — владелец, осознанно: часть людей получит письмо дважды. */
+  router.post(
+    '/api/mail/campaigns/:id/retry-unknown',
+    mailboxes,
+    handle((req, res) => res.json(editorPayload(report.retryUnknown(campaignOf(req).id, { user: req.user, projectId: projectOf(req) }))))
+  );
+
+  /* ------------------------------ фаза 6: возвраты и частота ------------------------------ */
+
+  router.post(
+    '/api/mail/bounces/preview',
+    manage,
+    handle((req, res) => res.json(bounces.previewBounces(projectOf(req), req.body?.text)))
+  );
+
+  router.post(
+    '/api/mail/bounces/apply',
+    manage,
+    handle((req, res) => res.json(bounces.applyBounces(projectOf(req), req.body?.ids)))
+  );
+
+  router.get(
+    '/api/mail/settings',
+    view,
+    handle((req, res) => res.json({ gapDays: campaigns.frequencyGapDays(projectOf(req)) }))
+  );
+
+  router.put(
+    '/api/mail/settings',
+    mailboxes,
+    handle((req, res) => res.json({ gapDays: campaigns.setFrequencyGapDays(projectOf(req), req.body?.gapDays, req.user) }))
   );
 
   /* ------------------------------ отписка: наружу ------------------------------ */

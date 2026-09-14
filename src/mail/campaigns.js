@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto';
 import { db, log } from '../db.js';
 import { getProject } from '../projects.js';
-import { requireApproval } from '../staff.js';
+import { requireApproval, getSetting, setSetting } from '../staff.js';
 import { MailError, getList } from './store.js';
 import { CONSENT_BASES } from './specs.js';
 import { BLOCK_TYPES, renderLetter, sampleBlocks, safeUrl } from './compose/render.js';
@@ -384,10 +384,10 @@ export function removeCampaign(id) {
  * Сколько людей получат письмо. Человек в двух базах — одно письмо;
  * отписавшиеся и недоставляемые не считаются.
  */
-export function audience(campaign) {
+export function audience(campaign, now = Date.now()) {
   const inc = campaign.lists.include.map((l) => l.id);
   const exc = campaign.lists.exclude.map((l) => l.id);
-  if (!inc.length) return { inLists: 0, recipients: 0, unsubscribed: 0, undeliverable: 0, excluded: 0 };
+  if (!inc.length) return { inLists: 0, recipients: 0, unsubscribed: 0, undeliverable: 0, excluded: 0, recent: 0, gapDays: frequencyGapDays(campaign.projectId) };
   const incSql = inc.map(() => '?').join(',');
   const excSql = exc.length ? `AND NOT EXISTS (SELECT 1 FROM mail_list_members x WHERE x.contact_id = c.id AND x.removed_at IS NULL AND x.list_id IN (${exc.map(() => '?').join(',')}))` : '';
   const base = `FROM mail_contacts c WHERE c.project_id = ? AND EXISTS (SELECT 1 FROM mail_list_members m WHERE m.contact_id = c.id AND m.removed_at IS NULL AND m.list_id IN (${incSql}))`;
@@ -400,16 +400,44 @@ export function audience(campaign) {
        ${base}`
     )
     .get(campaign.projectId, ...inc);
-  const recipients = exc.length
+  const notExcluded = exc.length
     ? db.prepare(`SELECT COUNT(*) AS n ${base} AND c.status = 'active' ${excSql}`).get(campaign.projectId, ...inc, ...exc).n
     : counts.active || 0;
+  // Частота: получавшим письмо школы недавно — не сейчас.
+  const gapDays = frequencyGapDays(campaign.projectId);
+  const recent = gapDays
+    ? db.prepare(`SELECT COUNT(*) AS n ${base} AND c.status = 'active' ${excSql} AND ${RECENT_SQL}`).get(campaign.projectId, ...inc, ...exc, campaign.projectId, campaign.id, recentSince(gapDays, now)).n
+    : 0;
   return {
     inLists: counts.total || 0,
-    recipients,
+    recipients: notExcluded - recent,
     unsubscribed: counts.unsubscribed || 0,
     undeliverable: counts.undeliverable || 0,
-    excluded: (counts.active || 0) - recipients,
+    excluded: (counts.active || 0) - notExcluded,
+    recent,
+    gapDays,
   };
+}
+
+/* ------------------------------ частота ------------------------------ */
+
+/** Условие «получал письмо этой школы недавно» для контакта `c`: параметры — проект, эта рассылка, с какого времени. */
+export const RECENT_SQL = `EXISTS (SELECT 1 FROM mail_sends rs JOIN mail_campaigns rc ON rc.id = rs.campaign_id
+  WHERE rs.contact_id = c.id AND rc.project_id = ? AND rc.id != ? AND rs.status IN ('sent', 'unknown') AND rs.sent_at > ?)`;
+
+export const recentSince = (days, now = Date.now()) => nowIso(now - days * 86400000);
+
+/** Не чаще одного письма человеку за N дней — своя настройка у каждой школы; 0 — без ограничения. */
+export function frequencyGapDays(projectId) {
+  return Math.max(0, Number(getSetting(`mail_gap_days_${Number(projectId)}`, '0')) || 0);
+}
+
+export function setFrequencyGapDays(projectId, days, user) {
+  const value = days === '' || days === null ? 0 : Number(days);
+  if (!Number.isInteger(value) || value < 0 || value > 60) throw new MailError('Дней — целое число от 0 до 60; 0 — без ограничения');
+  setSetting(`mail_gap_days_${Number(projectId)}`, String(value));
+  log('info', `рассылка: частота писем школы #${projectId} — ${value ? `не чаще раза в ${value} дн.` : 'без ограничения'} (${user.name})`);
+  return value;
 }
 
 /* ------------------------------ сборка ------------------------------ */
@@ -479,7 +507,13 @@ export function checkCampaign(campaign) {
   if (!campaign.sender) blockers.push('Не выбран ящик, с которого уйдёт письмо');
   else if (campaign.sender.state === 'dead' || campaign.sender.state === 'disconnected') blockers.push(`Ящик ${campaign.sender.email} потерял доступ к Gmail — подключите его заново`);
   if (!campaign.lists.include.length) blockers.push('Не выбраны базы получателей');
-  else if (!aud.recipients) blockers.push('В выбранных базах нет активных адресов');
+  else if (!aud.recipients && !aud.recent) blockers.push('В выбранных базах нет активных адресов');
+  // Частота — не запрет: письмо можно запланировать на день, когда срок пройдёт.
+  if (aud.recent) {
+    warnings.push(
+      `${aud.recent} из выбранных получали письмо школы меньше ${aud.gapDays} дн. назад — если отправить сейчас, им не уйдёт${aud.recipients ? '' : ' никому'}. Запланируйте позже или смягчите частоту`
+    );
+  }
   if (campaign.lists.include.some((l) => l.archived)) warnings.push('Среди баз есть убранная в архив');
 
   for (const b of campaign.blocks) {

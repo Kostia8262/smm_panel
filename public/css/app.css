@@ -2469,6 +2469,23 @@ a.btn { text-decoration: none; }
 .mail-sub--warn { color: var(--warn); }
 .mail-list-meter { width: 160px; max-width: 100%; margin-top: 2px; }
 
+/* ---------------------- рассылка: результаты, возвраты, частота (фазы 5–6) ---------------------- */
+
+.mail-report { display: flex; flex-direction: column; gap: var(--sp-4); }
+.mail-funnel .jsum__item--ok { border-color: rgba(86, 190, 128, 0.3); }
+.mail-funnel .jsum__item--ok .jsum__value { color: var(--ok); }
+.mail-funnel .jsum__item--gold { border-color: var(--gold-line); }
+.mail-funnel .jsum__item--gold .jsum__value { color: var(--gold-bright); }
+
+.mail-bounces,
+.mail-bounces__list { display: flex; flex-direction: column; gap: var(--sp-3); }
+.mail-bounces__list { gap: var(--sp-2); }
+.mail-bounce { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--sp-3); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line-soft); border-radius: var(--r-sm); }
+.mail-bounce .mail-sub { flex-basis: 100%; margin: 0 0 0 26px; }
+
+.mail-frequency { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--line-soft); color: var(--ink-2); font-size: var(--fs-sm); }
+.mail-frequency .input { width: 72px; height: 32px; padding-block: 0; text-align: center; }
+
 @media (max-width: 1240px) {
   .mail-editor { grid-template-columns: minmax(0, 1fr); }
   .mail-editor__side { position: static; }

@@ -322,6 +322,14 @@ export const api = {
   resumeMailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}/resume`), { method: 'POST' }),
   cancelMailCampaign: (id) => request(withProject(`/api/mail/campaigns/${id}/cancel`), { method: 'POST' }),
   mailCampaignSends: (id, params = {}) => request(withProject(`/api/mail/campaigns/${id}/sends?${new URLSearchParams(params)}`)),
+
+  /* Рассылка: результаты (фаза 5), возвраты и частота (фаза 6). */
+  mailCampaignReport: (id) => request(withProject(`/api/mail/campaigns/${id}/report`)),
+  retryUnknownMail: (id) => request(withProject(`/api/mail/campaigns/${id}/retry-unknown`), { method: 'POST' }),
+  previewMailBounces: (text) => request(withProject('/api/mail/bounces/preview'), { method: 'POST', body: { text } }),
+  applyMailBounces: (ids) => request(withProject('/api/mail/bounces/apply'), { method: 'POST', body: { ids } }),
+  mailSettings: () => request(withProject('/api/mail/settings')),
+  saveMailSettings: (body) => request(withProject('/api/mail/settings'), { method: 'PUT', body }),
 };
 
 export { ApiError };

@@ -351,6 +351,27 @@ export function getContact(id) {
   contact.suppression = suppression
     ? { reason: suppression.reason, title: SUPPRESSION_REASONS[suppression.reason] || suppression.reason, note: suppression.note, at: suppression.created_at }
     : null;
+  // История писем: что человек получал и что с ним было — «почему он отписался» видно отсюда.
+  const events = db
+    .prepare("SELECT campaign_id, type FROM mail_events WHERE contact_id = ? AND campaign_id IS NOT NULL AND type IN ('unsubscribed', 'resubscribed')")
+    .all(contact.id);
+  contact.letters = db
+    .prepare(
+      `SELECT s.campaign_id, s.status, s.sent_at, s.error, c.title, c.subject, c.started_at
+         FROM mail_sends s JOIN mail_campaigns c ON c.id = s.campaign_id
+        WHERE s.contact_id = ?
+        ORDER BY COALESCE(s.sent_at, c.started_at) DESC LIMIT 50`
+    )
+    .all(contact.id)
+    .map((s) => ({
+      campaignId: s.campaign_id,
+      title: s.title,
+      subject: s.subject,
+      status: s.status,
+      at: s.sent_at || s.started_at,
+      error: s.error,
+      unsubscribedHere: events.some((e) => e.campaign_id === s.campaign_id && e.type === 'unsubscribed'),
+    }));
   return contact;
 }
 

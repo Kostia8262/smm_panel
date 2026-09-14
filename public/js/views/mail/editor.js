@@ -14,7 +14,7 @@
 import { api } from '../../api.js';
 import { el, button, iconButton, panel, skeleton, toast, note, humanBytes } from '../../ui.js';
 import { icon } from '../../icons.js';
-import { num, day, plural, field, input, select, chip, ask, backLink, CAMPAIGN_TAG, ADDRESSES } from './common.js';
+import { num, day, plural, field, input, select, chip, ask, backLink, tile, CAMPAIGN_TAG, ADDRESSES } from './common.js';
 
 const BLOCKS = {
   hero: { title: 'Главная картинка', hint: 'Рисуйте 1200 × 600 px, JPEG или PNG. В письме займёт 600 × 300 — во всю ширину под шапкой.' },
@@ -113,9 +113,11 @@ export function editorView(ctx, id) {
   const senderHint = el('span', 'field__hint');
   const fromNameInput = input('');
   const sendsHost = el('div', 'mail-slot');
+  const reportHost = el('div', 'mail-slot');
+  let reportRequested = false;
 
   ctx.setTopbar({ title: 'Рассылка', subtitle: 'Письмо' });
-  root.append(backLink('Письма', '#/mail'), stateHost, sendsHost, loading);
+  root.append(backLink('Письма', '#/mail'), stateHost, reportHost, sendsHost, loading);
 
   window.addEventListener('hashchange', onLeave);
   window.addEventListener('beforeunload', onUnload);
@@ -304,6 +306,12 @@ export function editorView(ctx, id) {
     if (openAsk) box.append(openAsk);
     stateHost.append(box);
     schedulePoll();
+    // Отчёт — один раз при открытии: он ходит за заявками в админку школы, и
+    // дёргать её каждые десять секунд незачем. Обновляется кнопкой.
+    if (campaign.progress && !reportRequested) {
+      reportRequested = true;
+      loadReport();
+    }
 
     renderChecks();
     renderAudience();
@@ -414,6 +422,20 @@ export function editorView(ctx, id) {
       box.append(actions);
     } else {
       box.append(el('div', 'mail-sub', `${status === 'done' ? 'Завершена' : 'Отменена'} ${whenText(campaign.finishedAt)}`));
+    }
+    if (isOwner && progress?.unknown && ['sending', 'paused', 'done'].includes(status)) {
+      const retry = button(`Повторить неизвестные (${num(progress.unknown)})`, {
+        variant: 'quiet',
+        iconName: 'refresh',
+        onClick: () => {
+          const sure = confirm(
+            `Отправить заново ${plural(progress.unknown, ['письмо', 'письма', 'писем'])} с неизвестной судьбой?\n\nGoogle не ответил на их отправку, но часть из них, скорее всего, уже дошла — эти люди получат письмо дважды. Повторяйте, только если сбой был явно до отправки (например, пропал интернет у сервера).`
+          );
+          if (sure) run(() => api.retryUnknownMail(campaign.id), 'Письма с неизвестной судьбой снова в очереди');
+        },
+      });
+      retry.classList.add('btn--sm', 'mail-delivery__toggle');
+      box.append(retry);
     }
     if (isOwner && progress) {
       const toggle = button(sendsOpen ? 'Скрыть адреса' : 'Кому ушло — поимённо', {
@@ -540,6 +562,84 @@ export function editorView(ctx, id) {
       box.append(pager);
     }
     sendsHost.append(box);
+  }
+
+  /* ------------------------------ результаты ------------------------------ */
+
+  async function loadReport() {
+    let data;
+    try {
+      data = await api.mailCampaignReport(campaign.id);
+    } catch (err) {
+      toast(err.message, 'danger');
+      return;
+    }
+    if (!root.isConnected) return;
+    reportHost.textContent = '';
+    const box = panel(null);
+    box.classList.add('mail-report');
+    const head = el('div', 'panel__head');
+    const refresh = button('Обновить', { variant: 'quiet', iconName: 'refresh', onClick: () => loadReport() });
+    refresh.classList.add('btn--sm');
+    head.append(el('h2', null, 'Результаты'), el('span', 'spacer'), refresh);
+    box.append(head);
+
+    const p = data.progress;
+    const funnel = el('div', 'jsum mail-funnel');
+    funnel.append(
+      tile('Ушло', num(p.sent), `из ${num(p.total)} в снимке${p.failed ? ` · не ушло ${num(p.failed)}` : ''}`, ''),
+      tile('Переходы', num(data.clicks), data.clickRate === null ? 'писем ещё не ушло' : `${num(data.clickRate)} % от ушедших`, data.clicks ? 'ok' : ''),
+      tile('Заявки', data.leads ? num(data.leads.count) : '—', data.leads ? `по метке ${data.tag}` : data.leadsError || 'ещё не считали', data.leads?.count ? 'gold' : ''),
+      tile('Отписались', num(data.unsubscribed), data.unsubscribeRate === null ? 'по этому письму' : `${num(data.unsubscribeRate)} % от ушедших${data.resubscribed ? ` · вернулись ${num(data.resubscribed)}` : ''}`, data.unsubscribed ? 'warn' : '')
+    );
+    box.append(funnel);
+
+    if (data.links.length) {
+      const table = el('table', 'table mail-table');
+      const hr = el('tr');
+      hr.append(el('th', null, 'Ссылка в письме'), el('th', 'mail-num', 'Переходов'));
+      const thead = el('thead');
+      thead.append(hr);
+      const tbody = el('tbody');
+      for (const link of data.links) {
+        const tr = el('tr');
+        const cell = el('td', 'mail-name-cell');
+        cell.append(el('div', 'mail-name', link.label), el('div', 'mail-sub', link.url.replace(/^https?:\/\//, '')));
+        tr.append(cell, el('td', 'mail-num num', num(link.clicks)));
+        tbody.append(tr);
+      }
+      table.append(thead, tbody);
+      const wrap = el('div', 'scroll-x');
+      wrap.append(table);
+      box.append(wrap);
+    }
+
+    if (data.leads?.items?.length) {
+      box.append(el('div', 'eyebrow', 'Заявки по письму'));
+      const list = el('div', 'mail-members');
+      for (const lead of data.leads.items) {
+        const item = el('div', 'mail-member');
+        item.append(el('span', 'mail-name', lead.name || 'без имени'), el('span', 'dim small', [lead.source, lead.status, lead.createdAt ? day(lead.createdAt) : ''].filter(Boolean).join(' · ')));
+        list.append(item);
+      }
+      box.append(list);
+    }
+
+    if (data.failures.length) {
+      box.append(el('div', 'eyebrow', 'Почему не ушло'));
+      const ul = el('ul', 'mail-issues__list');
+      for (const f of data.failures) ul.append(el('li', null, `${f.reason} — ${num(f.n)}`));
+      box.append(ul);
+    }
+
+    box.append(
+      el(
+        'p',
+        'field__hint',
+        'Открытий нет намеренно: пиксель слежения — признак рекламной рассылки для фильтров, а Gmail всё равно грузит картинки через свой прокси. Переходы считаются без роботов, но проверка ссылок почтовым фильтром может выглядеть как человек. Заявка привязывается к письму, если человек пришёл на сайт по ссылке из него.'
+      )
+    );
+    reportHost.append(box);
   }
 
   function pickSends(status) {
@@ -763,6 +863,7 @@ export function editorView(ctx, id) {
     if (a.unsubscribed) parts.push(`отписались ${num(a.unsubscribed)}`);
     if (a.undeliverable) parts.push(`не доставить ${num(a.undeliverable)}`);
     if (a.excluded) parts.push(`исключено ${num(a.excluded)}`);
+    if (a.recent) parts.push(`получали письмо меньше ${a.gapDays} дн. назад ${num(a.recent)}`);
     audienceHost.append(value, el('span', 'mail-sub', parts.length ? `${parts.join(' · ')} — им письма не будет` : 'человек в нескольких базах получит одно письмо'));
   }
 
