@@ -18,6 +18,7 @@ import { planView } from './views/plan.js';
 import { trendsView } from './views/trends.js';
 import { projectsView } from './views/projects.js';
 import { mailView } from './views/mail/index.js';
+import { botView } from './views/bot/index.js';
 
 // Карта прав — зеркало ACCESS из src/staff.js. Держать в согласии: в школьной
 // панели такая же карта разъехалась, когда жила в трёх местах сразу.
@@ -26,6 +27,7 @@ const NAV = [
   { id: 'plan', hash: '#/plan', title: 'Контент-план', icon: 'layers', group: 'Работа', area: 'plan' },
   { id: 'trends', hash: '#/trends', title: 'Тренды', icon: 'trend', group: 'Работа', area: 'trends' },
   { id: 'mail', hash: '#/mail', title: 'Рассылка', icon: 'mail', group: 'Работа', area: 'mail' },
+  { id: 'bot', hash: '#/bot', title: 'Бот', icon: 'chat', group: 'Работа', area: 'bot' },
   { id: 'projects', hash: '#/projects', title: 'Интеграции', icon: 'plug', group: 'Доступ', area: 'platforms' },
   { id: 'staff', hash: '#/staff', title: 'Сотрудники', icon: 'staff', group: 'Доступ', area: 'staff' },
   { id: 'journal', hash: '#/journal', title: 'Журнал', icon: 'journal', group: 'Служебное', area: 'journal' },
@@ -44,6 +46,8 @@ const ACCESS = {
   mail: ['owner', 'smm'],
   mail_contacts: ['owner'],
   mail_senders: ['owner'],
+  bot: ['owner', 'smm'],
+  bot_settings: ['owner'],
 };
 
 function can(area) {
@@ -315,6 +319,7 @@ function route() {
       : hash.startsWith('#/plan') ? 'plan'
       : hash.startsWith('#/trends') ? 'trends'
       : hash.startsWith('#/mail') ? 'mail'
+      : hash.startsWith('#/bot') ? 'bot'
       : hash.startsWith('#/projects') || hash.startsWith('#/platforms') ? 'platforms'
       : hash.startsWith('#/staff') ? 'staff'
       : hash.startsWith('#/journal') ? 'journal'
@@ -330,6 +335,7 @@ function route() {
     else if (hash.startsWith('#/plan')) dom.outlet.append(planView(ctx));
     else if (hash.startsWith('#/trends')) dom.outlet.append(trendsView(ctx));
     else if (hash.startsWith('#/mail')) dom.outlet.append(mailView(ctx));
+    else if (hash.startsWith('#/bot')) dom.outlet.append(botView(ctx));
     else if (hash.startsWith('#/projects')) dom.outlet.append(projectsView(ctx));
     else if (hash.startsWith('#/platforms')) dom.outlet.append(platformsView(ctx));
     else if (hash.startsWith('#/staff')) dom.outlet.append(staffView(ctx));

@@ -2512,3 +2512,58 @@ a.btn { text-decoration: none; }
   .mail-image { flex-direction: column; }
   .mail-image__thumb { width: 100%; max-width: 100%; }
 }
+
+/* --------------------------------- бот --------------------------------- */
+/* Экран базы знаний: проверка вопроса сверху, список ответов под ней.
+   Цветов вне tokens.css здесь нет — только раскладка. */
+
+.bot-try { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.bot-try__text { min-height: 56px; }
+.bot-try__tools { display: flex; flex-direction: column; gap: 6px; min-width: 190px; }
+.bot-try__result:empty { display: none; }
+.bot-try__result { display: flex; flex-direction: column; gap: 8px; }
+
+.bot-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bot-verdict__score { color: var(--ink-3); font-size: 13px; }
+
+.bot-sent__label { color: var(--ink-3); font-size: 13px; }
+.bot-sent {
+  padding: 10px 12px;
+  background: var(--gold-dim);
+  border: 1px solid var(--gold-line);
+  border-radius: 10px;
+  white-space: pre-wrap;
+}
+
+.bot-found { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bot-found__q { font-weight: 600; }
+
+.bot-cands { display: flex; flex-direction: column; gap: 2px; }
+.bot-cands__title, .bot-cands__row { color: var(--ink-3); font-size: 13px; }
+
+.bot-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bot-tools .chips { max-width: 100%; overflow-x: auto; }
+.bot-tools .chip { white-space: nowrap; }
+
+.bot-form__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.bot-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.bot-table.table td { vertical-align: top; }
+.bot-q { font-weight: 600; }
+.bot-a {
+  margin-top: 2px;
+  color: var(--ink-3);
+  font-size: 13px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.bot-row--off .bot-q { color: var(--ink-3); text-decoration: line-through; }
+.bot-row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.bot-group td { color: var(--gold); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+@media (max-width: 760px) {
+  .bot-try { grid-template-columns: minmax(0, 1fr); }
+  .bot-try__tools { flex-direction: row; min-width: 0; }
+}

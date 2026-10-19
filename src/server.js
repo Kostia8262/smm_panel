@@ -1900,6 +1900,13 @@ mountMailRoutes(app, { requireAccess, currentProjectId, can: staffDb.can, public
 const { mountCrmAccess } = await import('./mail/crm-access.js');
 mountCrmAccess(app, { requireAccess });
 
+/* ----------------------------- бот-консультант ----------------------------- */
+
+// База знаний и подбор ответа (docs/бот.md, фаза 1). Переписка придёт
+// вебхуками фазой 2 — отдельным маршрутом вне сессии.
+const { mountBotRoutes } = await import('./bot/routes.js');
+mountBotRoutes(app, { requireAccess, currentProjectId, can: staffDb.can });
+
 /* --------------------------------- служебное --------------------------------- */
 
 /**

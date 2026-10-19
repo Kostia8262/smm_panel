@@ -1379,6 +1379,48 @@ const MIGRATIONS = [
       CREATE UNIQUE INDEX idx_mail_lists_crm_segment ON mail_lists(project_id, crm_segment) WHERE crm_segment IS NOT NULL;
     `,
   },
+  {
+    // Бот-консультант, фаза 1: база знаний и настройки (docs/бот.md).
+    // Переписки здесь ещё нет — она приходит вебхуками в фазе 2.
+    name: '033b-bot-knowledge',
+    sql: `
+      -- Запись базы знаний: вопрос клиента, ответ школы и то, как этот вопрос
+      -- звучит в жизни. Подбор держится на triggers, остальное — для порядка.
+      CREATE TABLE bot_knowledge (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        topic        TEXT NOT NULL DEFAULT '',
+        question     TEXT NOT NULL,
+        answer       TEXT NOT NULL,
+        triggers     TEXT NOT NULL DEFAULT '',
+        lang         TEXT NOT NULL DEFAULT 'any',
+        channel      TEXT NOT NULL DEFAULT 'any',
+        priority     INTEGER NOT NULL DEFAULT 0,
+        active       INTEGER NOT NULL DEFAULT 1,
+        hits         INTEGER NOT NULL DEFAULT 0,
+        last_used_at TEXT,
+        -- Удаление записи — пометка: выброшенный ответ иногда нужен обратно,
+        -- а в журнале на него ссылаются отправленные сообщения.
+        archived_at  TEXT,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX idx_bot_knowledge_project ON bot_knowledge(project_id, active, archived_at);
+
+      -- Настройки на проект: у академии и школы дизайна свои ответы, хотя
+      -- Instagram у них пока один общий.
+      CREATE TABLE bot_settings (
+        project_id    INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        enabled       INTEGER NOT NULL DEFAULT 0,
+        auto_reply    INTEGER NOT NULL DEFAULT 1,
+        channels      TEXT NOT NULL DEFAULT '[\"direct\",\"messenger\",\"comments\"]',
+        fallback_text TEXT NOT NULL DEFAULT '',
+        stop_extra    TEXT NOT NULL DEFAULT '',
+        updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `,
+  },
 ];
 
 function migrate() {

@@ -337,6 +337,17 @@ export const api = {
   applyMailBounces: (ids) => request(withProject('/api/mail/bounces/apply'), { method: 'POST', body: { ids } }),
   mailSettings: () => request(withProject('/api/mail/settings')),
   saveMailSettings: (body) => request(withProject('/api/mail/settings'), { method: 'PUT', body }),
+
+  /* Бот-консультант: база знаний и проверка подбора (docs/бот.md, фаза 1). */
+  botSpecs: () => request('/api/bot/specs'),
+  botKnowledge: (params = {}) => request(withProject(`/api/bot/knowledge?${new URLSearchParams(params)}`)),
+  createBotEntry: (body) => request(withProject('/api/bot/knowledge'), { method: 'POST', body }),
+  updateBotEntry: (id, body) => request(`/api/bot/knowledge/${id}`, { method: 'PUT', body }),
+  archiveBotEntry: (id, archived = true) =>
+    request(`/api/bot/knowledge/${id}/archive`, { method: 'POST', body: { archived } }),
+  tryBot: (text, channel = 'direct') => request(withProject('/api/bot/try'), { method: 'POST', body: { text, channel } }),
+  botSettings: () => request(withProject('/api/bot/settings')),
+  saveBotSettings: (body) => request(withProject('/api/bot/settings'), { method: 'PUT', body }),
 };
 
 export { ApiError };
