@@ -172,6 +172,7 @@ export function knowledgeView(ctx, { tabs } = {}) {
     const head = el('div', 'bot-verdict');
     head.append(el('span', `tag ${look.tag}`, look.title));
     if (res.entry) head.append(el('span', 'bot-verdict__score', `счёт ${res.score} · ${res.why}`));
+    else if (res.stop) head.append(el('span', 'bot-verdict__score', `${res.why} · сработало слово «${res.stop.trigger}»`));
     else head.append(el('span', 'bot-verdict__score', res.why));
     if (res.lang) head.append(el('span', 'tag', res.lang === 'uk' ? 'Вопрос украинский' : 'Вопрос русский'));
     hostNode.append(head);
@@ -262,8 +263,10 @@ export function knowledgeView(ctx, { tabs } = {}) {
       form.append(
         el(
           'p',
-          'field__hint',
-          'Поля заполнены из блока материалов. Ответ клиенту должен быть коротким: оставьте главное, остальное человек расскажет сам.'
+          seed.shortened ? 'field__hint field__hint--warn' : 'field__hint',
+          seed.shortened
+            ? 'Блок длиннее, чем помещается в сообщение, — текст обрезан по границе предложения. Проверьте, что ответ остался законченным.'
+            : 'Поля заполнены из блока материалов. Ответ клиенту должен быть коротким: оставьте главное, остальное человек расскажет сам.'
         )
       );
     }
@@ -304,9 +307,13 @@ export function knowledgeView(ctx, { tabs } = {}) {
             priority: Number(fields.priority.value) || 0,
           };
           try {
-            if (entry) await api.updateBotEntry(entry.id, body);
-            else await api.createBotEntry(body);
+            const saved = entry ? await api.updateBotEntry(entry.id, body) : await api.createBotEntry(body);
             toast(entry ? 'Ответ сохранён' : 'Ответ добавлен', 'ok');
+            // Зацепка из одного общего слова цепляет всё подряд, поэтому её
+            // счёт опущен до черновика. Сказать об этом надо словами.
+            for (const weak of saved.weak || []) {
+              toast(`Зацепка «${weak}» сводится к одному общему слову — бот ответит ею только черновиком`, 'danger');
+            }
             editing = null;
             draft = null;
             await load();
@@ -427,17 +434,20 @@ export function knowledgeView(ctx, { tabs } = {}) {
     const all = el('button', 'chip', 'Все рубрики');
     all.type = 'button';
     if (!filter.topic) all.setAttribute('aria-pressed', 'true');
+    // Пустая рубрика раньше совпадала по значению с «всеми», и подсвечены
+    // были обе разом.
     all.addEventListener('click', () => {
       filter = { ...filter, topic: '' };
       load();
     });
     chips.append(all);
     for (const t of data.topics) {
+      const value = t.topic || '__none__';
       const chip = el('button', 'chip', `${t.topic || 'без рубрики'} · ${t.total}`);
       chip.type = 'button';
-      if (filter.topic === t.topic) chip.setAttribute('aria-pressed', 'true');
+      if (filter.topic === value) chip.setAttribute('aria-pressed', 'true');
       chip.addEventListener('click', () => {
-        filter = { ...filter, topic: t.topic };
+        filter = { ...filter, topic: value };
         load();
       });
       chips.append(chip);

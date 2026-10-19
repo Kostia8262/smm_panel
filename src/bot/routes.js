@@ -11,7 +11,7 @@
  */
 
 import express from 'express';
-import { log } from '../db.js';
+import { db, log } from '../db.js';
 import { CHANNELS, CHANNEL_LIST, DECISION, LANGS, LIMITS, SCORE, STOP_TOPICS, TOPIC_HINTS } from './specs.js';
 import * as knowledge from './knowledge.js';
 import * as materials from './materials.js';
@@ -67,6 +67,7 @@ export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
     res.json({
       entries: knowledge.list(projectId, {
         archived: req.query.archived === '1',
+        // `__none__` — записи без рубрики; пустая строка значит «все».
         topic: req.query.topic || '',
         search: req.query.search || '',
       }),
@@ -78,16 +79,20 @@ export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
 
   router.post('/knowledge', view, handle(async (req, res) => {
     const projectId = currentProjectId(req);
-    res.json({ entry: knowledge.create(projectId, req.body || {}) });
+    const entry = knowledge.create(projectId, req.body || {});
+    res.json({ entry, weak: knowledge.weakTriggers(entry) });
   }));
 
   router.put('/knowledge/:id', view, handle(async (req, res) => {
-    res.json({ entry: knowledge.update(Number(req.params.id), req.body || {}) });
+    // Проект обязателен: без него правка по id из открытой «Школы дизайну»
+    // подменяла ответ академии (проверка 19.10).
+    const entry = knowledge.update(Number(req.params.id), req.body || {}, currentProjectId(req));
+    res.json({ entry, weak: knowledge.weakTriggers(entry) });
   }));
 
   // «Удалить» здесь — в архив: настоящего DELETE у базы знаний нет.
   router.post('/knowledge/:id/archive', view, handle(async (req, res) => {
-    res.json({ entry: knowledge.setArchived(Number(req.params.id), req.body?.archived !== false) });
+    res.json({ entry: knowledge.setArchived(Number(req.params.id), req.body?.archived !== false, currentProjectId(req)) });
   }));
 
   /**
@@ -131,16 +136,16 @@ export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
   }));
 
   router.put('/materials/:id', view, handle(async (req, res) => {
-    res.json({ material: materials.update(Number(req.params.id), req.body || {}) });
+    res.json({ material: materials.update(Number(req.params.id), req.body || {}, currentProjectId(req)) });
   }));
 
   router.post('/materials/:id/archive', view, handle(async (req, res) => {
-    res.json({ material: materials.setArchived(Number(req.params.id), req.body?.archived !== false) });
+    res.json({ material: materials.setArchived(Number(req.params.id), req.body?.archived !== false, currentProjectId(req)) });
   }));
 
   /** Заготовка ответа из блока: поля подставлены, решение — за человеком. */
   router.get('/materials/:id/answer', view, handle(async (req, res) => {
-    res.json({ draft: materials.toAnswer(Number(req.params.id)) });
+    res.json({ draft: materials.toAnswer(Number(req.params.id), currentProjectId(req)) });
   }));
 
   /**
@@ -157,14 +162,36 @@ export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
   }));
 
   /** Завести ответы из вопросов, собранных с сайта. */
+  /**
+   * Завести ответы из вопросов, собранных с сайта.
+   *
+   * Две вещи, которых не хватало (проверка 19.10): повторный запрос заводил
+   * те же вопросы второй раз, а пачка с одной негодной записью записывалась
+   * наполовину и отдавала отказ — владелец видел 422 и не знал, что часть
+   * уже в базе. Теперь дубли отсеиваются, а запись идёт целиком или никак.
+   */
   router.post('/materials/answers', view, handle(async (req, res) => {
     const projectId = currentProjectId(req);
     const wanted = Array.isArray(req.body?.answers) ? req.body.answers : [];
-    const created = [];
-    for (const a of wanted) {
-      created.push(knowledge.create(projectId, { ...a, topic: a.topic || 'часті питання' }));
+    const fresh = materials.pendingAnswers(projectId, wanted);
+    const skipped = wanted.length - fresh.length;
+    if (!fresh.length) return res.json({ created: 0, skipped });
+
+    // Встроенный node:sqlite не даёт обёртки транзакций — пишем явно, как
+    // это сделано в миграциях.
+    db.exec('BEGIN IMMEDIATE');
+    let created = 0;
+    try {
+      for (const a of fresh) {
+        knowledge.create(projectId, { ...a, topic: a.topic || 'часті питання' });
+        created += 1;
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
     }
-    res.json({ created: created.length });
+    res.json({ created, skipped });
   }));
 
   router.get('/settings', view, handle(async (req, res) => {

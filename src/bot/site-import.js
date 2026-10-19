@@ -230,7 +230,7 @@ async function get(url, { json = false } = {}) {
   try {
     res = await fetch(url, {
       headers: { 'User-Agent': 'MyComputer-SMM-Panel/1.0 (bot knowledge import)' },
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(8000), // молчащий сайт держал кнопку 30 секунд
     });
   } catch (err) {
     throw new ImportError(`Сайт не ответил (${url}): ${err.message}`, 502);
@@ -272,7 +272,14 @@ export async function collectFromSite(siteUrl) {
     notes.push(`без главной: ${err.message}`);
   }
 
-  if (!materials.length) throw new ImportError(`С ${base} собирать нечего — проверьте адрес`, 502);
+  /*
+   * Причина отказа раньше терялась: и молчащий сайт, и не-JSON, и 500 давали
+   * одно «проверьте адрес», хотя адрес был верным (проверка 19.10). Причины
+   * собраны в notes — отдаём их владельцу.
+   */
+  if (!materials.length) {
+    throw new ImportError(`С ${base} собрать не вышло. ${notes.join('; ')}`, 502);
+  }
 
   // Источник у всех блоков один, если курс не дал своей ссылки.
   materials = materials.map((m) => ({ ...m, sourceUrl: m.sourceUrl || base, origin: 'site' }));

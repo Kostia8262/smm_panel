@@ -28,10 +28,19 @@ export function hasPhrase(flatText, phrase) {
   if (!needle) return false;
   if (needle.includes(' ')) {
     if (flatText.includes(needle)) return true;
-    // Слова фразы могут стоять врозь: «хто у вас викладач» — это «хто
-    // викладач» с вставкой. Поэтому проверяем ещё и наличие всех слов.
-    const words = needle.split(' ').filter(Boolean);
-    return words.length > 1 && words.every((w) => hasPhrase(flatText, w));
+    /*
+     * Слова фразы могут стоять врозь: «куди мені переказати» — это «куди
+     * переказати» со вставкой. Но считать по всем словам подряд нельзя:
+     * предлог «на» есть в каждом втором сообщении, и фраза «на карті»
+     * срабатывала на «скиньте картинки» (проверка 19.10).
+     *
+     * Поэтому смотрим только на значащие слова — служебные отбрасывает
+     * `tokens()` — и требуем, чтобы их было не меньше двух. Фраза, которая
+     * сводится к одному значащему слову, ищется только подстрокой.
+     */
+    const meaningful = needle.split(' ').filter((w) => w.length >= 4 && tokens(w).length);
+    if (meaningful.length < 2) return false;
+    return meaningful.every((w) => hasPhrase(flatText, w));
   }
   const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const tail = needle.length < 5 ? '(?![\\p{L}\\p{N}])' : '[\\p{L}\\p{N}]*';
@@ -112,9 +121,18 @@ export function scoreEntry(entry, { flatText, messageTokens, lang }) {
     }
     const tTok = tokens(trigger);
     if (!tTok.length) continue;
-    // Зацепка из одного слова — это ключевое слово, а не формулировка:
-    // оставляем ей чуть меньше веса, чтобы фраза выигрывала у слова.
-    const score = coverage(tTok, messageTokens) * (tTok.length === 1 ? 0.9 : 1);
+    /*
+     * Зацепка, сводящаяся к ОДНОМУ значащему слову, — это ключевое слово, а
+     * не формулировка вопроса. Раньше она весила 0.9, то есть выше порога
+     * «отвечаю сам», и запись с зацепкой «коли заняття» отвечала на «курс
+     * валют який у вас» и «ваші заняття нудні» (10 попаданий из 10 на
+     * проверке 19.10). Решение владельца: такой подбор уходит человеку
+     * черновиком, а не клиенту ответом.
+     *
+     * Точная зацепка целиком (ветка выше) это не затрагивает: «ціна» в
+     * сообщении «ціна?» по-прежнему даёт единицу.
+     */
+    const score = coverage(tTok, messageTokens) * (tTok.length === 1 ? SCORE.ONE_WORD : 1);
     if (score > best) {
       best = score;
       why = `слова зацепки «${trigger}»`;

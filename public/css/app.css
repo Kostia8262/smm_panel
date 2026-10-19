@@ -2609,3 +2609,20 @@ a.btn { text-decoration: none; }
 .bot-offer__list { display: flex; flex-direction: column; gap: 2px; }
 .bot-offer__row { color: var(--ink-3); font-size: 13px; }
 .bot-cands__link { color: var(--gold); font-size: 13px; }
+
+/* Правки после прогона тестировщика 19.10: длинное слово без пробелов
+   растягивало таблицу ответов до 7069 px и уносило кнопки за экран. */
+.bot-q, .bot-a { overflow-wrap: anywhere; word-break: break-word; }
+.bot-table td:first-child { max-width: 520px; }
+/* Превью ответа в две строки. `-webkit-box` в ячейке таблицы браузер
+   переводит в flow-root, и `-webkit-line-clamp` не срабатывает вовсе
+   (замер 19.10: computed display = flow-root). Ограничиваем высотой —
+   это работает в любом движке. */
+.bot-a {
+  max-height: calc(1.45em * 2);
+  overflow: hidden;
+}
+/* На телефоне шапка панели не умещала кнопки и давала прокрутку страницы. */
+@media (max-width: 760px) {
+  .view .panel__head { flex-wrap: wrap; }
+}

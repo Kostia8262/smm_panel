@@ -14,6 +14,7 @@
 
 import { db, log } from '../db.js';
 import { flat, tokens } from './normalize.js';
+import { LIMITS } from './specs.js';
 import { SITE_BY_SLUG, collectFromSite } from './site-import.js';
 import * as knowledge from './knowledge.js';
 
@@ -67,9 +68,13 @@ export function list(projectId, { archived = false, section = '', search = '' } 
     .map(fromRow);
 }
 
-export function get(id) {
+export function get(id, projectId = null) {
   const row = db.prepare('SELECT * FROM bot_materials WHERE id = ?').get(id);
-  return row ? fromRow(row) : null;
+  if (!row) return null;
+  // Блок чужого проекта для текущего не существует — см. тот же разбор в
+  // knowledge.js: материал «Школы дизайну» читался из академии по id.
+  if (projectId !== null && row.project_id !== projectId) return null;
+  return fromRow(row);
 }
 
 export function sections(projectId) {
@@ -108,8 +113,8 @@ export function create(projectId, data) {
   return get(Number(info.lastInsertRowid));
 }
 
-export function update(id, data) {
-  const current = get(id);
+export function update(id, data, projectId = null) {
+  const current = get(id, projectId);
   if (!current) throw new BotError('Блок не найден', 404);
   const v = clean(data, current);
   db.prepare(
@@ -119,8 +124,8 @@ export function update(id, data) {
   return get(id);
 }
 
-export function setArchived(id, archived) {
-  const current = get(id);
+export function setArchived(id, archived, projectId = null) {
+  const current = get(id, projectId);
   if (!current) throw new BotError('Блок не найден', 404);
   db.prepare('UPDATE bot_materials SET archived_at = ?, updated_at = ? WHERE id = ?').run(
     archived ? nowIso() : null,
@@ -145,7 +150,18 @@ export function siteUrlFor(project, settingsRow) {
  * правки раздела и позиции. Чужого — написанного владельцем — сбор не
  * касается вовсе.
  */
-export function applyCollected(projectId, collected) {
+/** Ключ блока вместе с хостом источника. */
+function keyWithHost(sourceKey, site) {
+  let host = '';
+  try {
+    host = new URL(site).host;
+  } catch {
+    host = String(site || '').replace(/^https?:\/\//, '').split('/')[0];
+  }
+  return host ? `${host}|${sourceKey}` : sourceKey;
+}
+
+export function applyCollected(projectId, collected, site = '') {
   const existing = db
     .prepare('SELECT * FROM bot_materials WHERE project_id = ? AND source_key IS NOT NULL')
     .all(projectId);
@@ -164,9 +180,12 @@ export function applyCollected(projectId, collected) {
   );
 
   for (const [i, m] of collected.materials.entries()) {
-    const row = byKey.get(m.sourceKey);
+    const key = site ? keyWithHost(m.sourceKey, site) : m.sourceKey;
+    // Блоки, собранные до появления хоста в ключе, узнаются по старому ключу —
+    // иначе первый же сбор после обновления завёл бы их заново.
+    const row = byKey.get(key) || byKey.get(m.sourceKey);
     if (!row) {
-      insert.run(projectId, m.section, m.title, m.body, m.sourceUrl || null, m.sourceKey, i);
+      insert.run(projectId, m.section, m.title, m.body, m.sourceUrl || null, key, i);
       added += 1;
       continue;
     }
@@ -199,7 +218,7 @@ export async function collect(project, settings) {
   const site = siteUrlFor(project, settings);
   if (!site) throw new BotError('Не знаю, с какого сайта собирать — впишите адрес в настройках бота');
   const collected = await collectFromSite(site);
-  const stats = applyCollected(project.id, collected);
+  const stats = applyCollected(project.id, collected, site);
   return { site, stats, notes: collected.notes, answers: pendingAnswers(project.id, collected.answers) };
 }
 
@@ -240,14 +259,31 @@ export function relevant(projectId, text, limit = 3) {
 }
 
 /** Сделать из блока ответ бота: текст и зацепки подставляются, править — владельцу. */
-export function toAnswer(id) {
-  const m = get(id);
+export function toAnswer(id, projectId = null) {
+  const m = get(id, projectId);
   if (!m) throw new BotError('Блок не найден', 404);
+  /*
+   * Блок бывает длиннее предела ответа, и тогда заготовка вела в тупик:
+   * сохранение отбивалось 422 «разделите на две записи», а делить было нечем
+   * (проверка 19.10). Режем по границе предложения и честно говорим об этом —
+   * сокращать текст до живого ответа всё равно человеку.
+   */
+  const shortened = m.body.length > LIMITS.answerMax;
   return {
     topic: m.section === 'own' ? '' : SECTIONS[m.section]?.title || '',
     question: m.title,
-    answer: m.body,
+    answer: shortened ? cutTo(m.body, LIMITS.answerMax) : m.body,
     triggers: m.title,
     materialId: m.id,
+    shortened,
   };
+}
+
+/** Обрезка по границе предложения, иначе — по слову. */
+function cutTo(text, max) {
+  const head = text.slice(0, max);
+  const sentence = Math.max(head.lastIndexOf('. '), head.lastIndexOf('!'), head.lastIndexOf('?'), head.lastIndexOf('\n'));
+  if (sentence > max * 0.5) return head.slice(0, sentence + 1).trim();
+  const space = head.lastIndexOf(' ');
+  return (space > 0 ? head.slice(0, space) : head).trim();
 }

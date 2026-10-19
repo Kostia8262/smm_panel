@@ -11,6 +11,7 @@
 import { db, log } from '../db.js';
 import { CHANNELS, LANGS, LIMITS } from './specs.js';
 import { decide, triggerList } from './match.js';
+import { tokens } from './normalize.js';
 
 export class BotError extends Error {
   constructor(message, status = 422) {
@@ -61,13 +62,24 @@ export function saveSettings(projectId, patch = {}) {
   const next = {
     enabled: patch.enabled === undefined ? current.enabled : Boolean(patch.enabled),
     autoReply: patch.autoReply === undefined ? current.autoReply : Boolean(patch.autoReply),
-    channels: patch.channels === undefined ? current.channels : [...new Set(patch.channels)].filter((c) => CHANNELS[c]),
+    channels: patch.channels === undefined ? current.channels : [...new Set(patch.channels || [])],
     fallbackText: patch.fallbackText === undefined ? current.fallbackText : String(patch.fallbackText).trim(),
     stopExtra: patch.stopExtra === undefined ? current.stopExtra : String(patch.stopExtra).trim(),
     siteUrl: patch.siteUrl === undefined ? current.siteUrl : String(patch.siteUrl).trim(),
   };
   if (next.siteUrl && !/^https?:\/\//.test(next.siteUrl)) {
     throw new BotError('Адрес сайта — вместе с https://, иначе сбор материалов не поймёт, куда идти');
+  }
+  /*
+   * Неизвестный канал раньше молча отбрасывался, и `channels: ["telegram"]`
+   * сохранялся как пустой список: бот оставался включённым, не работая нигде
+   * (проверка 19.10).
+   */
+  const badChannel = next.channels.find((c) => !CHANNELS[c]);
+  if (badChannel) throw new BotError(`Канала «${badChannel}» у бота нет`);
+  if (!next.channels.length) throw new BotError('Выберите хотя бы один канал — иначе бот включён, но молчит везде');
+  if (next.stopExtra.length > LIMITS.stopExtraMax) {
+    throw new BotError(`Своих стоп-слов больше ${LIMITS.stopExtraMax} символов — каждое сообщение будет проверяться заметно дольше`);
   }
   if (next.fallbackText.length > LIMITS.answerMax) {
     throw new BotError(`Ответ «не знаю» длиннее ${LIMITS.answerMax} символов — в переписке столько не читают`);
@@ -123,7 +135,7 @@ export function list(projectId, { archived = false, topic = '', search = '' } = 
     .all(projectId);
   const needle = String(search || '').trim().toLowerCase();
   return rows
-    .filter((r) => !topic || r.topic === topic)
+    .filter((r) => (topic === '__none__' ? !r.topic : !topic || r.topic === topic))
     .filter((r) =>
       !needle ||
       `${r.question} ${r.answer} ${r.triggers} ${r.topic}`.toLowerCase().includes(needle)
@@ -139,9 +151,13 @@ export function liveEntries(projectId) {
     .map(fromRow);
 }
 
-export function get(id) {
+export function get(id, projectId = null) {
   const row = db.prepare('SELECT * FROM bot_knowledge WHERE id = ?').get(id);
-  return row ? fromRow(row) : null;
+  if (!row) return null;
+  // Запись чужого проекта для текущего не существует: иначе правка по id из
+  // открытой «Школы дизайну» подменяла ответ академии (проверка 19.10).
+  if (projectId !== null && row.project_id !== projectId) return null;
+  return fromRow(row);
 }
 
 /** Рубрики со счётчиками — левая колонка списка. */
@@ -188,6 +204,10 @@ function clean(data, current = {}) {
   }
   const tooLong = triggers.find((t) => t.length > LIMITS.triggerMax);
   if (tooLong) throw new BotError(`Зацепка «${tooLong.slice(0, 30)}…» слишком длинная: это уже не формулировка, а текст`);
+  // Зацепка «а» получала счёт 1 и перехватывала «привіт, а ви працюєте?»,
+  // а «???» и «😀» считались зацепками, не срабатывая никогда.
+  const tooShort = triggers.find((t) => t.replace(/[^\p{L}\p{N}]+/gu, '').length < 2);
+  if (tooShort) throw new BotError(`Зацепка «${tooShort}» ничего не значит: нужны минимум две буквы`);
 
   return out;
 }
@@ -204,8 +224,8 @@ export function create(projectId, data) {
   return get(Number(info.lastInsertRowid));
 }
 
-export function update(id, data) {
-  const current = get(id);
+export function update(id, data, projectId = null) {
+  const current = get(id, projectId);
   if (!current) throw new BotError('Запись не найдена', 404);
   const v = clean(data, current);
   db.prepare(
@@ -217,8 +237,8 @@ export function update(id, data) {
 }
 
 /** «Удалить» — в архив; оттуда можно вернуть. Настоящего DELETE здесь нет. */
-export function setArchived(id, archived) {
-  const current = get(id);
+export function setArchived(id, archived, projectId = null) {
+  const current = get(id, projectId);
   if (!current) throw new BotError('Запись не найдена', 404);
   db.prepare('UPDATE bot_knowledge SET archived_at = ?, updated_at = ? WHERE id = ?').run(
     archived ? nowIso() : null,
@@ -232,6 +252,20 @@ export function setArchived(id, archived) {
 /** Отметка использования: показывает, чем бот живёт, а что лежит мёртвым. */
 export function bump(id) {
   db.prepare('UPDATE bot_knowledge SET hits = hits + 1, last_used_at = ? WHERE id = ?').run(nowIso(), id);
+}
+
+/**
+ * Зацепки, которые сводятся к одному значащему слову.
+ *
+ * Такая зацепка цепляет всё, где это слово встретилось: «коли заняття» — это
+ * просто «заняття», и запись отвечала на «курс валют який у вас». Счёт у неё
+ * опущен до черновика, но владельцу нужно сказать словами, что он написал.
+ */
+export function weakTriggers(entry) {
+  return triggerList(entry).filter((t) => {
+    const words = String(t).trim().split(/\s+/).filter(Boolean);
+    return tokens(t).length <= 1 && words.length > 1;
+  });
 }
 
 /**
@@ -262,8 +296,12 @@ export function tryQuestion(projectId, text, { channel = 'direct' } = {}) {
  */
 export function willSend(result, cfg) {
   if (!cfg.enabled) return null;
+  // Стоп-тема — всегда молчание.
   if (result.decision === 'stop') return null;
-  if (result.decision === 'answer') return cfg.autoReply ? result.entry.answer : null;
+  // «Только черновики» значит, что сам бот не пишет клиенту ничего: раньше
+  // текст «ответа нет в базе» уходил и в этом режиме (проверка 19.10).
+  if (!cfg.autoReply) return null;
+  if (result.decision === 'answer') return result.entry.answer;
   if (result.decision === 'draft') return null;
   return cfg.fallbackText || null;
 }
