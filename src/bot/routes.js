@@ -14,6 +14,9 @@ import express from 'express';
 import { log } from '../db.js';
 import { CHANNELS, CHANNEL_LIST, DECISION, LANGS, LIMITS, SCORE, STOP_TOPICS, TOPIC_HINTS } from './specs.js';
 import * as knowledge from './knowledge.js';
+import * as materials from './materials.js';
+import { ImportError } from './site-import.js';
+import { getProject } from '../projects.js';
 
 const { BotError } = knowledge;
 
@@ -32,7 +35,11 @@ export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
     try {
       await fn(req, res);
     } catch (err) {
-      if (err instanceof BotError) return res.status(err.status).json({ error: err.message });
+      // Сбой сбора с сайта объясняем словами: «сайт не ответил» — это не
+      // поломка панели, и владелец должен понять, что чинить.
+      if (err instanceof BotError || err instanceof ImportError) {
+        return res.status(err.status).json({ error: err.message });
+      }
       log('error', `бот: сбой на ${req.method} ${req.path}: ${err.message}`);
       res.status(500).json({ error: 'Что-то пошло не так — подробности в журнале' });
     }
@@ -48,7 +55,9 @@ export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
       score: SCORE,
       decisions: DECISION,
       topicHints: TOPIC_HINTS,
-      stopTopics: STOP_TOPICS.map((t) => ({ id: t.id, title: t.title, count: t.triggers.length })),
+      sections: materials.SECTIONS,
+      sectionList: materials.SECTION_LIST,
+      stopTopics: STOP_TOPICS.map((t) => ({ id: t.id, title: t.title, triggers: t.triggers })),
     });
   }));
 
@@ -93,7 +102,69 @@ export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
     if (!text) throw new BotError('Напишите вопрос так, как его пишет клиент');
     const channel = String(req.body?.channel || 'direct');
     if (!CHANNELS[channel]) throw new BotError('Неизвестный канал');
-    res.json(knowledge.tryQuestion(projectId, text, { channel }));
+    const result = knowledge.tryQuestion(projectId, text, { channel });
+    // Ответа нет или он неуверенный — показываем, в каких материалах искать:
+    // из них делается ответ одной кнопкой.
+    result.materials = result.decision === 'answer' ? [] : materials.relevant(projectId, text);
+    res.json(result);
+  }));
+
+  /* ------------------------------ материалы ------------------------------ */
+
+  router.get('/materials', view, handle(async (req, res) => {
+    const projectId = currentProjectId(req);
+    const cfg = knowledge.settings(projectId);
+    res.json({
+      materials: materials.list(projectId, {
+        archived: req.query.archived === '1',
+        section: req.query.section || '',
+        search: req.query.search || '',
+      }),
+      sections: materials.sections(projectId),
+      siteUrl: materials.siteUrlFor(getProject(projectId), cfg),
+      canManage: can(req.user.role, 'bot_settings'),
+    });
+  }));
+
+  router.post('/materials', view, handle(async (req, res) => {
+    res.json({ material: materials.create(currentProjectId(req), req.body || {}) });
+  }));
+
+  router.put('/materials/:id', view, handle(async (req, res) => {
+    res.json({ material: materials.update(Number(req.params.id), req.body || {}) });
+  }));
+
+  router.post('/materials/:id/archive', view, handle(async (req, res) => {
+    res.json({ material: materials.setArchived(Number(req.params.id), req.body?.archived !== false) });
+  }));
+
+  /** Заготовка ответа из блока: поля подставлены, решение — за человеком. */
+  router.get('/materials/:id/answer', view, handle(async (req, res) => {
+    res.json({ draft: materials.toAnswer(Number(req.params.id)) });
+  }));
+
+  /**
+   * Сбор с сайта школы. Ходит в сеть, поэтому отдельной кнопкой и только
+   * владельцу: это он отвечает за то, что школа говорит клиентам.
+   */
+  router.post('/materials/collect', manage, handle(async (req, res) => {
+    const projectId = currentProjectId(req);
+    const project = getProject(projectId);
+    const cfg = knowledge.settings(projectId);
+    const result = await materials.collect(project, cfg);
+    log('info', `бот: материалы собраны с ${result.site} (+${result.stats.added}, обновлено ${result.stats.updated})`);
+    res.json(result);
+  }));
+
+  /** Завести ответы из вопросов, собранных с сайта. */
+  router.post('/materials/answers', view, handle(async (req, res) => {
+    const projectId = currentProjectId(req);
+    const wanted = Array.isArray(req.body?.answers) ? req.body.answers : [];
+    const created = [];
+    for (const a of wanted) {
+      created.push(knowledge.create(projectId, { ...a, topic: a.topic || 'часті питання' }));
+    }
+    res.json({ created: created.length });
   }));
 
   router.get('/settings', view, handle(async (req, res) => {

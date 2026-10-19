@@ -1421,6 +1421,36 @@ const MIGRATIONS = [
       );
     `,
   },
+  {
+    // Материалы бота: то, на что он опирается. Собираются с сайта школы и
+    // дописываются владельцем блоками (docs/бот.md, §3a).
+    name: '034b-bot-materials',
+    sql: `
+      CREATE TABLE bot_materials (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        section     TEXT NOT NULL DEFAULT 'own',
+        title       TEXT NOT NULL,
+        body        TEXT NOT NULL DEFAULT '',
+        source_url  TEXT,
+        -- Ключ источника: по нему повторный сбор обновляет свой же блок, а не
+        -- плодит двойники. У написанного руками ключа нет вовсе.
+        source_key  TEXT,
+        origin      TEXT NOT NULL DEFAULT 'own',
+        position    INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE UNIQUE INDEX idx_bot_materials_source ON bot_materials(project_id, source_key)
+        WHERE source_key IS NOT NULL;
+      CREATE INDEX idx_bot_materials_project ON bot_materials(project_id, section, archived_at);
+
+      -- Адрес сайта школы: откуда собирать материалы.
+      ALTER TABLE bot_settings ADD COLUMN site_url TEXT;
+    `,
+  },
 ];
 
 function migrate() {

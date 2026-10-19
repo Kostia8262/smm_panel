@@ -20,12 +20,14 @@ const DECISION_LOOK = {
 const LANG_TITLE = { any: 'Любой', uk: 'Укр', ru: 'Рус' };
 const CHANNEL_TITLE = { any: 'Везде', direct: 'Direct', messenger: 'Messenger', comments: 'Комментарии' };
 
-export function knowledgeView(ctx) {
+export function knowledgeView(ctx, { tabs } = {}) {
   const box = el('div', 'view');
   let data = null;
   let specs = null;
   let editing = null; // id правимой записи или 'new'
   let filter = { archived: false, topic: '', search: '' };
+  // Заготовка, пришедшая из материалов кнопкой «Сделать ответом».
+  let draft = takeDraft();
 
   ctx.setTopbar({
     title: 'Бот-консультант',
@@ -43,8 +45,11 @@ export function knowledgeView(ctx) {
     })
   );
 
+  if (tabs) box.append(tabs);
+
   const host = el('div', 'stack');
   box.append(host);
+  if (draft) editing = 'new';
   load();
   return box;
 
@@ -217,6 +222,19 @@ export function knowledgeView(ctx) {
       );
     }
 
+    if (res.materials?.length) {
+      const box = el('div', 'bot-cands');
+      box.append(el('div', 'bot-cands__title', 'В материалах есть похожее — из этого можно сделать ответ:'));
+      for (const m of res.materials) {
+        const row = el('div', 'bot-cands__row');
+        const link = el('a', 'bot-cands__link', `${m.title} (${m.sectionTitle})`);
+        link.href = '#/bot/materials';
+        row.append(link);
+        box.append(row);
+      }
+      hostNode.append(box);
+    }
+
     if (res.candidates?.length > 1) {
       const list = el('div', 'bot-cands');
       list.append(el('div', 'bot-cands__title', 'С чем конкурировало:'));
@@ -231,14 +249,24 @@ export function knowledgeView(ctx) {
 
   function editorPanel() {
     const entry = editing === 'new' ? null : data.entries.find((e) => e.id === editing);
+    const seed = entry ? null : draft;
     if (editing !== 'new' && !entry) {
       editing = null;
       return el('div');
     }
 
-    const p = panel(entry ? 'Правка ответа' : 'Новый ответ');
+    const p = panel(entry ? 'Правка ответа' : seed ? 'Ответ из материала' : 'Новый ответ');
     const form = el('div', 'stack bot-form');
     p.append(form);
+    if (seed) {
+      form.append(
+        el(
+          'p',
+          'field__hint',
+          'Поля заполнены из блока материалов. Ответ клиенту должен быть коротким: оставьте главное, остальное человек расскажет сам.'
+        )
+      );
+    }
 
     const fields = {};
     form.append(
@@ -253,7 +281,7 @@ export function knowledgeView(ctx) {
 
     const grid = el('div', 'bot-form__grid');
     grid.append(
-      field('Рубрика', (fields.topic = input(entry?.topic || '', 'ціни')), hintTopics()),
+      field('Рубрика', (fields.topic = input(entry?.topic || seed?.topic || '', 'ціни')), hintTopics()),
       field('Язык ответа', (fields.lang = select(specs.langs, entry?.lang || 'any'))),
       field('Канал', (fields.channel = select({ any: { title: 'Везде' }, ...specs.channels }, entry?.channel || 'any'))),
       field('Приоритет', (fields.priority = numberInput(entry?.priority || 0)), 'При равном счёте выигрывает больший')
@@ -280,6 +308,7 @@ export function knowledgeView(ctx) {
             else await api.createBotEntry(body);
             toast(entry ? 'Ответ сохранён' : 'Ответ добавлен', 'ok');
             editing = null;
+            draft = null;
             await load();
           } catch (err) {
             toast(err.message, 'danger');
@@ -289,6 +318,7 @@ export function knowledgeView(ctx) {
       button('Отмена', {
         onClick: () => {
           editing = null;
+          draft = null;
           render();
         },
       })
@@ -541,6 +571,18 @@ export function knowledgeView(ctx) {
       node.append(opt);
     }
     return node;
+  }
+}
+
+/** Заготовка из материалов: читаем один раз и сразу убираем. */
+function takeDraft() {
+  if (!location.hash.includes('draft=1')) return null;
+  try {
+    const raw = sessionStorage.getItem('smm.bot.draft');
+    sessionStorage.removeItem('smm.bot.draft');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null; // приватное окно — не повод ронять экран
   }
 }
 

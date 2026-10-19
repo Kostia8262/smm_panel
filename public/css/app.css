@@ -2567,3 +2567,45 @@ a.btn { text-decoration: none; }
   .bot-try { grid-template-columns: minmax(0, 1fr); }
   .bot-try__tools { flex-direction: row; min-width: 0; }
 }
+
+/* Стоп-тема раскрывается списком слов: «30 слов» без перечня ничего не говорит. */
+.bot-stop { border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface); }
+.bot-stop__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.bot-stop__head::-webkit-details-marker { display: none; }
+.bot-stop__head::before { content: '▸'; color: var(--ink-3); }
+.bot-stop[open] .bot-stop__head::before { content: '▾'; }
+.bot-stop__title { font-weight: 600; }
+.bot-stop__count { color: var(--ink-3); font-size: 13px; margin-left: auto; }
+.bot-stop__words { margin: 0 12px 12px; }
+
+/* Вкладки раздела «Бот» и карточки материалов. */
+.bot-tabs { align-self: flex-start; }
+.bot-tabs .chip { text-decoration: none; }
+
+.bot-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+.bot-card__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bot-card__title { font-weight: 600; }
+.bot-card__spacer { flex: 1; }
+.bot-card__body { color: var(--ink-2); white-space: pre-wrap; font-size: 14px; }
+.bot-card__src { color: var(--ink-3); font-size: 12px; word-break: break-all; }
+.bot-group--plain { padding-top: 6px; }
+
+.bot-offer { padding-top: 4px; }
+.bot-offer__list { display: flex; flex-direction: column; gap: 2px; }
+.bot-offer__row { color: var(--ink-3); font-size: 13px; }
+.bot-cands__link { color: var(--gold); font-size: 13px; }

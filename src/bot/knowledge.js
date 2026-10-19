@@ -51,6 +51,7 @@ export function settings(projectId) {
     channels: Array.isArray(channels) ? channels.filter((c) => CHANNELS[c]) : SETTINGS_DEFAULTS.channels,
     fallbackText: row.fallback_text || '',
     stopExtra: row.stop_extra || '',
+    siteUrl: row.site_url || '',
     updatedAt: row.updated_at,
   };
 }
@@ -63,13 +64,17 @@ export function saveSettings(projectId, patch = {}) {
     channels: patch.channels === undefined ? current.channels : [...new Set(patch.channels)].filter((c) => CHANNELS[c]),
     fallbackText: patch.fallbackText === undefined ? current.fallbackText : String(patch.fallbackText).trim(),
     stopExtra: patch.stopExtra === undefined ? current.stopExtra : String(patch.stopExtra).trim(),
+    siteUrl: patch.siteUrl === undefined ? current.siteUrl : String(patch.siteUrl).trim(),
   };
+  if (next.siteUrl && !/^https?:\/\//.test(next.siteUrl)) {
+    throw new BotError('Адрес сайта — вместе с https://, иначе сбор материалов не поймёт, куда идти');
+  }
   if (next.fallbackText.length > LIMITS.answerMax) {
     throw new BotError(`Ответ «не знаю» длиннее ${LIMITS.answerMax} символов — в переписке столько не читают`);
   }
   db.prepare(
     `UPDATE bot_settings
-        SET enabled = ?, auto_reply = ?, channels = ?, fallback_text = ?, stop_extra = ?, updated_at = ?
+        SET enabled = ?, auto_reply = ?, channels = ?, fallback_text = ?, stop_extra = ?, site_url = ?, updated_at = ?
       WHERE project_id = ?`
   ).run(
     next.enabled ? 1 : 0,
@@ -77,6 +82,7 @@ export function saveSettings(projectId, patch = {}) {
     JSON.stringify(next.channels),
     next.fallbackText,
     next.stopExtra,
+    next.siteUrl,
     nowIso(),
     projectId
   );

@@ -129,6 +129,32 @@ export function botSettingsView(ctx) {
     );
     body.append(chans);
 
+    const site = el('div', 'field');
+    site.append(el('label', 'field__label', 'Сайт школы — откуда собирать материалы'));
+    const siteInput = el('input', 'input');
+    siteInput.value = settings.siteUrl || '';
+    siteInput.placeholder = 'https://mycomputer.education';
+    siteInput.disabled = !canManage;
+    site.append(siteInput);
+    site.append(
+      el(
+        'div',
+        'field__hint',
+        'Пусто — панель возьмёт адрес сети по названию проекта. Сбор идёт на вкладке «Материалы».'
+      )
+    );
+    if (canManage) {
+      const actions = el('div', 'bot-actions');
+      actions.append(
+        button('Сохранить адрес', {
+          iconName: 'check',
+          onClick: () => save({ siteUrl: siteInput.value }, 'Адрес сохранён'),
+        })
+      );
+      site.append(actions);
+    }
+    body.append(site);
+
     return p;
   }
 
@@ -183,13 +209,17 @@ export function botSettingsView(ctx) {
       )
     );
 
-    const list = el('div', 'chips chips--wrap');
+    body.append(
+      el(
+        'p',
+        'field__hint',
+        'Слово ловится с начала слова: «оплат» поймает «оплатити» и «оплачено». Короткое слово (меньше пяти букв) — только целиком, чтобы «чек» не срабатывал на «чекаю». Фраза из нескольких слов ловится и тогда, когда слова стоят врозь: «хто у вас викладач».'
+      )
+    );
+
     for (const t of specs.stopTopics) {
-      const chip = el('span', 'chip', `${t.title} · ${t.count}`);
-      chip.setAttribute('aria-pressed', 'true');
-      list.append(chip);
+      body.append(stopTopicBlock(t));
     }
-    body.append(list);
 
     const area = el('textarea', 'textarea');
     area.rows = 3;
@@ -211,6 +241,23 @@ export function botSettingsView(ctx) {
       body.append(actions);
     }
     return p;
+  }
+
+  /**
+   * Тема со списком слов. Раскрывается, потому что цифра «30» ничего не
+   * говорит: владельцу нужно видеть, на чём именно бот замолчит.
+   */
+  function stopTopicBlock(topic) {
+    const box = el('details', 'bot-stop');
+    const head = el('summary', 'bot-stop__head');
+    head.append(el('span', 'bot-stop__title', topic.title));
+    head.append(el('span', 'bot-stop__count', `${topic.triggers.length} ${plural(topic.triggers.length, 'слово', 'слова', 'слов')}`));
+    box.append(head);
+
+    const words = el('div', 'chips chips--wrap bot-stop__words');
+    for (const w of topic.triggers) words.append(el('span', 'chip', w));
+    box.append(words);
+    return box;
   }
 
   /* --------------------------------- мелочи --------------------------------- */
@@ -236,4 +283,12 @@ export function botSettingsView(ctx) {
     row.append(sw, text);
     return row;
   }
+}
+
+function plural(n, one, few, many) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+  return many;
 }

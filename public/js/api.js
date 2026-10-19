@@ -346,6 +346,14 @@ export const api = {
   archiveBotEntry: (id, archived = true) =>
     request(`/api/bot/knowledge/${id}/archive`, { method: 'POST', body: { archived } }),
   tryBot: (text, channel = 'direct') => request(withProject('/api/bot/try'), { method: 'POST', body: { text, channel } }),
+  botMaterials: (params = {}) => request(withProject(`/api/bot/materials?${new URLSearchParams(params)}`)),
+  createBotMaterial: (body) => request(withProject('/api/bot/materials'), { method: 'POST', body }),
+  updateBotMaterial: (id, body) => request(`/api/bot/materials/${id}`, { method: 'PUT', body }),
+  archiveBotMaterial: (id, archived = true) =>
+    request(`/api/bot/materials/${id}/archive`, { method: 'POST', body: { archived } }),
+  botMaterialAnswer: (id) => request(`/api/bot/materials/${id}/answer`),
+  collectBotMaterials: () => request(withProject('/api/bot/materials/collect'), { method: 'POST' }),
+  createBotAnswers: (answers) => request(withProject('/api/bot/materials/answers'), { method: 'POST', body: { answers } }),
   botSettings: () => request(withProject('/api/bot/settings')),
   saveBotSettings: (body) => request(withProject('/api/bot/settings'), { method: 'PUT', body }),
 };
