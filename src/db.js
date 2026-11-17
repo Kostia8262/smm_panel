@@ -1451,6 +1451,108 @@ const MIGRATIONS = [
       ALTER TABLE bot_settings ADD COLUMN site_url TEXT;
     `,
   },
+  {
+    // Бот, фаза 2: переписка (docs/бот.md, §5a и §6). Диалоги, сообщения,
+    // план ответа с задержкой и реплики воронки, которые правит владелец.
+    name: '036b-bot-dialogs',
+    sql: `
+      -- Диалог = собеседник в одном канале одного аккаунта. Состояние воронки
+      -- живёт здесь же: воркер перечитывает его перед каждой отправкой.
+      CREATE TABLE bot_dialogs (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id       INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        channel          TEXT NOT NULL,
+        account_id       TEXT NOT NULL,
+        peer_id          TEXT NOT NULL,
+        handled_by       TEXT NOT NULL DEFAULT 'bot',
+        human_at         TEXT,
+        human_by         INTEGER,
+        last_customer_at TEXT,
+        last_message_at  TEXT,
+        last_bot_at      TEXT,
+        lang             TEXT,
+        step             TEXT NOT NULL DEFAULT 'start',
+        child_age        INTEGER,
+        contact_name     TEXT,
+        phone            TEXT,
+        preferred_time   TEXT,
+        tags             TEXT NOT NULL DEFAULT '',
+        reprompted       INTEGER NOT NULL DEFAULT 0,
+        reminders_sent   INTEGER NOT NULL DEFAULT 0,
+        unread           INTEGER NOT NULL DEFAULT 0,
+        attention        TEXT,
+        draft_text       TEXT,
+        lead_status      TEXT,
+        lead_id          TEXT,
+        lead_error       TEXT,
+        created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE UNIQUE INDEX idx_bot_dialogs_peer ON bot_dialogs(channel, account_id, peer_id);
+      CREATE INDEX idx_bot_dialogs_project ON bot_dialogs(project_id, last_message_at);
+
+      -- mid уникален: повтор доставки Meta не плодит двойников.
+      CREATE TABLE bot_messages (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        dialog_id  INTEGER NOT NULL REFERENCES bot_dialogs(id) ON DELETE CASCADE,
+        direction  TEXT NOT NULL,
+        mid        TEXT UNIQUE,
+        text       TEXT NOT NULL DEFAULT '',
+        source     TEXT NOT NULL,
+        staff_id   INTEGER,
+        meta       TEXT,
+        sent_at    TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE INDEX idx_bot_messages_dialog ON bot_messages(dialog_id, id);
+
+      -- План ответа: строка в базе, а не setTimeout — перезапуск PM2 его не
+      -- теряет. Новое сообщение клиента сдвигает план, а не добавляет второй.
+      CREATE TABLE bot_reply_plans (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        dialog_id   INTEGER NOT NULL REFERENCES bot_dialogs(id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL DEFAULT 'reply',
+        send_at     TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'pending',
+        reply_key   TEXT,
+        text        TEXT,
+        reason      TEXT,
+        patch       TEXT,                           -- что поменять в диалоге после отправки
+        knowledge_id INTEGER,
+        error       TEXT,
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE INDEX idx_bot_plans_due ON bot_reply_plans(status, send_at);
+      CREATE UNIQUE INDEX idx_bot_plans_one_pending ON bot_reply_plans(dialog_id) WHERE status = 'pending';
+
+      -- Отправленные нами mid: echo с таким id — наш, с незнакомым — человек.
+      CREATE TABLE bot_sent_mids (
+        mid        TEXT PRIMARY KEY,
+        dialog_id  INTEGER NOT NULL REFERENCES bot_dialogs(id) ON DELETE CASCADE,
+        source     TEXT NOT NULL DEFAULT 'bot',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+
+      -- Реплики воронки: тексты не в коде, а здесь — их вычитывает владелец.
+      -- draft = 1, пока владелец не согласовал.
+      CREATE TABLE bot_replies (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        key         TEXT NOT NULL,
+        lang        TEXT NOT NULL,
+        text        TEXT NOT NULL,
+        draft       INTEGER NOT NULL DEFAULT 1,
+        origin      TEXT NOT NULL DEFAULT 'figma',
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE UNIQUE INDEX idx_bot_replies_key ON bot_replies(project_id, key, lang);
+
+      ALTER TABLE bot_settings ADD COLUMN verify_token TEXT;
+      ALTER TABLE bot_settings ADD COLUMN reply_delay_sec INTEGER NOT NULL DEFAULT 10;
+      ALTER TABLE bot_settings ADD COLUMN dialog_closed_days INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 function migrate() {

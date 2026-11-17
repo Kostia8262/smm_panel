@@ -8,6 +8,7 @@
  *      и узнать об этом при отправке — значит узнать слишком поздно.
  */
 
+import { randomBytes } from 'node:crypto';
 import { db, log } from '../db.js';
 import { CHANNELS, LANGS, LIMITS } from './specs.js';
 import { decide, triggerList } from './match.js';
@@ -53,8 +54,19 @@ export function settings(projectId) {
     fallbackText: row.fallback_text || '',
     stopExtra: row.stop_extra || '',
     siteUrl: row.site_url || '',
+    // Verify Token вебхука Meta. Выпускается сам при первом чтении: владелец
+    // копирует его в кабинет приложения, придумывать строку ему незачем.
+    verifyToken: row.verify_token || ensureVerifyToken(projectId),
+    replyDelaySec: Number.isFinite(row.reply_delay_sec) ? row.reply_delay_sec : 10,
+    dialogClosedDays: row.dialog_closed_days || 0,
     updatedAt: row.updated_at,
   };
+}
+
+function ensureVerifyToken(projectId) {
+  const token = `mcbot_${randomBytes(18).toString('base64url')}`;
+  db.prepare('UPDATE bot_settings SET verify_token = ? WHERE project_id = ? AND verify_token IS NULL').run(token, projectId);
+  return db.prepare('SELECT verify_token FROM bot_settings WHERE project_id = ?').get(projectId).verify_token;
 }
 
 export function saveSettings(projectId, patch = {}) {
@@ -66,7 +78,17 @@ export function saveSettings(projectId, patch = {}) {
     fallbackText: patch.fallbackText === undefined ? current.fallbackText : String(patch.fallbackText).trim(),
     stopExtra: patch.stopExtra === undefined ? current.stopExtra : String(patch.stopExtra).trim(),
     siteUrl: patch.siteUrl === undefined ? current.siteUrl : String(patch.siteUrl).trim(),
+    replyDelaySec: patch.replyDelaySec === undefined ? current.replyDelaySec : Number(patch.replyDelaySec),
+    dialogClosedDays: patch.dialogClosedDays === undefined ? current.dialogClosedDays : Number(patch.dialogClosedDays),
   };
+  // Пауза перед ответом: меньше 3 секунд человек не успеет вступить, больше
+  // минуты — клиент решит, что ему не отвечают (docs/бот.md, §5a).
+  if (!Number.isInteger(next.replyDelaySec) || next.replyDelaySec < 3 || next.replyDelaySec > 60) {
+    throw new BotError('Пауза перед ответом — целое число от 3 до 60 секунд');
+  }
+  if (!Number.isInteger(next.dialogClosedDays) || next.dialogClosedDays < 0 || next.dialogClosedDays > 365) {
+    throw new BotError('Возврат диалога боту — от 0 (выключено) до 365 дней');
+  }
   if (next.siteUrl && !/^https?:\/\//.test(next.siteUrl)) {
     throw new BotError('Адрес сайта — вместе с https://, иначе сбор материалов не поймёт, куда идти');
   }
@@ -86,7 +108,8 @@ export function saveSettings(projectId, patch = {}) {
   }
   db.prepare(
     `UPDATE bot_settings
-        SET enabled = ?, auto_reply = ?, channels = ?, fallback_text = ?, stop_extra = ?, site_url = ?, updated_at = ?
+        SET enabled = ?, auto_reply = ?, channels = ?, fallback_text = ?, stop_extra = ?, site_url = ?,
+            reply_delay_sec = ?, dialog_closed_days = ?, updated_at = ?
       WHERE project_id = ?`
   ).run(
     next.enabled ? 1 : 0,
@@ -95,6 +118,8 @@ export function saveSettings(projectId, patch = {}) {
     next.fallbackText,
     next.stopExtra,
     next.siteUrl,
+    next.replyDelaySec,
+    next.dialogClosedDays,
     nowIso(),
     projectId
   );
