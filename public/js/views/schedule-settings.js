@@ -576,14 +576,14 @@ export function leadsPanel() {
         e.preventDefault();
         save.disabled = true;
         try {
-          await api.saveLeadsSettings({
+          const saved = await api.saveLeadsSettings({
             url: url.input.value,
             token: token.input.value,
             feedToken: feedToken.input.value,
             leadsWriteToken: leadsWrite.input.value,
             ownDomains: domains.input.value,
           });
-          toast('Сохранено', 'ok');
+          toast(saved?.keysReset?.length ? 'Адрес сменён — сохранённые ключи сброшены, впишите их заново' : 'Сохранено', saved?.keysReset?.length ? 'warn' : 'ok');
           token.input.value = '';
           feedToken.input.value = '';
           leadsWrite.input.value = '';

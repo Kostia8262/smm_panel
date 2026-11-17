@@ -20,6 +20,7 @@
 
 import { getSetting } from '../staff.js';
 import { decrypt } from '../secrets.js';
+import { leadsUrlAllowed } from '../leads-settings.js';
 
 export const LEAD_SOURCE = 'ig_dm';
 /** Messenger — своя метка: заявки из Facebook не смешиваются с Instagram. */
@@ -71,6 +72,8 @@ export function leadBody(dialog) {
 export async function createLead(dialog) {
   const { apiUrl, key } = leadAccess();
   if (!key || !apiUrl) return { status: 'no_access', error: 'нет ключа для записи заявок в админку' };
+  // Второй рубеж к проверке при сохранении: ключ не уходит по http.
+  if (!leadsUrlAllowed(apiUrl)) return { status: 'no_access', error: 'адрес админки не https — ключ туда не отправляется' };
   const integration = key.startsWith('mcai_');
   const url = `${apiUrl}${integration ? '/api/integration/leads' : '/api/leads/admin'}`;
   const headers = { 'content-type': 'application/json', [integration ? 'x-integration-key' : 'x-admin-token']: key };

@@ -47,6 +47,7 @@ const { writeFileSync } = await import('node:fs');
 const { encrypt: encryptSecret, decrypt: decryptSecret } = await import('./secrets.js');
 const { feedState } = await import('./mail/crm-feed.js');
 const { segmentsState } = await import('./mail/crm-segments.js');
+const leadsSettings = await import('./leads-settings.js');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3210);
@@ -1731,14 +1732,16 @@ function leadsApiToken() {
 }
 
 app.put('/api/settings/leads', requireAccess('platforms'), (req, res) => {
-  const { url, token } = req.body || {};
-  if (url !== undefined) staffDb.setSetting('leads_api_url', String(url).trim());
-  if (token) staffDb.setSetting('leads_api_token', encryptSecret(String(token).trim()));
-  // Ключ ленты согласий — второй ключ интеграции, со своим правом mail:feed.
-  if (req.body?.feedToken) staffDb.setSetting('crm_feed_token', encryptSecret(String(req.body.feedToken).trim()));
-  // Ключ записи заявок для бота (src/bot/crm-lead.js): токен сотрудника
-  // админки или будущий ключ интеграции `mcai_…` с правом leads:write.
-  if (req.body?.leadsWriteToken) staffDb.setSetting('crm_leads_write_token', encryptSecret(String(req.body.leadsWriteToken).trim()));
+  // Адрес и три ключа админки (заявки, лента согласий, запись заявок бота):
+  // адрес только https, смена адреса сбрасывает ключи (src/leads-settings.js).
+  let applied;
+  try {
+    applied = leadsSettings.applyLeadsSettings(req.body || {});
+  } catch (err) {
+    if (err instanceof leadsSettings.LeadsSettingsError) return res.status(422).json({ error: err.message });
+    throw err;
+  }
+  if (applied.reset.length) log('warn', `адрес админки сменён — ключи сброшены: ${applied.reset.join(', ')}`);
   if (req.body?.ownDomains !== undefined) {
     staffDb.setSetting('own_domains', String(req.body.ownDomains).trim());
   }
@@ -1749,6 +1752,7 @@ app.put('/api/settings/leads', requireAccess('platforms'), (req, res) => {
     hasLeadsWriteToken: Boolean(staffDb.getSetting('crm_leads_write_token', '')),
     ownDomains: staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school'),
     feed: { ...feedState(), segments: segmentsState() },
+    keysReset: applied.reset,
   });
 });
 
