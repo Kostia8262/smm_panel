@@ -10,7 +10,7 @@
  */
 
 import { api } from '../../api.js';
-import { el, button, note, empty, toast, projectTabs } from '../../ui.js';
+import { el, button, iconButton, note, empty, toast, projectTabs } from '../../ui.js';
 import { icon } from '../../icons.js';
 
 const SOURCE_TITLE = { customer: 'Клиент', bot: 'Бот', human: 'Человек' };
@@ -167,20 +167,28 @@ export function inboxView(ctx, { tabs } = {}) {
     }
     const d = current.dialog;
 
+    // Шапка: имя одной строкой с обрезкой, факты и окно — строкой ниже.
+    // На 375 px прежняя шапка была 152 px и рвала имя по слогам (проверка 17.11).
     const head = el('div', 'inbox-head');
-    const backBtn = button('', { iconName: 'x', variant: 'quiet', title: 'К списку', onClick: back });
+    const backBtn = iconButton('x', { title: 'К списку', onClick: back });
     backBtn.classList.add('inbox-head__back');
     head.append(backBtn);
     const title = el('div', 'inbox-head__title');
-    title.append(el('div', 'inbox-head__who', d.who));
+    const who = el('div', 'inbox-head__who', d.who);
+    who.title = d.who;
+    title.append(who);
     const facts = [STEP_TITLE[d.step] || d.step];
     if (d.childAge) facts.push(`возраст ${d.childAge}`);
-    if (d.lang) facts.push(d.lang === 'ru' ? 'пишет по-русски' : 'пишет українською');
+    if (d.lang) facts.push(d.lang === 'ru' ? 'по-русски' : 'українською');
     for (const t of d.tags) facts.push(TAG_TITLE[t] || t);
-    title.append(el('div', 'inbox-head__facts', facts.join(' · ')));
-    head.append(title);
+    const meta = el('div', 'inbox-head__meta');
     const w = windowLeft(d.windowLeftMs);
-    head.append(el('span', `tag ${w.cls}`, w.text));
+    meta.append(el('span', `tag ${w.cls}`, w.text));
+    const factsEl = el('span', 'inbox-head__facts', facts.join(' · '));
+    factsEl.title = facts.join(' · ');
+    meta.append(factsEl);
+    title.append(meta);
+    head.append(title);
     pane.append(head);
 
     if (d.attention) pane.append(note('warn', 'Ждёт человека', d.attention));

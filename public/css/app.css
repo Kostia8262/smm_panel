@@ -2669,11 +2669,19 @@ a.btn { text-decoration: none; }
 }
 .inbox-item__tags { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 
-.inbox-head { display: flex; align-items: center; gap: var(--sp-3); }
-.inbox-head__back { display: none; }
-.inbox-head__title { min-width: 0; flex: 1; }
-.inbox-head__who { font-weight: 600; font-size: var(--fs-lg); }
-.inbox-head__facts { color: var(--ink-3); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.inbox-head { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.inbox-head__back { display: none; flex: none; }
+.inbox-head__title { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: var(--sp-1); }
+.inbox-head__who {
+  font-weight: 600; font-size: var(--fs-lg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.inbox-head__meta { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.inbox-head__meta .tag { flex: none; }
+.inbox-head__facts {
+  color: var(--ink-3); font-size: var(--fs-sm); min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 .inbox-feed {
   display: flex; flex-direction: column; gap: var(--sp-2);
