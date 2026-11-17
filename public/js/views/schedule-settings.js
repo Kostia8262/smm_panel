@@ -523,6 +523,14 @@ export function leadsPanel() {
       feedToken.wrap.append(
         el('span', 'field__hint', 'Отдельный ключ «SMM-панель — стрічка» с правом mail:feed. Люди с согласием на письма сами попадают в базы «CRM школы».')
       );
+      // Третий ключ: бот записывает заявки из Direct (src/bot/crm-lead.js).
+      const leadsWrite = field('Ключ записи заявок бота', '');
+      leadsWrite.input.type = 'password';
+      leadsWrite.input.autocomplete = 'new-password';
+      leadsWrite.input.placeholder = cfg.hasLeadsWriteToken ? 'сохранён — пустое поле не меняет' : 'токен сотрудника-менеджера админки';
+      leadsWrite.wrap.append(
+        el('span', 'field__hint', 'Бот собрал имя и телефон в Direct — заявка уходит в CRM школы с источником ig_dm. Пока это токен сотрудника админки (роль «менеджер»); когда в админке появится право leads:write — ключ mcai_….')
+      );
       const domains = field('Наши домены', cfg.ownDomains || '');
       domains.wrap.append(el('span', 'field__hint', 'Через запятую. Ссылки на чужие сайты не трогаем.'));
 
@@ -563,7 +571,7 @@ export function leadsPanel() {
       if (cfg.feed?.hasToken) feedToken.wrap.append(...[feedStatus(cfg.feed), segmentsStatus(cfg.feed.segments)].filter(Boolean));
       // Сетка растягивает только третье поле, а доменам тоже нужна вся ширина.
       domains.wrap.style.gridColumn = '1 / -1';
-      form.append(url.wrap, token.wrap, feedToken.wrap, domains.wrap, foot);
+      form.append(url.wrap, token.wrap, feedToken.wrap, leadsWrite.wrap, domains.wrap, foot);
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         save.disabled = true;
@@ -572,11 +580,13 @@ export function leadsPanel() {
             url: url.input.value,
             token: token.input.value,
             feedToken: feedToken.input.value,
+            leadsWriteToken: leadsWrite.input.value,
             ownDomains: domains.input.value,
           });
           toast('Сохранено', 'ok');
           token.input.value = '';
           feedToken.input.value = '';
+          leadsWrite.input.value = '';
         } catch (err) {
           toast(err.message, 'danger');
         } finally {

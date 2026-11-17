@@ -12,15 +12,21 @@ import { el } from '../../ui.js';
 import { knowledgeView } from './knowledge.js';
 import { materialsView } from './materials.js';
 import { botSettingsView } from './settings.js';
+import { inboxView } from './inbox.js';
+import { repliesView } from './replies.js';
 
 const TABS = [
+  { id: 'inbox', hash: '#/bot/inbox', title: 'Входящие' },
   { id: 'answers', hash: '#/bot', title: 'Ответы' },
+  { id: 'replies', hash: '#/bot/replies', title: 'Реплики' },
   { id: 'materials', hash: '#/bot/materials', title: 'Материалы' },
 ];
 
 export function botView(ctx) {
   const hash = location.hash;
   if (hash.startsWith('#/bot/settings')) return botSettingsView(ctx);
+  if (hash.startsWith('#/bot/inbox')) return inboxView(ctx, { tabs: tabsRow('inbox') });
+  if (hash.startsWith('#/bot/replies')) return repliesView(ctx, { tabs: tabsRow('replies') });
   if (hash.startsWith('#/bot/materials')) return materialsView(ctx, { tabs: tabsRow('materials') });
   return knowledgeView(ctx, { tabs: tabsRow('answers') });
 }

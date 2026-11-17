@@ -72,7 +72,7 @@ export function botSettingsView(ctx) {
         )
       );
     }
-    host.append(mainPanel(), textsPanel(), stopPanel());
+    host.append(mainPanel(), dialogsPanel(), textsPanel(), stopPanel());
   }
 
   /* ------------------------------ включение ------------------------------ */
@@ -155,6 +155,67 @@ export function botSettingsView(ctx) {
     }
     body.append(site);
 
+    return p;
+  }
+
+  /* ------------------------------- переписка ------------------------------- */
+
+  function dialogsPanel() {
+    const p = panel('Переписка: вебхук Meta и пауза');
+    const body = el('div', 'stack');
+    p.append(body);
+
+    if (canManage && settings.verifyToken) {
+      const hook = el('div', 'field');
+      hook.append(el('label', 'field__label', 'Адрес вебхука и Verify Token'));
+      const url = el('input', 'input');
+      url.readOnly = true;
+      url.value = `${location.origin}/webhooks/meta`;
+      const tok = el('input', 'input');
+      tok.readOnly = true;
+      tok.value = settings.verifyToken;
+      hook.append(url, tok);
+      hook.append(
+        el('div', 'field__hint', 'Кабинет Meta → приложение → Webhooks: Callback URL и Verify Token отсюда, поля messages, messaging_postbacks (Messenger) и comments (Instagram). Подпись событий проверяется секретом приложения из карточки Facebook.')
+      );
+      body.append(hook);
+    }
+
+    const delay = el('div', 'field');
+    delay.append(el('label', 'field__label', 'Пауза перед ответом, секунд'));
+    const delayInput = el('input', 'input');
+    delayInput.type = 'number';
+    delayInput.min = '3';
+    delayInput.max = '60';
+    delayInput.value = String(settings.replyDelaySec ?? 10);
+    delayInput.disabled = !canManage;
+    delay.append(delayInput);
+    delay.append(el('div', 'field__hint', 'За эти секунды человек успевает вступить, а очередь сообщений клиента склеивается в один ответ. Решение владельца — 10.'));
+    body.append(delay);
+
+    const closed = el('div', 'field');
+    closed.append(el('label', 'field__label', 'Возвращать диалог боту после тишины, дней'));
+    const closedInput = el('input', 'input');
+    closedInput.type = 'number';
+    closedInput.min = '0';
+    closedInput.max = '365';
+    closedInput.value = String(settings.dialogClosedDays ?? 0);
+    closedInput.disabled = !canManage;
+    closed.append(closedInput);
+    closed.append(el('div', 'field__hint', '0 — никогда: ответил человек, и диалог его до кнопки «Вернуть боту» во «Входящих».'));
+    body.append(closed);
+
+    if (canManage) {
+      const actions = el('div', 'bot-actions');
+      actions.append(
+        button('Сохранить', {
+          variant: 'primary',
+          iconName: 'check',
+          onClick: () => save({ replyDelaySec: Number(delayInput.value), dialogClosedDays: Number(closedInput.value) }, 'Сохранено'),
+        })
+      );
+      body.append(actions);
+    }
     return p;
   }
 

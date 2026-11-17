@@ -2626,3 +2626,83 @@ a.btn { text-decoration: none; }
 @media (max-width: 760px) {
   .view .panel__head { flex-wrap: wrap; }
 }
+
+/* ------------------------------ Бот: входящие ------------------------------
+   Две колонки на десктопе, по очереди на телефоне: колонка ленты фиксированной
+   ширины на 375 px схлопнула бы список в ноль (урок #staffProfileTab 03.11). */
+.inbox {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: var(--sp-4);
+  align-items: start;
+}
+.inbox__list, .inbox__thread {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  min-width: 0;
+}
+.inbox__list { display: flex; flex-direction: column; max-height: calc(100vh - 220px); overflow-y: auto; }
+.inbox__thread { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-4); }
+
+.inbox-item {
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  padding: var(--sp-3) var(--sp-4);
+  background: transparent; border: 0; border-bottom: 1px solid var(--line-soft);
+  color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.inbox-item:hover { background: var(--surface-2); }
+.inbox-item:focus-visible { outline: none; box-shadow: var(--ring); }
+.inbox-item--on { background: var(--surface-3); box-shadow: inset 3px 0 0 var(--gold); }
+.inbox-item__head { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; color: var(--ink-2); }
+.inbox-item__who { font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-item--unread .inbox-item__who { color: var(--gold-bright); }
+.inbox-item__unread {
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--r-pill);
+  background: var(--gold); color: var(--gold-ink); font-size: var(--fs-xs); font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.inbox-item__time { margin-left: auto; color: var(--ink-3); font-size: var(--fs-xs); white-space: nowrap; }
+.inbox-item__last {
+  color: var(--ink-2); font-size: var(--fs-sm);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.inbox-item__tags { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+
+.inbox-head { display: flex; align-items: center; gap: var(--sp-3); }
+.inbox-head__back { display: none; }
+.inbox-head__title { min-width: 0; flex: 1; }
+.inbox-head__who { font-weight: 600; font-size: var(--fs-lg); }
+.inbox-head__facts { color: var(--ink-3); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+
+.inbox-feed {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  max-height: 52vh; overflow-y: auto; padding: var(--sp-1);
+}
+.inbox-msg {
+  max-width: min(78%, 560px); padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r); border: 1px solid var(--line-soft); background: var(--surface-2);
+}
+.inbox-msg--customer { align-self: flex-start; }
+.inbox-msg--bot, .inbox-msg--human { align-self: flex-end; }
+.inbox-msg--bot { background: var(--gold-dim); border-color: var(--gold-line); }
+.inbox-msg--human { background: var(--surface-3); border-color: var(--line); }
+.inbox-msg__text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.inbox-msg__meta { margin-top: var(--sp-1); color: var(--ink-3); font-size: var(--fs-xs); }
+
+.inbox-draft {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  padding: var(--sp-3); border: 1px dashed var(--gold-line); border-radius: var(--r);
+}
+.inbox-draft__label { color: var(--gold); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.04em; }
+.inbox-draft__text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.inbox-reply { display: flex; flex-direction: column; gap: var(--sp-2); }
+
+@media (max-width: 900px) {
+  .inbox { grid-template-columns: minmax(0, 1fr); }
+  .inbox--open .inbox__list { display: none; }
+  .inbox:not(.inbox--open) .inbox__thread { display: none; }
+  .inbox-head__back { display: inline-flex; }
+  .inbox__list { max-height: none; }
+  .inbox-msg { max-width: 90%; }
+}

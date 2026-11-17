@@ -356,6 +356,14 @@ export const api = {
   createBotAnswers: (answers) => request(withProject('/api/bot/materials/answers'), { method: 'POST', body: { answers } }),
   botSettings: () => request(withProject('/api/bot/settings')),
   saveBotSettings: (body) => request(withProject('/api/bot/settings'), { method: 'PUT', body }),
+  botDialogs: () => request(withProject('/api/bot/dialogs')),
+  botDialog: (id) => request(withProject(`/api/bot/dialogs/${id}`)),
+  botDialogReply: (id, text) => request(withProject(`/api/bot/dialogs/${id}/reply`), { method: 'POST', body: { text } }),
+  botDialogSendDraft: (id) => request(withProject(`/api/bot/dialogs/${id}/send-draft`), { method: 'POST' }),
+  botDialogReturn: (id) => request(withProject(`/api/bot/dialogs/${id}/return`), { method: 'POST' }),
+  botDialogLead: (id) => request(withProject(`/api/bot/dialogs/${id}/lead`), { method: 'POST' }),
+  botReplies: () => request(withProject('/api/bot/replies')),
+  updateBotReply: (id, body) => request(withProject(`/api/bot/replies/${id}`), { method: 'PUT', body }),
 };
 
 export { ApiError };
