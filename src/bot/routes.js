@@ -27,8 +27,46 @@ const { BotError } = knowledge;
  * @param {{requireAccess: (area: string) => Function, currentProjectId: (req: object) => number|null,
  *   can: (role: string, area: string) => boolean}} deps
  */
+/**
+ * Запрос, меняющий данные, — только со страницы самой панели.
+ *
+ * Cookie сессии `SameSite=Lax` не спасает от соседей по сайту: python.,
+ * roblox., child.mycomputer.education — тот же «сайт», и POST без тела
+ * (`/lead`, `/return`, `/send-draft`) с них проходил (security-audit 17.11,
+ * Г1). Браузер к любому POST/PUT/DELETE из fetch прикладывает `Origin` и
+ * `Sec-Fetch-Site` — по ним и сверяем. Запрос без обоих заголовков — не
+ * браузер (curl, тесты): CSRF через него невозможен, cookie у него нет.
+ *
+ * Пока только маршруты бота; общий механизм для всей панели — отдельная задача.
+ */
+export function sameOriginOnly(req, res, next) {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  const site = req.get('sec-fetch-site');
+  if (site && site !== 'same-origin') return res.status(403).json({ error: 'Запрос не со страницы панели' });
+  const origin = req.get('origin');
+  if (origin) {
+    let host = '';
+    try {
+      host = new URL(origin).host;
+    } catch {
+      host = '';
+    }
+    // За OpenLiteSpeed Host может прийти адресом приложения — сверяем и с
+    // X-Forwarded-Host, и с публичным адресом панели из .env.
+    const own = new Set([req.get('host'), ...(String(req.get('x-forwarded-host') || '').split(',').map((h) => h.trim()))]);
+    try {
+      if (process.env.PUBLIC_BASE_URL) own.add(new URL(process.env.PUBLIC_BASE_URL).host);
+    } catch {
+      /* адрес в .env кривой — сверяем по заголовкам */
+    }
+    if (!host || !own.has(host)) return res.status(403).json({ error: 'Запрос не со страницы панели' });
+  }
+  next();
+}
+
 export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
   const router = express.Router();
+  router.use(sameOriginOnly);
 
   /** Verify Token вебхука — ключ, им подтверждается адрес: только владельцу. */
   const visibleSettings = (projectId, req) => {
