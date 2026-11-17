@@ -1553,6 +1553,14 @@ const MIGRATIONS = [
       ALTER TABLE bot_settings ADD COLUMN dialog_closed_days INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    // Бот, проверка 17.11: две вкладки слали черновик и ответ из панели
+    // дважды. Одно исходящее «в полёте» на диалог и вид — базой, не кодом.
+    name: '037b-bot-send-locks',
+    sql: `
+      CREATE UNIQUE INDEX idx_bot_plans_one_sending ON bot_reply_plans(dialog_id, kind) WHERE status = 'sending';
+    `,
+  },
 ];
 
 function migrate() {

@@ -17,7 +17,7 @@ import { db, log } from '../db.js';
 import { listProjects, credentialsFor } from '../projects.js';
 import * as knowledge from './knowledge.js';
 import * as replies from './replies.js';
-import { chooseReply, STEP, WAITING_STEPS } from './funnel.js';
+import { chooseReply, parseAges, STEP, WAITING_STEPS } from './funnel.js';
 import { sendText, SendError } from './send.js';
 import { createLead } from './crm-lead.js';
 
@@ -31,6 +31,10 @@ export const WINDOW_MARGIN_MS = HOUR;
 
 const iso = (d = new Date()) => new Date(d).toISOString();
 const ms = (s) => (s ? Date.parse(s) : 0);
+/** Позднее из двух отметок: запоздавшее событие Meta не двигает время назад. */
+const later = (a, b) => (!a ? b : !b ? a : a > b ? a : b);
+/** Сколько «в полёте» может висеть исходящее, прежде чем его сочтут потерянным. */
+export const SENDING_STALE_MS = 2 * 60 * 1000;
 
 /* ------------------------------ аккаунт → проект ------------------------------ */
 
@@ -191,7 +195,11 @@ function ingestMessaging(object, entryId, ev, now) {
 function onCustomer(dialog, { mid, text, at, meta, now }) {
   if (!insertMessage({ dialogId: dialog.id, direction: 'in', mid, text, source: 'customer', meta, sentAt: at })) return 'duplicates';
   const cfg = knowledge.settings(dialog.project_id);
-  const patch = { last_customer_at: at, last_message_at: at, unread: (dialog.unread || 0) + 1 };
+  const patch = {
+    last_customer_at: later(dialog.last_customer_at, at),
+    last_message_at: later(dialog.last_message_at, at),
+    unread: (dialog.unread || 0) + 1,
+  };
 
   // Возврат боту по тишине — настройка, по умолчанию выключена (§5a).
   let handledBy = dialog.handled_by;
@@ -225,16 +233,19 @@ function onEcho(dialog, { mid, text, at, meta }) {
     insertMessage({ dialogId: dialog.id, direction: 'out', mid, text, source: known.source, sentAt: at });
     return 'echoes';
   }
+  // Автоответ, черновик и ответ из панели перед вызовом Send API лежат
+  // планом «sending» с текстом — по нему и узнаётся ранний echo.
   const sending = db
-    .prepare("SELECT id FROM bot_reply_plans WHERE dialog_id = ? AND status = 'sending' AND text = ?")
+    .prepare("SELECT id, kind FROM bot_reply_plans WHERE dialog_id = ? AND status = 'sending' AND text = ? ORDER BY id DESC")
     .get(dialog.id, text);
   if (sending) {
-    db.prepare('INSERT OR IGNORE INTO bot_sent_mids (mid, dialog_id, source) VALUES (?, ?, ?)').run(mid, dialog.id, 'bot');
-    insertMessage({ dialogId: dialog.id, direction: 'out', mid, text, source: 'bot', sentAt: at });
+    const source = sending.kind === 'human' ? 'human' : 'bot';
+    db.prepare('INSERT OR IGNORE INTO bot_sent_mids (mid, dialog_id, source) VALUES (?, ?, ?)').run(mid, dialog.id, source);
+    insertMessage({ dialogId: dialog.id, direction: 'out', mid, text, source, sentAt: at });
     return 'echoes';
   }
   if (!insertMessage({ dialogId: dialog.id, direction: 'out', mid, text, source: 'human', meta, sentAt: at })) return 'duplicates';
-  patchDialog(dialog.id, { handled_by: 'human', human_at: at, last_message_at: at, unread: 0, draft_text: null, attention: null });
+  patchDialog(dialog.id, { handled_by: 'human', human_at: later(dialog.human_at, at), last_message_at: later(dialog.last_message_at, at), unread: 0, draft_text: null, attention: null });
   cancelPending(dialog.id, 'ответил человек');
   return 'echoes';
 }
@@ -281,6 +292,8 @@ function claim(planId, now) {
     return { plan, dialog, cfg };
   } catch (err) {
     db.exec('ROLLBACK');
+    // Другое исходящее этого диалога ещё «в полёте» — план подождёт тика.
+    if (/UNIQUE/i.test(err.message)) return null;
     throw err;
   }
 }
@@ -302,7 +315,7 @@ function recordBotSend(dialog, { mid, text, patch, handoff, sentAt, source = 'bo
     // Echo мог прийти раньше нас и уже лечь сообщением — тогда INSERT молча пропустит.
     insertMessage({ dialogId: dialog.id, direction: 'out', mid, text, source, staffId, meta, sentAt });
     const fresh = getDialogRow(dialog.id);
-    const next = { ...patch, last_bot_at: sentAt, last_message_at: sentAt, draft_text: null };
+    const next = { ...patch, last_bot_at: sentAt, last_message_at: later(fresh.last_message_at, sentAt), draft_text: null };
     if (handoff && fresh.handled_by === 'bot') Object.assign(next, { handled_by: 'human', attention: handoff });
     patchDialog(dialog.id, next);
     db.exec('COMMIT');
@@ -312,13 +325,31 @@ function recordBotSend(dialog, { mid, text, patch, handoff, sentAt, source = 'bo
   }
 }
 
+/**
+ * Захватить запись заявки: условный UPDATE в базе, а не проверка в коде.
+ * Три нажатия «Повторить заявку» подряд слали три заявки в CRM (проверка
+ * 17.11): теперь идёт одно, остальным захват не достаётся.
+ */
+function claimLead(dialogId) {
+  const info = db
+    .prepare(
+      `UPDATE bot_dialogs SET lead_status = 'sending', updated_at = ?
+        WHERE id = ? AND phone IS NOT NULL
+          AND (lead_status IS NULL OR lead_status IN ('failed', 'no_access')
+               OR (lead_status = 'sending' AND updated_at < ?))`
+    )
+    .run(iso(), dialogId, iso(Date.now() - SENDING_STALE_MS));
+  return info.changes > 0;
+}
+
 async function maybeLead(dialogId) {
+  if (!claimLead(dialogId)) return false;
   const d = getDialogRow(dialogId);
-  if (!d?.phone || d.lead_status === 'sent') return;
   const r = await createLead(d);
   patchDialog(dialogId, { lead_status: r.status, lead_id: r.id ?? null, lead_error: r.error ?? null });
   if (r.status === 'sent') log('info', `бот: заявка из диалога #${dialogId} записана в CRM школы`);
   else log('warn', `бот: заявка из диалога #${dialogId} не записана — ${r.error}`);
+  return true;
 }
 
 /**
@@ -437,8 +468,31 @@ export function scheduleReminders({ now = new Date() } = {}) {
   return n;
 }
 
+/**
+ * Исходящие, застрявшие «в полёте» (воркер упал между выбором ответа и
+ * записью mid). Ушло ли сообщение, видно по ленте: echo или наша запись
+ * того же текста после создания плана — значит ушло, второй раз не шлём.
+ * Иначе автоответ возвращается в очередь, черновик — в черновики, а ответ
+ * человека помечается несостоявшимся: повторять его за человека нельзя.
+ */
+export function recoverStuck({ now = new Date() } = {}) {
+  const stale = db
+    .prepare("SELECT * FROM bot_reply_plans WHERE status = 'sending' AND updated_at < ?")
+    .all(iso(ms(iso(now)) - SENDING_STALE_MS));
+  for (const p of stale) {
+    const delivered = p.text && db
+      .prepare("SELECT 1 FROM bot_messages WHERE dialog_id = ? AND direction = 'out' AND text = ? AND created_at >= ?")
+      .get(p.dialog_id, p.text, p.created_at);
+    const status = delivered ? 'sent' : p.kind === 'human' ? 'failed' : p.patch ? 'draft' : 'pending';
+    finishPlan(p.id, { status, reason: `восстановлен после сбоя: ${status}` });
+    log('warn', `бот: план #${p.id} завис в отправке — ${delivered ? 'сообщение уже ушло' : `возвращён в «${status}»`}`);
+  }
+  return stale.length;
+}
+
 /** Один заход воркера. */
 export async function runDue({ now = new Date() } = {}) {
+  recoverStuck({ now });
   scheduleReminders({ now });
   const due = db
     .prepare("SELECT id FROM bot_reply_plans WHERE status = 'pending' AND send_at <= ? ORDER BY send_at LIMIT 20")
@@ -522,16 +576,34 @@ export async function humanReply(id, projectId, staffId, text) {
   if (!body) throw new DialogError('Пустое сообщение');
   if (body.length > 1000) throw new DialogError('Direct режет сообщения длиннее 1000 символов');
   assertWindow(d);
-  // Сначала забираем диалог у бота — чтобы план не ушёл, пока ждём Meta.
+  // Тот же текст только что ушёл — это второе нажатие или вторая вкладка.
+  const dup = db
+    .prepare("SELECT 1 FROM bot_messages WHERE dialog_id = ? AND source = 'human' AND text = ? AND created_at > ?")
+    .get(d.id, body, iso(Date.now() - 60 * 1000));
+  if (dup) throw new DialogError('Этот ответ уже отправлен минуту назад', 409);
+  // Исходящее «в полёте» — строкой плана: по ней узнаётся ранний echo, а
+  // уникальный индекс не пускает второй ответ, пока первый не ушёл.
+  let planId;
+  try {
+    planId = Number(
+      db.prepare("INSERT INTO bot_reply_plans (dialog_id, kind, send_at, status, text, reason) VALUES (?, 'human', ?, 'sending', ?, ?)")
+        .run(d.id, iso(), body, `ответ из панели, сотрудник #${staffId ?? '—'}`).lastInsertRowid
+    );
+  } catch {
+    throw new DialogError('Ответ в этот диалог уже отправляется — дождитесь его', 409);
+  }
+  // Забираем диалог у бота — чтобы план не ушёл, пока ждём Meta.
   patchDialog(d.id, { handled_by: 'human', human_at: iso(), human_by: staffId });
   cancelPending(d.id, 'ответил человек из панели');
   let sent;
   try {
     sent = await sendText({ projectId, channel: d.channel, peerId: d.peer_id, text: body });
   } catch (err) {
+    finishPlan(planId, { status: 'failed', error: String(err.message).slice(0, 300) });
     throw new DialogError(`Meta не приняла сообщение: ${err.message}`, 502);
   }
   recordBotSend(d, { mid: sent.mid, text: body, patch: { unread: 0, attention: null }, sentAt: iso(), source: 'human', staffId });
+  finishPlan(planId, { status: 'sent' });
   return openDialog(d.id, projectId);
 }
 
@@ -540,7 +612,7 @@ export async function sendDraft(id, projectId, staffId) {
   const d = getDialog(id, projectId);
   if (!d) throw new DialogError('Диалог не найден', 404);
   const plan = db.prepare("SELECT * FROM bot_reply_plans WHERE dialog_id = ? AND status = 'draft' ORDER BY id DESC LIMIT 1").get(d.id);
-  if (!plan || !d.draft_text) throw new DialogError('Черновика нет — возможно, его уже отправили');
+  if (!plan || !d.draft_text) throw new DialogError('Черновика нет — возможно, его уже отправили', 409);
   assertWindow(d);
   let extra = { patch: {}, handoff: null, lead: false };
   try {
@@ -548,7 +620,19 @@ export async function sendDraft(id, projectId, staffId) {
   } catch {
     /* план без состояния — отправляем как есть */
   }
+  // Захват черновика: из двух вкладок отправит одна, вторая получит 409.
+  // Статус «sending» с текстом — по нему узнаётся ранний echo.
+  let claimed;
+  try {
+    claimed = db
+      .prepare("UPDATE bot_reply_plans SET status = 'sending', text = ?, updated_at = ? WHERE id = ? AND status = 'draft'")
+      .run(d.draft_text, iso(), plan.id).changes;
+  } catch {
+    claimed = 0;
+  }
+  if (!claimed) throw new DialogError('Черновик уже отправляется или отправлен', 409);
   const sent = await sendText({ projectId, channel: d.channel, peerId: d.peer_id, text: d.draft_text }).catch((err) => {
+    finishPlan(plan.id, { status: 'draft', error: String(err.message).slice(0, 300) });
     throw new DialogError(`Meta не приняла сообщение: ${err.message}`, 502);
   });
   recordBotSend(d, {
@@ -569,8 +653,37 @@ export async function sendDraft(id, projectId, staffId) {
 export function returnToBot(id, projectId) {
   const d = getDialog(id, projectId);
   if (!d) throw new DialogError('Диалог не найден', 404);
-  const step = d.step === STEP.done || d.step === STEP.birthday ? (d.child_age ? STEP.trial : STEP.askAge) : d.step;
-  patchDialog(d.id, { handled_by: 'bot', attention: null, draft_text: null, step, reprompted: 0, reminders_sent: 2 });
+  /*
+   * Бот должен помнить, что клиент уже сказал, — в том числе человеку: возраст
+   * восстанавливается из сообщений клиента (последнее, где назван ровно один).
+   * У ребёнка, пишущего самому, данных не берём вовсе.
+   */
+  const tags = String(d.tags || '').split(',');
+  let age = d.child_age;
+  if (!age && !tags.includes('child')) {
+    const msgs = db.prepare("SELECT text FROM bot_messages WHERE dialog_id = ? AND source = 'customer' ORDER BY id DESC").all(d.id);
+    for (const m of msgs) {
+      const found = parseAges(m.text);
+      if (found.length === 1) {
+        age = found[0];
+        break;
+      }
+    }
+  }
+  const STEP2 = new Set(['age_6_9', 'age_10_13', 'age_14_18']);
+  const step2Sent = db
+    .prepare("SELECT meta FROM bot_messages WHERE dialog_id = ? AND source = 'bot' AND meta IS NOT NULL")
+    .all(d.id)
+    .some((m) => {
+      try {
+        return STEP2.has(JSON.parse(m.meta).key);
+      } catch {
+        return false;
+      }
+    });
+  let step = d.step;
+  if ([STEP.done, STEP.birthday, STEP.start, STEP.askAge].includes(d.step)) step = step2Sent ? STEP.trial : age ? STEP.start : STEP.askAge;
+  patchDialog(d.id, { handled_by: 'bot', attention: null, draft_text: null, step, child_age: age ?? null, reprompted: 0, reminders_sent: 2 });
   log('info', `бот: диалог #${d.id} возвращён боту`);
   return openDialog(d.id, projectId);
 }
@@ -580,7 +693,8 @@ export async function retryLead(id, projectId) {
   const d = getDialog(id, projectId);
   if (!d) throw new DialogError('Диалог не найден', 404);
   if (!d.phone) throw new DialogError('Телефона в диалоге нет — заявку не из чего делать');
-  await maybeLead(d.id);
+  if (d.lead_status === 'sent') throw new DialogError('Заявка уже записана в CRM', 409);
+  if (!(await maybeLead(d.id))) throw new DialogError('Заявка уже отправляется', 409);
   return openDialog(d.id, projectId);
 }
 

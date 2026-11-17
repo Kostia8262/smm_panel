@@ -22,6 +22,8 @@ import { getSetting } from '../staff.js';
 import { decrypt } from '../secrets.js';
 
 export const LEAD_SOURCE = 'ig_dm';
+/** Messenger — своя метка: заявки из Facebook не смешиваются с Instagram. */
+export const LEAD_SOURCE_FB = 'fb_dm';
 
 let fetchImpl = (...a) => fetch(...a);
 export function setFetch(fn) {
@@ -55,9 +57,10 @@ export function leadBody(dialog) {
     child_name: name,
     age: dialog.child_age || null,
     phone: dialog.phone,
-    source: LEAD_SOURCE,
+    // /api/leads/admin берёт source как есть (sanitize, без списка) — fb_dm проходит.
+    source: dialog.channel === 'messenger' ? LEAD_SOURCE_FB : LEAD_SOURCE,
     notes,
-    utm_source: 'instagram',
+    utm_source: dialog.channel === 'messenger' ? 'facebook' : 'instagram',
     utm_medium: dialog.channel === 'messenger' ? 'messenger' : 'direct',
   };
 }

@@ -38,7 +38,8 @@ const outbox = [];
 let failNext = null;
 
 before(() => {
-  projectId = projects.createProject({ slug: 'acad', title: 'Академія' }).id;
+  // Академия: возрастные ветки и цены есть только у неё (src/bot/replies.js).
+  projectId = projects.getProjectBySlug('education').id;
   projects.saveAccount(projectId, 'instagram', { userId: IG, pageToken: 'tok-ig' }, { quiet: true });
   projects.saveAccount(projectId, 'facebook', { pageId: PAGE, pageToken: 'tok-fb', appSecret: SECRET }, { quiet: true });
   knowledge.saveSettings(projectId, { enabled: true, autoReply: true });
@@ -287,7 +288,8 @@ test('ответ человека из панели и «вернуть боту
   const out = await dialogs.humanReply(d.id, projectId, 42, 'Добрий день! Це Ольга, адміністратор.');
   assert.equal(out.dialog.handledBy, 'human');
   assert.equal(out.messages.at(-1).source, 'human');
-  assert.equal(plansOf(d).at(-1).status, 'cancelled');
+  assert.equal(plansOf(d).find((p) => p.kind === 'reply').status, 'cancelled');
+  assert.equal(plansOf(d).find((p) => p.kind === 'human').status, 'sent');
   // Echo своего же ответа из панели не путает: он помечен как ответ человека.
   dialogs.ingest(echo('p11', outbox.at(-1).mid, 'Добрий день! Це Ольга, адміністратор.', 30), { now: at(30) });
   assert.equal(db.prepare("SELECT COUNT(*) n FROM bot_messages WHERE dialog_id = ? AND source = 'human'").get(d.id).n, 1);

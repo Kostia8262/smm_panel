@@ -61,7 +61,16 @@ export function mountMetaWebhook(app) {
     res.sendStatus(403);
   });
 
-  app.post('/webhooks/meta', express.raw({ type: '*/*', limit: '1mb' }), (req, res) => {
+  const raw = express.raw({ type: '*/*', limit: '1mb' });
+  // Слишком большое тело — 413, а не общий 500 (проверка 17.11).
+  const readRaw = (req, res, next) =>
+    raw(req, res, (err) => {
+      if (!err) return next();
+      if (err.type === 'entity.too.large') return res.sendStatus(413);
+      return res.sendStatus(400);
+    });
+
+  app.post('/webhooks/meta', readRaw, (req, res) => {
     const secrets = appSecrets();
     if (!secrets.length) {
       log('warn', 'бот: вебхук без секрета приложения — событие отклонено (впишите секрет в карточку Facebook)');
