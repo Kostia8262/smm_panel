@@ -54,6 +54,11 @@ const PUBLIC_DIR = resolve(here, '../public');
 
 app.set('trust proxy', 1); // за OpenLiteSpeed: иначе в журнале входов адрес прокси
 app.disable('x-powered-by'); // версия стека — бесплатная подсказка тому, кто ищет дыру
+// Вебхук Meta — до общего разбора JSON: подпись считается по сырому телу
+// (src/bot/webhook.js), а входа в панель у Meta нет.
+const { mountMetaWebhook } = await import('./bot/webhook.js');
+mountMetaWebhook(app);
+
 app.use(express.json({ limit: '1mb' }));
 
 /*
@@ -1731,6 +1736,9 @@ app.put('/api/settings/leads', requireAccess('platforms'), (req, res) => {
   if (token) staffDb.setSetting('leads_api_token', encryptSecret(String(token).trim()));
   // Ключ ленты согласий — второй ключ интеграции, со своим правом mail:feed.
   if (req.body?.feedToken) staffDb.setSetting('crm_feed_token', encryptSecret(String(req.body.feedToken).trim()));
+  // Ключ записи заявок для бота (src/bot/crm-lead.js): токен сотрудника
+  // админки или будущий ключ интеграции `mcai_…` с правом leads:write.
+  if (req.body?.leadsWriteToken) staffDb.setSetting('crm_leads_write_token', encryptSecret(String(req.body.leadsWriteToken).trim()));
   if (req.body?.ownDomains !== undefined) {
     staffDb.setSetting('own_domains', String(req.body.ownDomains).trim());
   }
@@ -1738,6 +1746,7 @@ app.put('/api/settings/leads', requireAccess('platforms'), (req, res) => {
   res.json({
     url: staffDb.getSetting('leads_api_url', ''),
     hasToken: Boolean(staffDb.getSetting('leads_api_token', '')),
+    hasLeadsWriteToken: Boolean(staffDb.getSetting('crm_leads_write_token', '')),
     ownDomains: staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school'),
     feed: { ...feedState(), segments: segmentsState() },
   });
@@ -1747,6 +1756,7 @@ app.get('/api/settings/leads', requireAccess('platforms'), (_req, res) => {
   res.json({
     url: staffDb.getSetting('leads_api_url', 'https://mycomputer.education'),
     hasToken: Boolean(staffDb.getSetting('leads_api_token', '')),
+    hasLeadsWriteToken: Boolean(staffDb.getSetting('crm_leads_write_token', '')),
     ownDomains: staffDb.getSetting('own_domains', 'mycomputer.education,mycomputer.school'),
     feed: { ...feedState(), segments: segmentsState() },
   });

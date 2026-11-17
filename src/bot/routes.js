@@ -17,6 +17,8 @@ import * as knowledge from './knowledge.js';
 import * as materials from './materials.js';
 import { ImportError } from './site-import.js';
 import { getProject } from '../projects.js';
+import * as dialogs from './dialogs.js';
+import * as replies from './replies.js';
 
 const { BotError } = knowledge;
 
@@ -27,6 +29,13 @@ const { BotError } = knowledge;
  */
 export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
   const router = express.Router();
+
+  /** Verify Token вебхука — ключ, им подтверждается адрес: только владельцу. */
+  const visibleSettings = (projectId, req) => {
+    const cfg = knowledge.settings(projectId);
+    if (!can(req.user.role, 'bot_settings')) delete cfg.verifyToken;
+    return cfg;
+  };
   const view = requireAccess('bot');
   const manage = requireAccess('bot_settings');
 
@@ -37,7 +46,7 @@ export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
     } catch (err) {
       // Сбой сбора с сайта объясняем словами: «сайт не ответил» — это не
       // поломка панели, и владелец должен понять, что чинить.
-      if (err instanceof BotError || err instanceof ImportError) {
+      if (err instanceof BotError || err instanceof ImportError || err instanceof dialogs.DialogError) {
         return res.status(err.status).json({ error: err.message });
       }
       log('error', `бот: сбой на ${req.method} ${req.path}: ${err.message}`);
@@ -72,7 +81,7 @@ export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
         search: req.query.search || '',
       }),
       topics: knowledge.topics(projectId),
-      settings: knowledge.settings(projectId),
+      settings: visibleSettings(projectId, req),
       canManage: can(req.user.role, 'bot_settings'),
     });
   }));
@@ -195,7 +204,7 @@ export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
   }));
 
   router.get('/settings', view, handle(async (req, res) => {
-    res.json({ settings: knowledge.settings(currentProjectId(req)), canManage: can(req.user.role, 'bot_settings') });
+    res.json({ settings: visibleSettings(currentProjectId(req), req), canManage: can(req.user.role, 'bot_settings') });
   }));
 
   router.put('/settings', manage, handle(async (req, res) => {
@@ -209,6 +218,56 @@ export function mountBotRoutes(app, { requireAccess, currentProjectId, can }) {
       log('info', `бот: режим — ${after.autoReply ? 'отвечает сам' : 'только черновики'} в проекте #${projectId}`);
     }
     res.json({ settings: after });
+  }));
+
+  /* ------------------------------ входящие ------------------------------ */
+  /*
+   * Переписку видят и ведут владелец и СММщик (область `bot`): отвечать
+   * клиентам в Direct — ежедневная работа СММщика. «Вернуть боту» — тоже:
+   * это решение по одному диалогу, а не о том, что бот говорит всем.
+   */
+
+  router.get('/dialogs', view, handle(async (req, res) => {
+    const projectId = currentProjectId(req);
+    const cfg = knowledge.settings(projectId);
+    res.json({
+      dialogs: dialogs.listDialogs(projectId),
+      counts: dialogs.inboxCounts(projectId),
+      settings: { enabled: cfg.enabled, autoReply: cfg.autoReply, replyDelaySec: cfg.replyDelaySec },
+    });
+  }));
+
+  router.get('/dialogs/:id', view, handle(async (req, res) => {
+    const data = dialogs.openDialog(Number(req.params.id), currentProjectId(req));
+    if (!data) return res.status(404).json({ error: 'Диалог не найден' });
+    res.json(data);
+  }));
+
+  router.post('/dialogs/:id/reply', view, handle(async (req, res) => {
+    const staffId = req.user?.id ?? null;
+    res.json(await dialogs.humanReply(Number(req.params.id), currentProjectId(req), staffId, req.body?.text));
+  }));
+
+  router.post('/dialogs/:id/send-draft', view, handle(async (req, res) => {
+    res.json(await dialogs.sendDraft(Number(req.params.id), currentProjectId(req), req.user?.id ?? null));
+  }));
+
+  router.post('/dialogs/:id/return', view, handle(async (req, res) => {
+    res.json(dialogs.returnToBot(Number(req.params.id), currentProjectId(req)));
+  }));
+
+  router.post('/dialogs/:id/lead', view, handle(async (req, res) => {
+    res.json(await dialogs.retryLead(Number(req.params.id), currentProjectId(req)));
+  }));
+
+  /* ------------------------------ реплики ------------------------------ */
+
+  router.get('/replies', view, handle(async (req, res) => {
+    res.json({ replies: replies.list(currentProjectId(req)) });
+  }));
+
+  router.put('/replies/:id', view, handle(async (req, res) => {
+    res.json({ reply: replies.update(Number(req.params.id), currentProjectId(req), req.body || {}) });
   }));
 
   app.use('/api/bot', router);

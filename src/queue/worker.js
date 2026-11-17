@@ -336,6 +336,31 @@ async function segmentsTick() {
   }
 }
 
+/**
+ * Бот-консультант (src/bot/dialogs.js): план ответа лежит в базе со временем
+ * отправки, и воркер обязан просыпаться ЧАЩЕ задержки `replyDelaySec`
+ * (10 с) — при минутном тике пауза стала бы минутой (docs/бот.md, §5a).
+ * Свой флаг: долгая выгрузка видео ответы клиентам не держит.
+ */
+const BOT_TICK_MS = Number(process.env.BOT_TICK_MS || 2000);
+let botBusy = false;
+let botError = { text: '', at: 0 };
+async function botTick() {
+  if (botBusy) return;
+  botBusy = true;
+  try {
+    const { runDue } = await import('../bot/dialogs.js');
+    await runDue();
+  } catch (err) {
+    if (err.message !== botError.text || Date.now() - botError.at > 10 * 60 * 1000) {
+      log('warn', `бот: воркер споткнулся: ${err.message}`);
+      botError = { text: err.message, at: Date.now() };
+    }
+  } finally {
+    botBusy = false;
+  }
+}
+
 log('info', `воркер запущен, тик ${TICK_MS / 1000} с`);
 recoverStuck(db, log);
 tick();
@@ -343,3 +368,4 @@ setInterval(tick, TICK_MS);
 setInterval(mailTick, MAIL_TICK_MS);
 setInterval(feedTick, FEED_TICK_MS);
 setInterval(segmentsTick, FEED_TICK_MS);
+setInterval(botTick, BOT_TICK_MS);
