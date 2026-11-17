@@ -44,28 +44,72 @@ const NUM_WORDS = {
 };
 
 /**
- * Все возрасты в сообщении: «8», «8 років», «сину 9», «восемь лет».
+ * Все возрасты в сообщении: «8», «8 років», «сину 9», «восемь лет», «7 і 12».
  *
  * Число — не возраст, если это время («о 18:00», «в 17»), деньги («1900 грн»),
- * разы в неделю или часть телефона. Возраст — от 1 до 18: всё, что больше,
- * скорее год рождения, сумма или возраст родителя.
+ * разы в неделю, класс («1 клас») или часть телефона. Возраст — от 1 до 18.
+ *
+ * Одно число в сообщении — возраст (на вопрос «скільки років» отвечают
+ * «8»). Когда чисел несколько, возрастом считается только «сильное»: с
+ * возрастным словом после («років», «лет») или перед («сину», «дитині»), и
+ * число, связанное с сильным союзом («7 і 12 років»). Иначе «синові 7
+ * років, 1 клас» читалось как двое детей (проверка 17.11).
  */
+const AGE_AFTER = /^\s*-?\s*(рок|рік|роки|років|рочк|лет|года|годик|р\.|г\.|y\.?o)/;
+const AGE_BEFORE = /(сину|синові|сыну|сина|доньці|дочці|дочке|дочери|дочь|донька|дитині|дитина|ребенку|ребёнку|ребенок|мені|мне|вік|возраст|їй|йому|ему|ей|малому|малій|онуку|внуку|онучці|внучке)[\s:,-]*$/;
+const NOT_AGE_AFTER = /^\s*-?\s*(грн|uah|₴|раз|рази|разів|разу|година|годин|час|хв|мин|%|клас|класс|кл\b|кл\.|й\b|го\b|ий\b|ый\b|ому\b|числ|листопад|ноябр|груд|декаб|січ|январ)/;
+const LINK = /^\s*(і|и|й|та|,|and|та ще)\s*$/;
+
 export function parseAges(text) {
   const t = String(text ?? '').toLowerCase().replace(/[’`]/g, "'");
-  const out = [];
-  const re = /(^|[^\d:.,+\-])(\d{1,2})(?!\d|[:.,]\d|\s*(?:грн|uah|₴|раз|рази|разів|разу|година|годин|час|хв|мин|%|:\d))/g;
+  const cands = [];
+  const re = /(^|[^\d:.,+\-])(\d{1,2})(?!\d|[:.,]\d)/g;
   let m;
   while ((m = re.exec(t))) {
-    const n = Number(m[2]);
-    const before = t.slice(Math.max(0, m.index - 6), m.index + m[1].length);
-    // Время: «о 18», «в 17», «після 15», «с 10 до 12».
-    if (/(^|\s)(о|об|в|во|після|после|с|з|до|від|от)\s*$/.test(before) && !/(рок|лет|год|рочк)/.test(t.slice(re.lastIndex, re.lastIndex + 8))) continue;
-    if (n >= 1 && n <= 18) out.push(n);
+    const from = m.index + m[1].length;
+    cands.push({ n: Number(m[2]), from, to: from + m[2].length });
   }
   for (const [word, n] of Object.entries(NUM_WORDS)) {
-    if (new RegExp(`(^|[^\\p{L}])${word}(?![\\p{L}])`, 'u').test(t)) out.push(n);
+    const w = new RegExp(`(^|[^\\p{L}])(${word})(?![\\p{L}])`, 'gu');
+    let x;
+    while ((x = w.exec(t))) cands.push({ n, from: x.index + x[1].length, to: x.index + x[1].length + word.length });
   }
-  return [...new Set(out)];
+  cands.sort((a, b) => a.from - b.from);
+  const usable = [];
+  for (const c of cands) {
+    const after = t.slice(c.to, c.to + 14);
+    const before = t.slice(Math.max(0, c.from - 16), c.from);
+    if (NOT_AGE_AFTER.test(after)) continue;
+    // Время: «о 18», «в 17», «після 15», «с 10 до 12».
+    if (/(^|\s)(о|об|в|во|після|после|с|з|до|від|от)\s*$/.test(before) && !AGE_AFTER.test(after)) continue;
+    if (c.n < 1 || c.n > 18) continue;
+    usable.push({ ...c, strong: AGE_AFTER.test(after) || AGE_BEFORE.test(before) });
+  }
+  if (usable.length <= 1) return usable.map((c) => c.n);
+  const keep = new Set();
+  usable.forEach((c, i) => {
+    if (c.strong) keep.add(i);
+  });
+  // Ни одного сильного, но числа перечислены через союз («двоє, 7 і 12») —
+  // это перечень возрастов.
+  if (!keep.size && usable.every((c, i) => i === 0 || LINK.test(t.slice(usable[i - 1].to, c.from)))) {
+    return [...new Set(usable.map((c) => c.n))];
+  }
+  // Слабое число рядом с сильным через «і / та / ,» — тоже возраст.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    usable.forEach((c, i) => {
+      if (keep.has(i)) return;
+      const prev = usable[i - 1];
+      const next = usable[i + 1];
+      if ((prev && keep.has(i - 1) && LINK.test(t.slice(prev.to, c.from))) || (next && keep.has(i + 1) && LINK.test(t.slice(c.to, next.from)))) {
+        keep.add(i);
+        grew = true;
+      }
+    });
+  }
+  return [...new Set(usable.filter((_, i) => keep.has(i)).map((c) => c.n))];
 }
 
 /**
@@ -95,7 +139,15 @@ const any = (text, phrases) => {
 const GREETINGS = ['вітаю', 'привіт', 'добрий день', 'доброго дня', 'добрий вечір', 'доброго ранку', 'здравствуйте', 'здрасте', 'привет', 'добрый день', 'добрый вечер', 'доброе утро', 'hello', 'hi', 'хай', 'салют'];
 const FILLER = ['ок', 'ok', 'окей', 'угу', 'ага', 'добре', 'хорошо', 'ясно', 'зрозуміло', 'понятно', 'дякую', 'спасибо', 'спс', 'дяк'];
 const YES = ['так', 'да', 'давайте', 'хочу', 'записуйте', 'записывайте', 'запишіть', 'запишите', 'можна', 'можно', 'звісно', 'конечно', 'ок', 'окей', 'ok', 'згода', 'гаразд', 'було б добре', 'было бы хорошо', 'цікаво', 'интересно', 'yes', 'ага'];
-const PRICE = ['ціна', 'ціни', 'цена', 'цены', 'скільки коштує', 'сколько стоит', 'вартість', 'стоимость', 'прайс', 'почем', 'почому', 'скільки буде', 'сколько будет'];
+const PRICE = [
+  'ціна', 'ціни', 'цена', 'цены', 'скільки коштує', 'сколько стоит', 'вартість', 'стоимость', 'прайс', 'почем', 'почём', 'почому',
+  'скільки буде', 'сколько будет',
+  // Суржик и разговорное (проверка 17.11): «скіко стоїть», «скока».
+  'скіко', 'скока', 'скоко', 'стоїть', 'скільки стоїть', 'сколько стоїть', 'коштує',
+];
+/** Ответ на последнее напоминание (Figma: «пізніше» чи «не треба»). */
+const LATER = ['пізніше', 'пiзнiше', 'потім', 'потом', 'позже', 'попозже', 'згодом', 'не зараз', 'не сейчас', 'пізніше напишу', 'позже напишу'];
+const DECLINE = ['не треба', 'не надо', 'не потрібно', 'не нужно', 'не актуально', 'неактуально', 'не цікаво', 'не интересно', 'вже не треба', 'уже не надо', 'не турбуйте', 'не беспокойте'];
 const ADULT = ['для себе', 'для себя', 'для дорослих', 'для взрослых', 'дорослому', 'взрослому', 'я сам', 'я сама', 'сам навчитись', 'сама навчитись', 'сам научиться', 'сама научиться', 'мені 30', 'мне 30'];
 const CLIENT = ['перенести', 'перенос', 'не прийдемо', 'не придем', 'не зможемо', 'не сможем', 'не буде на занятті', 'не будет на занятии', 'відпрацюв', 'отработ', 'пропуст', 'захворів', 'захворіла', 'заболел', 'заболела', 'у нас заняття', 'у нас занятие', 'наше заняття', 'наше занятие', 'наш урок', 'посилання на заняття', 'ссылка на занятие', 'не можемо зайти', 'не можем зайти'];
 const CHILD_SELF = ['мені', 'мне'];
@@ -195,6 +247,27 @@ export function parsePreferredTime(text) {
  *   отправить (может быть и вместе с передачей: «передаю адміністратору»).
  */
 export function chooseReply(ctx) {
+  /*
+   * Реплики проектные: у школы дизайна и остальных школ нет текстов
+   * академии (Scratch, Minecraft, адреса Днепра). Нет текста — не
+   * подставляем чужой, а передаём диалог человеку.
+   */
+  let missing = null;
+  const result = decideReply({
+    ...ctx,
+    say: (key, vars) => {
+      const t = ctx.say(key, vars);
+      if (!t && !missing) missing = key;
+      return t;
+    },
+  });
+  if (missing && result.text !== null) {
+    return { ...result, text: null, replyKey: null, lead: false, handoff: `у проекта нет реплики «${missing}» — ответить человеку`, why: 'нет реплики' };
+  }
+  return result;
+}
+
+function decideReply(ctx) {
   const { dialog, kind = 'reply', entries = [], settings = {}, channel = 'direct' } = ctx;
   const text = String(ctx.text ?? '');
   const lang = kind === 'remind' ? dialog.lang || 'uk' : dialogLang(text, dialog.lang);
@@ -224,6 +297,20 @@ export function chooseReply(ctx) {
 
   // Клиент ответил — счётчики тишины обнуляются.
   const base = { reminders_sent: 0 };
+
+  /*
+   * Ответ на напоминание. «Не треба» — прощаемся и больше не пишем первыми.
+   * «Пізніше» — напомнить позже бот не может: Meta пускает его писать только
+   * сутки после сообщения клиента. Поэтому — человеку с причиной (у него
+   * есть Human Agent на 7 дней), а реплика напоминания этого не обещает.
+   */
+  if (WAITING_STEPS.includes(dialog.step) && any(text, DECLINE) && text.length < 80 && !/\?/.test(text)) {
+    tags.add('declined');
+    return out({ text: say('goodbye'), replyKey: 'goodbye', patch: { ...base, reminders_sent: 2, step: STEP.done }, why: 'не актуально' });
+  }
+  if ((dialog.reminders_sent || 0) >= 1 && any(text, LATER) && text.length < 80 && !/\?/.test(text)) {
+    return out({ handoff: 'просил напомнить позже', patch: base, why: 'позже' });
+  }
 
   /* 2. Шаг 3: ждём имя и телефон. */
   if (dialog.step === STEP.contacts) {
@@ -260,7 +347,8 @@ export function chooseReply(ctx) {
     tags.add('child');
     // С ребёнком не обсуждаем оплату и не берём его данные — только зовём родителей.
     const key = any(text, PRICE) ? 'child_price' : 'child_trial';
-    return out({ text: say(key), replyKey: key, handoff: 'пишет сам ребёнок — нужен контакт родителей', patch: { ...base, child_age: ages[0] ?? dialog.child_age }, why: 'пишет ребёнок' });
+    // Данные ребёнка не записываем вовсе — даже возраст (проверка 17.11).
+    return out({ text: say(key), replyKey: key, handoff: 'пишет сам ребёнок — нужен контакт родителей', patch: base, why: 'пишет ребёнок' });
   }
 
   if (ages.length >= 2 || any(text, TWO_KIDS)) {
@@ -292,9 +380,12 @@ export function chooseReply(ctx) {
     if (!ages.length) return out({ text: say('certificate'), replyKey: 'certificate', patch: { ...base, step: STEP.askAge }, why: 'сертификат' });
   }
 
-  /* 4. Назвали возраст — шаг 2 по возрастной ветке. */
-  if (ages.length === 1 && [STEP.start, STEP.askAge].includes(dialog.step || STEP.start)) {
-    const age = ages[0];
+  /* 4. Назвали возраст — шаг 2 по возрастной ветке. Возраст, известный
+     до передачи человеку (диалог вернули боту), не спрашиваем заново. */
+  const knownAge = !ages.length && dialog.child_age && [STEP.start, STEP.askAge].includes(dialog.step || STEP.start) && !any(text, PRICE)
+    && (isGreetingOnly(text) || isFiller(text) || any(text, YES));
+  if ((ages.length === 1 || knownAge) && [STEP.start, STEP.askAge].includes(dialog.step || STEP.start)) {
+    const age = ages[0] ?? dialog.child_age;
     if (age < 6) {
       return out({ text: say('age_under6'), replyKey: 'age_under6', patch: { ...base, child_age: age, step: STEP.birthday }, why: 'младше 6' });
     }

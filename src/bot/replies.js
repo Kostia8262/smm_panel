@@ -40,6 +40,7 @@ export const REPLY_KEYS = {
   adult: { step: 'Реакции', title: 'Взрослый «для себе» — передача человеку' },
   remind_2h: { step: 'Тишина', title: 'Напоминание через 2 часа' },
   remind_24h: { step: 'Тишина', title: 'Последнее напоминание (до конца окна 24 ч)' },
+  goodbye: { step: 'Тишина', title: 'Ответили «не треба» — прощаемся' },
   client_ack: { step: 'Ситуации', title: 'Наш клиент: пропуск, перенос — подтверждение' },
   child_trial: { step: 'Ситуации', title: 'Пишет ребёнок: позвать родителей' },
   child_price: { step: 'Ситуации', title: 'Пишет ребёнок: цена' },
@@ -113,9 +114,16 @@ export const SEED = {
     uk: [F, 'Підкажіть, ще актуально?'],
     ru: [T, 'Подскажите, ещё актуально?'],
   },
+  // В Figma: «Нагадаю згодом або більше не турбуватиму». Обещание «нагадаю
+  // згодом» бот выполнить не может — Meta пускает его писать только сутки
+  // после сообщения клиента. «Пізніше» уходит человеку, текст — честный.
   remind_24h: {
-    uk: [F, 'Напишіть одне слово — «пізніше» чи «не треба». Нагадаю згодом або більше не турбуватиму.'],
-    ru: [T, 'Напишите одно слово — «позже» или «не надо». Напомню позже или больше не побеспокою.'],
+    uk: [O, 'Напишіть одне слово — «пізніше» чи «не треба». Якщо пізніше — адміністратор напише вам сам, а якщо не треба — більше не турбуватимемо.'],
+    ru: [O, 'Напишите одно слово — «позже» или «не надо». Если позже — администратор напишет вам сам, а если не надо — больше не побеспокоим.'],
+  },
+  goodbye: {
+    uk: [O, 'Зрозуміло, дякуємо, що відповіли! Якщо знадобиться — пишіть сюди.'],
+    ru: [O, 'Понятно, спасибо, что ответили! Если понадобится — пишите сюда.'],
   },
   // В Figma — с именем ребёнка из примера; здесь без него: имя бот не знает.
   client_ack: {
@@ -146,12 +154,36 @@ export const SEED = {
 
 export const REPLY_LANGS = ['uk', 'ru'];
 
+/**
+ * Чьи это тексты. Возрастные ветки (Scratch, Minecraft, Python), адреса
+ * Днепра — только академия (`education`). Цены 3800/1900 и формат —
+ * академия и школа дизайна (так в Figma, кадр «Школа дизайну»). Остальным
+ * проектам (FluentFox, Дошколярик) — только реплики без фактов: их цен в
+ * Figma нет, и подставлять академические бот не должен.
+ * Чего у проекта нет — бот передаёт диалог человеку (src/bot/funnel.js).
+ */
+const ACADEMY = ['education'];
+const PRICED = ['education', 'school'];
+export const KEY_PROJECTS = {
+  age_6_9: ACADEMY,
+  age_10_13: ACADEMY,
+  age_14_18: ACADEMY,
+  offline: ACADEMY,
+  step2_common: PRICED,
+  age_under6: PRICED,
+  price_then_age: PRICED,
+  child_price: PRICED,
+  abroad: PRICED,
+};
+
 /** Завести недостающие реплики проекта. Написанное владельцем не трогается. */
 export function ensureSeed(projectId) {
   const ins = db.prepare(
     'INSERT OR IGNORE INTO bot_replies (project_id, key, lang, text, draft, origin) VALUES (?, ?, ?, ?, 1, ?)'
   );
+  const slug = db.prepare('SELECT slug FROM projects WHERE id = ?').get(projectId)?.slug || '';
   for (const [key, langs] of Object.entries(SEED)) {
+    if (KEY_PROJECTS[key] && !KEY_PROJECTS[key].includes(slug)) continue;
     for (const [lang, [origin, text]] of Object.entries(langs)) ins.run(projectId, key, lang, text, origin);
   }
 }
