@@ -91,6 +91,7 @@ test('согласие на пробное → шаг 3, контакты → з
   assert.ok(c.handoff);
   assert.equal(c.patch.phone, '+380671234567');
   assert.equal(c.patch.contact_name, 'Марк');
+  assert.equal(c.patch.preferred_time, 'вівторок після 17');
 });
 
 test('шаг 3 без телефона — человеку, без выдумывания', () => {

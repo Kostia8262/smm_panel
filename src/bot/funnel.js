@@ -232,7 +232,7 @@ export function chooseReply(ctx) {
       return out({ handoff: 'ответ на шаге 3 без телефона — дочитать человеку', patch: base, why: 'нет телефона' });
     }
     const name = parseName(text);
-    const when = parsePreferredTime(text);
+    const when = parsePreferredTime(name ? text.replace(name, ' ') : text);
     return out({
       text: say('contacts_thanks'),
       replyKey: 'contacts_thanks',
