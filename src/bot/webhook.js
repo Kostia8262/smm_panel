@@ -26,19 +26,26 @@ function same(a, b) {
   return timingSafeEqual(x, y);
 }
 
-/** Подпись тела одним из секретов приложения. */
+/**
+ * Подпись тела: каким секретом подписано и за какие проекты он вправе
+ * говорить. null — подпись не сошлась ни с одним.
+ *
+ * Принимает и голые строки (тесты), тогда проектов не знает (`projectIds` = null).
+ * @returns {{secret: string, projectIds: Set<number>|null}|null}
+ */
 export function signatureValid(raw, header, secrets = appSecrets()) {
   const h = String(header || '');
-  if (!h.startsWith('sha256=') || !Buffer.isBuffer(raw)) return false;
+  if (!h.startsWith('sha256=') || !Buffer.isBuffer(raw)) return null;
   const got = Buffer.from(h.slice(7), 'hex');
-  if (got.length !== 32) return false;
-  let ok = false;
-  for (const secret of secrets) {
-    const want = createHmac('sha256', secret).update(raw).digest();
+  if (got.length !== 32) return null;
+  let match = null;
+  for (const entry of secrets) {
+    const item = typeof entry === 'string' ? { secret: entry, projectIds: null } : entry;
+    const want = createHmac('sha256', item.secret).update(raw).digest();
     // Перебираем все секреты без раннего выхода — время не зависит от того, какой подошёл.
-    if (timingSafeEqual(want, got)) ok = true;
+    if (timingSafeEqual(want, got) && !match) match = item;
   }
-  return ok;
+  return match;
 }
 
 export function verifyTokenValid(token) {
@@ -49,12 +56,28 @@ export function verifyTokenValid(token) {
   return ok;
 }
 
+/** Meta шлёт число; пропускаем только короткую строку из безопасных знаков. */
+export const CHALLENGE_RE = /^[A-Za-z0-9._-]{1,256}$/;
+
 export function mountMetaWebhook(app) {
+  /*
+   * Вебхук стоит до общего middleware с заголовками безопасности (ему нужен
+   * сырой поток), поэтому свои заголовки — здесь. Ответы только text/plain,
+   * без угадывания типа браузером (security-audit 17.11, Г2).
+   */
+  app.use('/webhooks/meta', (_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'; sandbox");
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+
   app.get('/webhooks/meta', (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
-    if (mode === 'subscribe' && verifyTokenValid(token) && challenge) {
+    if (typeof challenge !== 'string' || !CHALLENGE_RE.test(challenge)) return res.sendStatus(400);
+    if (mode === 'subscribe' && verifyTokenValid(token)) {
       log('info', 'бот: Meta подтвердила адрес вебхука');
       return res.status(200).type('text/plain').send(String(challenge));
     }
@@ -76,7 +99,8 @@ export function mountMetaWebhook(app) {
       log('warn', 'бот: вебхук без секрета приложения — событие отклонено (впишите секрет в карточку Facebook)');
       return res.sendStatus(503);
     }
-    if (!signatureValid(req.body, req.get('x-hub-signature-256'), secrets)) {
+    const signer = signatureValid(req.body, req.get('x-hub-signature-256'), secrets);
+    if (!signer) {
       log('warn', 'бот: вебхук с неверной подписью отклонён');
       return res.sendStatus(401);
     }
@@ -87,7 +111,8 @@ export function mountMetaWebhook(app) {
       return res.sendStatus(400);
     }
     try {
-      ingest(body);
+      // Только аккаунты проектов, чей секрет подписал тело (С1).
+      ingest(body, { allowed: signer.projectIds });
     } catch (err) {
       // 200 всё равно: повтор доставки упрётся в ту же ошибку, а дубли по mid
       // отсекаются. Ошибку видно в журнале.

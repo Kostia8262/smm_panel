@@ -98,11 +98,11 @@ const plansOf = (d) => db.prepare('SELECT * FROM bot_reply_plans WHERE dialog_id
 test('подпись: верная проходит, чужая и пустая — нет', () => {
   const raw = Buffer.from('{"object":"instagram"}');
   const sig = 'sha256=' + createHmac('sha256', SECRET).update(raw).digest('hex');
-  assert.equal(signatureValid(raw, sig, [SECRET]), true);
-  assert.equal(signatureValid(raw, sig, ['другой']), false);
-  assert.equal(signatureValid(Buffer.from('{"object":"page"}'), sig, [SECRET]), false);
-  assert.equal(signatureValid(raw, '', [SECRET]), false);
-  assert.equal(signatureValid(raw, 'sha256=zz', [SECRET]), false);
+  assert.ok(signatureValid(raw, sig, [SECRET]));
+  assert.equal(signatureValid(raw, sig, ['другой']), null);
+  assert.equal(signatureValid(Buffer.from('{"object":"page"}'), sig, [SECRET]), null);
+  assert.equal(signatureValid(raw, '', [SECRET]), null);
+  assert.equal(signatureValid(raw, 'sha256=zz', [SECRET]), null);
 });
 
 test('Verify Token выпускается сам и сверяется', () => {

@@ -46,10 +46,13 @@ export const SENDING_STALE_MS = 2 * 60 * 1000;
  * школа дизайна пока сидят под одним Instagram (docs/бот.md, §2): тогда
  * берётся проект с включённым ботом, при равенстве — первый по порядку.
  */
-export function projectForAccount(object, accountId) {
+export function projectForAccount(object, accountId, { allowed = null } = {}) {
   const id = String(accountId);
   const hits = [];
   for (const p of listProjects()) {
+    // Событие, подписанное секретом приложения проекта A, не может говорить
+    // за аккаунт проекта B (security-audit 17.11, С1).
+    if (allowed && !allowed.has(p.id)) continue;
     const creds = object === 'instagram' ? credentialsFor(p.id, 'instagram') : credentialsFor(p.id, 'facebook');
     const own = object === 'instagram' ? creds.userId : creds.pageId;
     if (own && String(own) === id) hits.push(p);
@@ -59,15 +62,31 @@ export function projectForAccount(object, accountId) {
   return (enabled || hits[0]).id;
 }
 
-/** Секреты приложения Meta, которыми может быть подписан вебхук. */
+/**
+ * Секреты приложений Meta и проекты, за которые каждый вправе подписывать.
+ *
+ * Один секрет может стоять у нескольких проектов (одно приложение на все
+ * школы) — тогда он открывает их все; разные приложения — каждый свой.
+ * `META_APP_SECRET` из окружения ни к чему не привязан сам: проекты для него
+ * перечисляются явно в `META_APP_SECRET_PROJECTS` (слаги через запятую).
+ *
+ * @returns {Array<{secret: string, projectIds: Set<number>}>}
+ */
 export function appSecrets() {
-  const out = new Set();
-  if (process.env.META_APP_SECRET) out.add(process.env.META_APP_SECRET);
-  for (const p of listProjects({ includeInactive: true })) {
-    const s = credentialsFor(p.id, 'facebook').appSecret;
-    if (s) out.add(s);
+  const bySecret = new Map();
+  const add = (secret, projectId) => {
+    if (!secret) return;
+    if (!bySecret.has(secret)) bySecret.set(secret, new Set());
+    bySecret.get(secret).add(projectId);
+  };
+  const all = listProjects({ includeInactive: true });
+  for (const p of all) add(credentialsFor(p.id, 'facebook').appSecret, p.id);
+  const envSecret = process.env.META_APP_SECRET;
+  if (envSecret) {
+    const slugs = String(process.env.META_APP_SECRET_PROJECTS || '').split(',').map((x) => x.trim()).filter(Boolean);
+    for (const p of all) if (slugs.includes(p.slug)) add(envSecret, p.id);
   }
-  return [...out];
+  return [...bySecret].map(([secret, projectIds]) => ({ secret, projectIds }));
 }
 
 /* ---------------------------------- диалоги ---------------------------------- */
@@ -144,8 +163,8 @@ function schedule(dialogId, sendAt, kind = 'reply') {
  *
  * @returns {{messages: number, echoes: number, duplicates: number, skipped: number, comments: number}}
  */
-export function ingest(body, { now = new Date() } = {}) {
-  const stats = { messages: 0, echoes: 0, duplicates: 0, skipped: 0, comments: 0 };
+export function ingest(body, { now = new Date(), allowed = null } = {}) {
+  const stats = { messages: 0, echoes: 0, duplicates: 0, skipped: 0, comments: 0, foreign: 0 };
   const object = body?.object;
   if (object !== 'instagram' && object !== 'page') {
     stats.skipped += 1;
@@ -157,15 +176,16 @@ export function ingest(body, { now = new Date() } = {}) {
       if (['comments', 'feed', 'mentions'].includes(change?.field)) stats.comments += 1;
     }
     for (const ev of Array.isArray(entry.messaging) ? entry.messaging : []) {
-      const r = ingestMessaging(object, entry.id, ev, now);
+      const r = ingestMessaging(object, entry.id, ev, now, allowed);
       stats[r] = (stats[r] || 0) + 1;
     }
   }
   if (stats.comments) log('info', `бот: пришло событий комментариев — ${stats.comments} (разбор в фазе 3)`);
+  if (stats.foreign) log('warn', `бот: отброшено событий для аккаунтов другого приложения — ${stats.foreign}`);
   return stats;
 }
 
-function ingestMessaging(object, entryId, ev, now) {
+function ingestMessaging(object, entryId, ev, now, allowed) {
   const msg = ev?.message;
   if (!msg || !msg.mid) return 'skipped'; // прочтения, доставки, реакции
   if (msg.is_deleted || msg.is_unsupported) return 'skipped';
@@ -173,8 +193,12 @@ function ingestMessaging(object, entryId, ev, now) {
   const accountId = String(echo ? ev.sender?.id : ev.recipient?.id || entryId || '');
   const peerId = String(echo ? ev.recipient?.id : ev.sender?.id || '');
   if (!accountId || !peerId) return 'skipped';
-  const projectId = projectForAccount(object, accountId) ?? projectForAccount(object, entryId);
-  if (!projectId) return 'skipped';
+  const projectId = projectForAccount(object, accountId, { allowed }) ?? projectForAccount(object, entryId, { allowed });
+  if (!projectId) {
+    // Аккаунт есть, но у чужого проекта — подпись не того приложения.
+    if (allowed && (projectForAccount(object, accountId) ?? projectForAccount(object, entryId))) return 'foreign';
+    return 'skipped';
+  }
   const channel = object === 'instagram' ? 'direct' : 'messenger';
   const at = Number.isFinite(ev.timestamp) ? iso(ev.timestamp) : iso(now);
   const text = typeof msg.text === 'string' ? msg.text : '';
